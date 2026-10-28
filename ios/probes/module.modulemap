@@ -1,0 +1,4 @@
+module MAC2JBProbeShim [system] {
+  header "MAC2JBProbeShim.h"
+  export *
+}
