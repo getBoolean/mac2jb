@@ -93,12 +93,13 @@ Unless the device owner explicitly authorizes otherwise, iPad commands must be o
 | Query allowlisted `IOUSBDeviceController` properties | Executed | No allowlisted lines observed; pipeline exited `1`, so controller properties were not observed or the query failed |
 | Query numeric `IOUSBDeviceInterface` properties | Executed | No allowlisted numeric lines observed; pipeline exited `1`, so interface properties were not observed or the query failed |
 | Check `configuration-string` presence without emitting its value | **Not executed** | Native approval dispatch was aborted; no device-tree result was obtained |
+| Count matching controller and interface service roots | **Not executed** | Native approval dispatch was aborted; no service-count result was obtained |
 
 The registry queries filtered both `ioreg` output streams through exact property-name and value-shape allowlists. Their empty output is inconclusive because each pipeline exposes `grep`'s status rather than `ioreg`'s status; it must not be interpreted as proof that no matching controller or interface exists.
 
 ## Repository-side probe status
 
-The U1 inventory implementation exists locally and has passed repository-side checks for its Swift result model, arm64 iOS 17 cross-build, signed entitlement variants, and mutation-call audit. Its controller and interface inventory now records separate user-client open outcomes, and topology fingerprints include both authorization surfaces. This proves buildability and the intended read-only code boundary; it does not prove runtime authorization, ABI compatibility, controller topology, or non-re-enumeration on the iPad.
+The U1 inventory implementation exists locally and has passed repository-side checks for its Swift result model, arm64 iOS 17 cross-build, signed entitlement variants, and mutation-call audit. Its controller and interface inventory now records separate user-client open and close outcomes, classifies missing services, verifies the exact controller/interface exception values observed at runtime, and includes both authorization surfaces in topology fingerprints without discarding ancestry order. The signed user-client variants no longer carry set-description authority, and the build audit verifies their embedded entitlements. This proves buildability and the intended read-only code boundary; it does not prove runtime authorization, ABI compatibility, controller topology, or non-re-enumeration on the iPad.
 
 `IOUSBDeviceDescriptionCreateFromDefaultsAndController` is known to participate in iOS default-configuration loading, but the current evidence does not establish its calling convention. The probe resolves its symbol without invoking it rather than guessing a private ABI.
 
