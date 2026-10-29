@@ -60,6 +60,7 @@ struct FunctionService: Codable, Equatable {
     let functionName: String
     let controllerRegistryID: UInt64?
     let userClientClasses: [String]
+    var openResults: [OpenResult]
     var restoreProperties: [String: String] = [:]
 }
 
@@ -147,14 +148,17 @@ struct ProbeResult: Codable, Equatable {
                 )
             }.sorted { ($0.registryID, $0.name) < ($1.registryID, $1.name) },
             functions: functions.map { function in
-                FunctionService(
-                    registryID: function.registryID,
-                    name: function.name,
-                    className: function.className,
-                    functionName: function.functionName,
-                    controllerRegistryID: function.controllerRegistryID,
-                    userClientClasses: function.userClientClasses.sorted(),
-                    restoreProperties: function.restoreProperties
+                var normalized = function
+                normalized.openResults.sort { ($0.clientType, $0.ioReturn) < ($1.clientType, $1.ioReturn) }
+                return FunctionService(
+                    registryID: normalized.registryID,
+                    name: normalized.name,
+                    className: normalized.className,
+                    functionName: normalized.functionName,
+                    controllerRegistryID: normalized.controllerRegistryID,
+                    userClientClasses: normalized.userClientClasses.sorted(),
+                    openResults: normalized.openResults,
+                    restoreProperties: normalized.restoreProperties
                 )
             }.sorted { ($0.registryID, $0.name) < ($1.registryID, $1.name) },
             configuration: configuration,

@@ -53,7 +53,8 @@ private func fixture(
                 className: "IOUSBDeviceInterface",
                 functionName: "NCM",
                 controllerRegistryID: 42,
-                userClientClasses: ["IOUSBDeviceInterfaceUserClient"]
+                userClientClasses: ["IOUSBDeviceInterfaceUserClient"],
+                openResults: [OpenResult(clientType: 0, ioReturn: 0)]
             )
         ],
         configuration: ConfigurationSource(
@@ -80,6 +81,7 @@ enum ProbeResultTests {
         try hashedIdentifiersNeverExposeRawValues()
         try topologyFingerprintIsStable()
         try topologyFingerprintDetectsMeaningfulChanges()
+        try topologyFingerprintDetectsFunctionAuthorizationChanges()
         try mutationCallsFailTheReadOnlyAudit()
         print("PASS ProbeResult tests")
     }
@@ -112,7 +114,8 @@ enum ProbeResultTests {
             className: "IOUSBDeviceInterface",
             functionName: "Mux",
             controllerRegistryID: 7,
-            userClientClasses: []
+            userClientClasses: [],
+            openResults: [OpenResult(clientType: 0, ioReturn: -536870201)]
         )
         let first = fixture(controllers: [controllerA, controllerB], functions: [functionA, functionB])
         let second = fixture(
@@ -132,6 +135,24 @@ enum ProbeResultTests {
         let baselineFingerprint = try fixture().topologyFingerprint()
         let changedFingerprint = try fixture(controllers: [changed]).topologyFingerprint()
         try expect(baselineFingerprint != changedFingerprint, "authorization change was ignored")
+    }
+
+    private static func topologyFingerprintDetectsFunctionAuthorizationChanges() throws {
+        let baseline = fixture()
+        let function = baseline.functions[0]
+        let denied = FunctionService(
+            registryID: function.registryID,
+            name: function.name,
+            className: function.className,
+            functionName: function.functionName,
+            controllerRegistryID: function.controllerRegistryID,
+            userClientClasses: function.userClientClasses,
+            openResults: [OpenResult(clientType: 0, ioReturn: -536870201)]
+        )
+
+        let baselineFingerprint = try baseline.topologyFingerprint()
+        let deniedFingerprint = try fixture(functions: [denied]).topologyFingerprint()
+        try expect(baselineFingerprint != deniedFingerprint, "function authorization change was ignored")
     }
 
     private static func mutationCallsFailTheReadOnlyAudit() throws {

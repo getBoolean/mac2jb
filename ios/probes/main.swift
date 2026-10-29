@@ -158,18 +158,12 @@ private enum ProbeCollector {
         let controllerEntries = try services(matching: "IOUSBDeviceController", operations: &result.operations)
         defer { controllerEntries.forEach { IOObjectRelease($0) } }
         result.controllers = controllerEntries.map { entry in
-            let openResults = clientTypes.map { clientType -> OpenResult in
-                var connection: io_connect_t = 0
-                let status = IOServiceOpen(entry, mach_task_self_, clientType, &connection)
-                if status == KERN_SUCCESS { IOServiceClose(connection) }
-                result.operations.append(OperationObservation(
-                    name: "IOServiceOpen(controller:\(registryID(entry)),type:\(clientType))",
-                    kind: .readOnly,
-                    ioReturn: status,
-                    outcome: iokitOutcome(status)
-                ))
-                return OpenResult(clientType: clientType, ioReturn: status, outcome: iokitOutcome(status))
-            }
+            let openResults = openResults(
+                for: entry,
+                serviceKind: "controller",
+                clientTypes: clientTypes,
+                operations: &result.operations
+            )
             return ControllerService(
                 registryID: registryID(entry),
                 name: registryName(entry),
@@ -189,13 +183,20 @@ private enum ProbeCollector {
         let functionEntries = try services(matching: "IOUSBDeviceInterface", operations: &result.operations)
         defer { functionEntries.forEach { IOObjectRelease($0) } }
         result.functions = functionEntries.map { entry in
-            FunctionService(
+            let openResults = openResults(
+                for: entry,
+                serviceKind: "function",
+                clientTypes: clientTypes,
+                operations: &result.operations
+            )
+            return FunctionService(
                 registryID: registryID(entry),
                 name: registryName(entry),
                 className: registryClass(entry),
                 functionName: stringProperty(entry, "USBDeviceFunction") ?? "unknown",
                 controllerRegistryID: parentControllerID(entry),
                 userClientClasses: userClientClasses(entry),
+                openResults: openResults,
                 restoreProperties: safeProperties(entry, keys: [
                     "USBDeviceFunction", "bInterfaceClass", "bInterfaceSubClass",
                     "bInterfaceProtocol", "USBConfigurationValue"
@@ -203,6 +204,26 @@ private enum ProbeCollector {
             )
         }
         return result
+    }
+
+    private static func openResults(
+        for entry: io_service_t,
+        serviceKind: String,
+        clientTypes: [UInt32],
+        operations: inout [OperationObservation]
+    ) -> [OpenResult] {
+        clientTypes.map { clientType in
+            var connection: io_connect_t = 0
+            let status = IOServiceOpen(entry, mach_task_self_, clientType, &connection)
+            if status == KERN_SUCCESS { IOServiceClose(connection) }
+            operations.append(OperationObservation(
+                name: "IOServiceOpen(\(serviceKind):\(registryID(entry)),type:\(clientType))",
+                kind: .readOnly,
+                ioReturn: status,
+                outcome: iokitOutcome(status)
+            ))
+            return OpenResult(clientType: clientType, ioReturn: status, outcome: iokitOutcome(status))
+        }
     }
 
     private static func services(matching className: String, operations: inout [OperationObservation]) throws -> [io_object_t] {
