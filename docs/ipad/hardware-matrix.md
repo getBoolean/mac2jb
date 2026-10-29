@@ -2,6 +2,8 @@
 
 The release gate is **plausible but unproven** until the exact M2 iPad Pro target (`iPad14,5` / `J620AP` / `T8112`) on iPadOS 17.0 completes this matrix. Repository builds and fixtures do not substitute for target-device evidence.
 
+The redacted observations and command execution status for the physical target are maintained in [`target-device-findings.md`](target-device-findings.md). Keep unique identifiers and unredacted raw output outside Git.
+
 ## Read-only inventory probe
 
 Build and test the four signed probe variants on an Apple-silicon Mac:
