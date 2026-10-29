@@ -141,7 +141,7 @@ struct ProbeResult: Codable, Equatable {
                     registryID: normalized.registryID,
                     name: normalized.name,
                     className: normalized.className,
-                    ancestry: normalized.ancestry.sorted(),
+                    ancestry: normalized.ancestry,
                     userClientClasses: normalized.userClientClasses.sorted(),
                     openResults: normalized.openResults,
                     restoreProperties: normalized.restoreProperties

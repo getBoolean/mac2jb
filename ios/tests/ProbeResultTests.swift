@@ -82,6 +82,7 @@ enum ProbeResultTests {
         try topologyFingerprintIsStable()
         try topologyFingerprintDetectsMeaningfulChanges()
         try topologyFingerprintDetectsFunctionAuthorizationChanges()
+        try topologyFingerprintDetectsAncestryOrderChanges()
         try mutationCallsFailTheReadOnlyAudit()
         print("PASS ProbeResult tests")
     }
@@ -153,6 +154,24 @@ enum ProbeResultTests {
         let baselineFingerprint = try baseline.topologyFingerprint()
         let deniedFingerprint = try fixture(functions: [denied]).topologyFingerprint()
         try expect(baselineFingerprint != deniedFingerprint, "function authorization change was ignored")
+    }
+
+    private static func topologyFingerprintDetectsAncestryOrderChanges() throws {
+        let baseline = fixture()
+        let controller = baseline.controllers[0]
+        let reordered = ControllerService(
+            registryID: controller.registryID,
+            name: controller.name,
+            className: controller.className,
+            ancestry: Array(controller.ancestry.reversed()),
+            userClientClasses: controller.userClientClasses,
+            openResults: controller.openResults,
+            restoreProperties: controller.restoreProperties
+        )
+
+        let baselineFingerprint = try baseline.topologyFingerprint()
+        let reorderedFingerprint = try fixture(controllers: [reordered]).topologyFingerprint()
+        try expect(baselineFingerprint != reorderedFingerprint, "controller ancestry order was ignored")
     }
 
     private static func mutationCallsFailTheReadOnlyAudit() throws {
