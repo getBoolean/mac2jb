@@ -21,6 +21,7 @@ typedef struct {
 bool MAC2JBSymbolAvailable(const char *name);
 void MAC2JBProbePrivateAPI(MAC2JBPrivateAPIReadback *result);
 bool MAC2JBHasEntitlement(const char *name);
+bool MAC2JBEntitlementContainsString(const char *name, const char *expected);
 const char *MAC2JBIOReturnCategory(int32_t value);
 
 #endif

@@ -424,12 +424,24 @@ private enum ProbeCollector {
     }
 
     private static func entitlementObservations() -> [EntitlementObservation] {
-        [
+        let booleanEntitlements = [
             "com.apple.private.usbdevice.setdescription",
             "com.apple.security.exception.iokit-user-client-class",
             "com.apple.private.security.no-sandbox",
             "platform-application"
         ].map { EntitlementObservation(name: $0, present: MAC2JBHasEntitlement($0)) }
+        let userClientEntitlement = "com.apple.security.exception.iokit-user-client-class"
+        let expectedUserClientClasses: [String] = [
+            "IOUSBDeviceControllerUserClient",
+            "IOUSBDeviceInterfaceUserClient"
+        ]
+        let userClientClassEntitlements: [EntitlementObservation] = expectedUserClientClasses.map { className in
+            EntitlementObservation(
+                name: "\(userClientEntitlement):\(className)",
+                present: MAC2JBEntitlementContainsString(userClientEntitlement, className)
+            )
+        }
+        return booleanEntitlements + userClientClassEntitlements
     }
 
     private static func iokitOutcome(_ value: Int32) -> String {

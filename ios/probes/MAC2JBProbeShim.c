@@ -62,31 +62,59 @@ void MAC2JBProbePrivateAPI(MAC2JBPrivateAPIReadback *result) {
     CFRelease(controller);
 }
 
-bool MAC2JBHasEntitlement(const char *name) {
-    if (!name) return false;
+static CFTypeRef copy_entitlement_value(const char *name) {
+    if (!name) return NULL;
     void *security = dlopen("/System/Library/Frameworks/Security.framework/Security", RTLD_NOW | RTLD_LOCAL);
-    if (!security) return false;
+    if (!security) return NULL;
     TaskCreateFunction createTask = (TaskCreateFunction)dlsym(security, "SecTaskCreateFromSelf");
     EntitlementCopyFunction copyEntitlement = (EntitlementCopyFunction)dlsym(security, "SecTaskCopyValueForEntitlement");
-    if (!createTask || !copyEntitlement) return false;
+    if (!createTask || !copyEntitlement) return NULL;
 
     CFStringRef entitlementName = CFStringCreateWithCString(kCFAllocatorDefault, name, kCFStringEncodingUTF8);
     CFTypeRef task = createTask(kCFAllocatorDefault);
     if (!entitlementName || !task) {
         if (entitlementName) CFRelease(entitlementName);
         if (task) CFRelease(task);
-        return false;
+        return NULL;
     }
 
     CFErrorRef error = NULL;
     CFTypeRef value = copyEntitlement(task, entitlementName, &error);
-    bool present = value != NULL;
-    if (value && CFGetTypeID(value) == CFBooleanGetTypeID()) present = CFBooleanGetValue((CFBooleanRef)value);
-    if (value) CFRelease(value);
     if (error) CFRelease(error);
     CFRelease(task);
     CFRelease(entitlementName);
+    return value;
+}
+
+bool MAC2JBHasEntitlement(const char *name) {
+    CFTypeRef value = copy_entitlement_value(name);
+    bool present = value != NULL;
+    if (value && CFGetTypeID(value) == CFBooleanGetTypeID()) present = CFBooleanGetValue((CFBooleanRef)value);
+    if (value) CFRelease(value);
     return present;
+}
+
+bool MAC2JBEntitlementContainsString(const char *name, const char *expected) {
+    if (!expected) return false;
+    CFTypeRef value = copy_entitlement_value(name);
+    if (!value) return false;
+
+    CFStringRef expectedValue = CFStringCreateWithCString(kCFAllocatorDefault, expected, kCFStringEncodingUTF8);
+    bool contains = false;
+    if (expectedValue && CFGetTypeID(value) == CFStringGetTypeID()) {
+        contains = CFEqual(value, expectedValue);
+    } else if (expectedValue && CFGetTypeID(value) == CFArrayGetTypeID()) {
+        CFArrayRef values = (CFArrayRef)value;
+        CFIndex count = CFArrayGetCount(values);
+        for (CFIndex index = 0; index < count && !contains; index++) {
+            CFTypeRef candidate = CFArrayGetValueAtIndex(values, index);
+            contains = candidate && CFGetTypeID(candidate) == CFStringGetTypeID() && CFEqual(candidate, expectedValue);
+        }
+    }
+
+    if (expectedValue) CFRelease(expectedValue);
+    CFRelease(value);
+    return contains;
 }
 
 const char *MAC2JBIOReturnCategory(int32_t value) {
