@@ -64,6 +64,11 @@ build_probe() {
 audit_probe() {
   local source="$ROOT/ios/probes/main.swift"
   local shim="$ROOT/ios/probes/MAC2JBProbeShim.c"
+  local controller_plist="$ROOT/ios/entitlements/probe-controller.plist"
+  local interface_plist="$ROOT/ios/entitlements/probe-interface.plist"
+  local entitlement_audit_dir
+  entitlement_audit_dir="$(mktemp -d "${TMPDIR:-/tmp}/mac2jb-entitlements.XXXXXX")"
+  trap "rm -rf '$entitlement_audit_dir'" EXIT
   if rg -n 'IOUSBDeviceController(SetDescription|SendCommand|GoOffAndOnBus|ForceOffBus)[[:space:]]*\(' "$source" "$shim"; then
     echo 'A USB mutation API is directly callable from the probe.' >&2
     exit 1
@@ -72,10 +77,40 @@ audit_probe() {
     echo 'An IOKit registry mutation API is directly callable from the probe.' >&2
     exit 1
   fi
+  if /usr/libexec/PlistBuddy -c 'Print :com.apple.private.usbdevice.setdescription' "$controller_plist" >/dev/null 2>&1; then
+    echo 'Controller-client profile must not include setdescription authority.' >&2
+    exit 1
+  fi
+  if /usr/libexec/PlistBuddy -c 'Print :com.apple.private.usbdevice.setdescription' "$interface_plist" >/dev/null 2>&1; then
+    echo 'Interface-client profile must not include setdescription authority.' >&2
+    exit 1
+  fi
+  [[ "$(/usr/libexec/PlistBuddy -c 'Print :com.apple.security.exception.iokit-user-client-class:0' "$controller_plist")" == 'IOUSBDeviceControllerUserClient' ]]
+  [[ "$(/usr/libexec/PlistBuddy -c 'Print :com.apple.security.exception.iokit-user-client-class:0' "$interface_plist")" == 'IOUSBDeviceInterfaceUserClient' ]]
+  [[ "$(/usr/libexec/PlistBuddy -c 'Print :platform-application' "$controller_plist")" == 'true' ]]
+  [[ "$(/usr/libexec/PlistBuddy -c 'Print :platform-application' "$interface_plist")" == 'true' ]]
   for binary in "$BUILD"/mac2jb-ios-probe-{baseline,setdescription,controller-client,interface-client}; do
     [[ -x "$binary" ]] || { echo "Missing probe variant: $binary" >&2; exit 1; }
     codesign --verify --strict "$binary"
   done
+  codesign -d --entitlements :- "$BUILD/mac2jb-ios-probe-setdescription" \
+    > "$entitlement_audit_dir/setdescription.plist" 2>/dev/null
+  codesign -d --entitlements :- "$BUILD/mac2jb-ios-probe-controller-client" \
+    > "$entitlement_audit_dir/controller.plist" 2>/dev/null
+  codesign -d --entitlements :- "$BUILD/mac2jb-ios-probe-interface-client" \
+    > "$entitlement_audit_dir/interface.plist" 2>/dev/null
+
+  [[ "$(/usr/libexec/PlistBuddy -c 'Print :com.apple.private.usbdevice.setdescription' "$entitlement_audit_dir/setdescription.plist")" == 'true' ]]
+  if /usr/libexec/PlistBuddy -c 'Print :com.apple.private.usbdevice.setdescription' "$entitlement_audit_dir/controller.plist" >/dev/null 2>&1; then
+    echo 'Signed controller-client variant includes setdescription authority.' >&2
+    exit 1
+  fi
+  if /usr/libexec/PlistBuddy -c 'Print :com.apple.private.usbdevice.setdescription' "$entitlement_audit_dir/interface.plist" >/dev/null 2>&1; then
+    echo 'Signed interface-client variant includes setdescription authority.' >&2
+    exit 1
+  fi
+  [[ "$(/usr/libexec/PlistBuddy -c 'Print :com.apple.security.exception.iokit-user-client-class:0' "$entitlement_audit_dir/controller.plist")" == 'IOUSBDeviceControllerUserClient' ]]
+  [[ "$(/usr/libexec/PlistBuddy -c 'Print :com.apple.security.exception.iokit-user-client-class:0' "$entitlement_audit_dir/interface.plist")" == 'IOUSBDeviceInterfaceUserClient' ]]
   echo 'PASS read-only probe audit'
 }
 
