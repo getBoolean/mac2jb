@@ -215,13 +215,21 @@ private enum ProbeCollector {
         clientTypes.map { clientType in
             var connection: io_connect_t = 0
             let status = IOServiceOpen(entry, mach_task_self_, clientType, &connection)
-            if status == KERN_SUCCESS { IOServiceClose(connection) }
             operations.append(OperationObservation(
                 name: "IOServiceOpen(\(serviceKind):\(registryID(entry)),type:\(clientType))",
                 kind: .readOnly,
                 ioReturn: status,
                 outcome: iokitOutcome(status)
             ))
+            if status == KERN_SUCCESS {
+                let closeStatus = IOServiceClose(connection)
+                operations.append(OperationObservation(
+                    name: "IOServiceClose(\(serviceKind):\(registryID(entry)),type:\(clientType))",
+                    kind: .readOnly,
+                    ioReturn: closeStatus,
+                    outcome: iokitOutcome(closeStatus)
+                ))
+            }
             return OpenResult(clientType: clientType, ioReturn: status, outcome: iokitOutcome(status))
         }
     }
@@ -246,6 +254,11 @@ private enum ProbeCollector {
             if entry == 0 { break }
             entries.append(entry)
         }
+        operations.append(OperationObservation(
+            name: "IOServiceMatch(\(className))",
+            kind: .readOnly,
+            outcome: entries.isEmpty ? "missing-service" : "service-present"
+        ))
         return entries
     }
 
