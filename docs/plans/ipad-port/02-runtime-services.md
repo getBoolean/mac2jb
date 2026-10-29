@@ -18,7 +18,7 @@ execution_after: docs/plans/ipad-port/01-hardware-feasibility.md
 - **Objective:** The target iPad can run and supervise mac2jb's host, HID, held-session, attachment, dump, and recovery workloads locally and durably.
 - **Means:** Introduce a versioned local service protocol, an iOS `posix_spawn` supervisor, a pinned `--jitless` Node runtime, and platform adapters that preserve the current script contracts (KTD1–KTD9).
 - **Authority:** The roadmap R2, R3, R9, R10, and R19 govern behavior; the hardware capability record governs USB and network integration.
-- **Stop conditions:** Do not connect the production UI until process, protocol, ownership, and crash-recovery fixtures pass. Do not ship if Node cannot run the required module/process matrix on M1 iPadOS 17.0.
+- **Stop conditions:** Do not connect the production UI until process, protocol, ownership, and crash-recovery fixtures pass. Do not ship if Node cannot run the required module/process matrix on the `iPad14,5` M2 target running iPadOS 17.0.
 
 ---
 

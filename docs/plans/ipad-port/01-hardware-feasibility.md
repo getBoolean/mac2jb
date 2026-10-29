@@ -15,7 +15,7 @@ execution_after: docs/plans/ipad-port/00-roadmap.md
 
 ## Goal Capsule
 
-- **Objective:** Prove on the exact M1 iPad/iPadOS 17.0 target that direct USB HID is safe and that a reliable Switch-to-iPad IP path exists before the broader port proceeds.
+- **Objective:** Prove on the exact M2 iPad Pro target (`iPad14,5` / `J620AP` / `T8112`) running iPadOS 17.0 that direct USB HID is safe and that a reliable Switch-to-iPad IP path exists before the broader port proceeds.
 - **Means:** Build read-only inventory tools first, then an independently recoverable HID canary, then a network baseline and topology bakeoff (KTD1–KTD5).
 - **Authority:** The roadmap's R4–R8 are release gates; this plan may select implementation details but may not weaken them.
 - **Stop conditions:** Stop descriptor work on any unrecoverable USB-function loss. Stop dependent port plans if HID enumeration/restoration or network success thresholds fail after the bounded alternatives here.
@@ -45,7 +45,7 @@ The evidence therefore supports a **credible implementation path, not proof of i
 
 **Inventory and authorization**
 
-- R1. A read-only probe must record the exact target tuple—`ProductType`, board identifier, SoC, port family, iPadOS build, Dopamine build, TrollStore build, cable/capture-host identity—plus USB controller services, active controller, device-tree `configuration-string`, stock configuration source/digest, active function services, reconstructable restore inputs, user-client classes, and relevant entitlements without changing USB state. “M1 iPad” alone is not a target identity: the M1 iPad Air uses USB 3.1 Gen 2, while the M1 iPad Pro uses Thunderbolt/USB 4.
+- R1. A read-only probe must bind evidence to the exact `iPad14,5` / `J620AP` / `T8112` target tuple—`ProductType`, board identifier, SoC, Thunderbolt/USB 4 port family, iPadOS build, Dopamine build, TrollStore build, cable/capture-host identity—plus USB controller services, active controller, device-tree `configuration-string`, stock configuration source/digest, active function services, reconstructable restore inputs, user-client classes, and relevant entitlements without changing USB state.
 - R2. The signed probe must resolve private controller APIs at runtime and distinguish missing symbol/ABI, missing entitlement, missing service, user-client denial, controller-role mismatch, and unsupported operation outcomes. It must record the raw operation and `IOReturn` at every boundary instead of trusting the current backend's suppressed return values.
 - R3. Before any description mutation, a direct-cable role/power test must prove that the exact iPad/cable/host combination enters USB peripheral/device role, exposes the selected device-mode controller, and has an acceptable VBUS/charging state. Test both USB-C orientations and a known-good data cable; success while connected to a Mac does not substitute for the Switch-side role test.
 
@@ -156,7 +156,7 @@ docs/ipad/
 - An iPad USB misconfiguration can remove usbmux/network functions until reboot. Require a backup, verified reboot path, additive-first configuration, watchdog, and one mutation per reviewed step.
 - The service entitlement names may differ from Mac evidence. Record actual registry classes and open failures before editing entitlements; do not grant broad wildcard exceptions.
 - Possessing `com.apple.private.usbdevice.setdescription` may still leave the controller or function user client inaccessible. Use a staged entitlement matrix and stop at the first failing authorization layer instead of weakening AMFI or injecting into a system process.
-- The iPad can be USB host or peripheral and M1 models do not share one port implementation. Bind evidence to the exact ProductType, cable, orientation, peer, controller ancestry, and observed data/power roles.
+- The iPad can be USB host or peripheral, and controller behavior remains ProductType-specific. Bind evidence to `iPad14,5`, the exact cable, orientation, peer, controller ancestry, and observed data/power roles.
 - Existing iOS configurations are named driver compositions and some extended modes cannot coexist. Treat composite HID plus NCM as a separate experiment after Wi-Fi failure, not a descriptor-only assumption.
 - ns2jb has inherent variability. Use paired batches under controlled conditions and preserve attempt-level outcomes instead of declaring success from one run.
 
@@ -171,8 +171,8 @@ docs/ipad/
 - **Adjacent ARM64 HID proof:** <https://github.com/shinyquagsire23/macos_usb_gadget_poc>. It implements a macOS HID keyboard with the related stack, identifies `com.apple.private.usbdevice.setdescription`, and warns about losing network functions until reboot or additive reconstruction.
 - **Target signing boundary:** <https://github.com/opa334/TrollStore>. It lists iOS 17.0 support and preservation of arbitrary entitlements, subject to platform restrictions and exact IOKit access.
 - **Entitlement continuity:** <https://newosxbook.com/ent.php?exec=configd&osVer=iOS18>. Current `configd` still carries `com.apple.private.usbdevice.setdescription`; this corroborates continued controller authorization but does not replace an iPadOS 17.0 signed probe.
-- **Exact-family device-tree clue:** <https://gist.github.com/zhuowei/bb8a56aaeab47af6e1fb826b8ca14168>. An extracted iPad13,4/T8103 tree contains `usb-drd0`, high- and SuperSpeed port nodes, and `stdMuxPTPEthValIDA`; use it only to seed live discovery because it is not the target iPadOS 17 build.
-- **Port-family distinction:** Apple lists USB 3.1 Gen 2 for the M1 iPad Air and Thunderbolt/USB 4 for the M1 iPad Pro: <https://support.apple.com/en-gb/111887> and <https://support.apple.com/de-ch/111897>.
+- **Adjacent-family device-tree clue:** <https://gist.github.com/zhuowei/bb8a56aaeab47af6e1fb826b8ca14168>. An extracted M1 iPad13,4/T8103 tree contains `usb-drd0`, high- and SuperSpeed port nodes, and `stdMuxPTPEthValIDA`; use it only to seed live discovery because it is neither the target SoC nor the target iPadOS 17 build.
+- **Exact-model port specification:** Apple identifies the 12.9-inch iPad Pro (6th generation) as an M2 model with a Thunderbolt/USB 4 port: <https://support.apple.com/en-us/111841>.
 - **Dual-role/power behavior:** <https://support.apple.com/en-ie/108894>. Apple documents iPad as a computer-connected device, accessory host, power source, and power sink, including connection-order-sensitive charging between USB-C iPads; the Switch data role still requires direct measurement.
 
 ---

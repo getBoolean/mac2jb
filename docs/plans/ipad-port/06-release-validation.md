@@ -26,7 +26,7 @@ execution_after: docs/plans/ipad-port/05-distribution-updates.md
 
 ### Summary
 
-Turn the completed implementation into a maintainable release process. Extend CI with iOS cross-build and package audits, run portable fixtures on every change, execute a controlled M1 iPad/Switch hardware suite for release candidates, and publish the results and recovery documentation needed to support the port.
+Turn the completed implementation into a maintainable release process. Extend CI with iOS cross-build and package audits, run portable fixtures on every change, execute a controlled `iPad14,5` M2 iPad/Switch hardware suite for release candidates, and publish the results and recovery documentation needed to support the port.
 
 ### Problem Frame
 
@@ -42,7 +42,7 @@ Most repository tests are strong but Mac-bound: Swift fixtures compile for macOS
 
 **Hardware qualification**
 
-- R4. A release candidate must be tested on an identified M1 iPad/iPadOS 17.0/Dopamine/TrollStore tuple and supported Switch/SmileBASIC tuple.
+- R4. A release candidate must be tested on the identified `iPad14,5` / `J620AP` / `T8112` iPadOS 17.0/Dopamine/TrollStore tuple and supported Switch/SmileBASIC tuple.
 - R5. Hardware records must include artifact digests, capability record digest, test-case IDs, timestamps, redacted logs, metrics, and pass/fail reasons.
 - R6. USB qualification must cover 30 normal cycles and every planned crash/disconnect/restart restoration case with no unresolved failure.
 - R7. Network qualification must retain the hardware plan's paired baseline and minimum 20-attempt success evidence.
@@ -68,7 +68,7 @@ Most repository tests are strong but Mac-bound: Swift fixtures compile for macOS
 
 - Public CI is not expected to emulate private iPad USB behavior; it validates build/package/contracts, while physical qualification owns device claims.
 - A permanent remote device farm is deferred; the first release uses a documented local hardware runner and signed result import.
-- Broad compatibility claims beyond M1 iPad/iPadOS 17.0 are excluded until equivalent records exist.
+- Broad compatibility claims beyond the `iPad14,5` / `J620AP` / `T8112` iPadOS 17.0 target are excluded until equivalent records exist.
 - Exploit success is measured and reported, not promised as 100 percent when the upstream workflow is probabilistic.
 
 ---
@@ -93,7 +93,7 @@ flowchart TB
   MAC --> PKG[Dual-platform package audits]
   IOS --> PKG
   PKG --> RC[Release candidate artifacts]
-  RC --> HW[Tier 3 M1 iPad and Switch suite]
+  RC --> HW[Tier 3 M2 iPad and Switch suite]
   HW --> REC[Signed redacted hardware record]
   REC --> PROMOTE{All gates and acknowledgement?}
   PROMOTE -->|yes| RELEASE[Publish stable release]

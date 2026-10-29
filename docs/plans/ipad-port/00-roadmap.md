@@ -1,5 +1,5 @@
 ---
-title: M1 iPad Full Port Roadmap - Plan
+title: M2 iPad Full Port Roadmap - Plan
 type: feat
 date: 2026-10-28
 artifact_contract: ce-unified-plan/v1
@@ -10,11 +10,11 @@ plan_order: 0
 plan_role: roadmap
 ---
 
-# M1 iPad Full Port Roadmap - Plan
+# M2 iPad Full Port Roadmap - Plan
 
 ## Goal Capsule
 
-- **Objective:** A jailbroken M1 iPad on iPadOS 17.0 can run the complete mac2jb workflow with no Mac present during normal use, including USB bootstrap entry, ns2jb hosting, held-RPC tools, every bundled homebrew app, recovery, updates, and diagnostics.
+- **Objective:** The jailbroken M2 iPad Pro 12.9-inch (6th generation), `iPad14,5` / `J620AP` / `T8112`, on iPadOS 17.0 can run the complete mac2jb workflow with no Mac present during normal use, including USB bootstrap entry, ns2jb hosting, held-RPC tools, every bundled homebrew app, recovery, updates, and diagnostics.
 - **Means:** Deliver the port through six dependency-ordered child plans, beginning with destructive-risk hardware feasibility gates and ending with device-backed release qualification (KTD1–KTD8).
 - **Authority:** Product Requirements and session-settled Key Decisions override technical choices; Key Technical Decisions govern implementation mechanisms; child plans refine only their assigned boundaries.
 - **Execution profile:** Code implementation across iOS, jailbreak packaging, native helpers, JavaScript orchestration, SwiftUI, CI, and physical-device verification.
@@ -27,11 +27,11 @@ plan_role: roadmap
 
 ### Summary
 
-Port mac2jb from its current Apple-silicon Mac host model to a jailbroken M1 iPad running iPadOS 17.0, Dopamine, and TrollStore. The result retains the current end-to-end user workflow while replacing macOS-only USB gadget, process, UI, runtime, updater, and packaging mechanisms with iPad-compatible equivalents.
+Port mac2jb from its current Apple-silicon Mac host model to the jailbroken M2 iPad Pro target (`iPad14,5` / `J620AP` / `T8112`) running iPadOS 17.0, Dopamine, and TrollStore. The result retains the current end-to-end user workflow while replacing macOS-only USB gadget, process, UI, runtime, updater, and packaging mechanisms with iPad-compatible equivalents.
 
 ### Problem Frame
 
-The repository is an integrated macOS product rather than a portable command-line host. Its USB HID implementation depends on a macOS kext and `IOUSBDeviceFamily`; its app uses AppKit and `Foundation.Process`; its release embeds desktop Node, Python, SPIR-V Tools, and media executables. The M1 iPad has related Darwin and USB-device infrastructure, but private entitlement access and safe descriptor restoration must be proven on the exact iPadOS 17.0 target before the rest of the port is justified.
+The repository is an integrated macOS product rather than a portable command-line host. Its USB HID implementation depends on a macOS kext and `IOUSBDeviceFamily`; its app uses AppKit and `Foundation.Process`; its release embeds desktop Node, Python, SPIR-V Tools, and media executables. The M2 iPad has related Darwin and USB-device infrastructure, but private entitlement access and safe descriptor restoration must be proven on the exact iPadOS 17.0 target before the rest of the port is justified.
 
 ### Key Decisions
 
@@ -44,7 +44,7 @@ The repository is an integrated macOS product rather than a portable command-lin
 
 **Target and compatibility**
 
-- R1. The supported iPad target is an M1 iPad on iPadOS 17.0 with Dopamine and TrollStore installed.
+- R1. The supported iPad target is the M2 iPad Pro 12.9-inch (6th generation), `iPad14,5` / `J620AP` / `T8112`, on iPadOS 17.0 with Dopamine and TrollStore installed.
 - R2. The current Apple-silicon macOS build, release archive, and tested workflows must remain buildable and behaviorally compatible.
 - R3. Normal iPad use must not require a Mac, remote host, SSH session, or developer computer after installation.
 
@@ -80,7 +80,7 @@ The repository is an integrated macOS product rather than a portable command-lin
 
 ### Success Criteria
 
-- On the target M1 iPad/iPadOS 17.0 device, 30 consecutive USB configure/enumerate/send/restore cycles complete without a stuck key, lost standard USB function after restoration, or reboot requirement.
+- On the target `iPad14,5` / iPadOS 17.0 device, 30 consecutive USB configure/enumerate/send/restore cycles complete without a stuck key, lost standard USB function after restoration, or reboot requirement.
 - The selected network topology completes at least 20 full ns2jb attempts and meets the baseline-relative success threshold defined in the hardware plan.
 - Each homebrew option completes one launch-and-cleanup acceptance run on both supported SmileBASIC editions where the upstream app supports that edition.
 - A cold install using only published `.tipa` and rootless `.deb` artifacts reaches the first-time setup screen and passes self-diagnostics.
@@ -99,7 +99,7 @@ The repository is an integrated macOS product rather than a portable command-lin
 
 **In scope**
 
-- M1 iPad, iPadOS 17.0, Dopamine rootless, TrollStore, Switch 2, and the repository's currently supported SmileBASIC versions and host profiles.
+- M2 iPad Pro 12.9-inch (6th generation), `iPad14,5` / `J620AP` / `T8112`, iPadOS 17.0, Dopamine rootless, TrollStore, Switch 2, and the repository's currently supported SmileBASIC versions and host profiles.
 - Native iPad UI and a local background service, with the current JavaScript orchestration reused behind platform adapters where practical.
 - A physical-device lab procedure even when public CI cannot attach the target iPad and Switch.
 
@@ -112,7 +112,7 @@ The repository is an integrated macOS product rather than a portable command-lin
 
 ### Dependencies
 
-- A dedicated M1 iPad held on iPadOS 17.0 with working Dopamine and TrollStore.
+- The dedicated `iPad14,5` target held on iPadOS 17.0 with working Dopamine and TrollStore.
 - A Switch 2 and both supported SmileBASIC editions or access to representative full/demo test fixtures plus at least one physical edition for acceptance.
 - A recoverable device backup and a safe reboot/re-jailbreak path before USB descriptor experiments.
 
@@ -212,7 +212,7 @@ The hardware plan first builds a disposable rootless probe package with the prod
 | The target USB controller denies descriptor configuration despite TrollStore entitlements | Direct HID parity is infeasible | Make the first implementation a read-only inventory and signed canary; stop before UI/runtime investment if the gate fails |
 | A malformed or interrupted USB configuration removes standard device functions | USB access may remain broken until reboot | Snapshot first, use an independent watchdog, verify restoration, and require repeated fault-injection cycles |
 | The single USB-C port prevents the current Ethernet topology | ns2jb becomes unreliable | Benchmark Wi-Fi against a wired baseline before committing; investigate a direct composite/network mode only if Wi-Fi misses the threshold |
-| Node/fork behavior differs on M1 iPadOS 17.0 | Existing JS orchestration cannot launch children | Pin an iOS build, run a capability matrix early, and move incompatible subprocesses behind native service commands |
+| Node/fork behavior differs on the M2 iPadOS 17.0 target | Existing JS orchestration cannot launch children | Pin an iOS build, run a capability matrix early, and move incompatible subprocesses behind native service commands |
 | Runtime dependencies inflate or fail to cross-build | IZLauncher/Stremio parity stalls | Prefer linked libraries and narrow native adapters over desktop CLI emulation where upstream iOS builds are library-only |
 | Dual artifacts drift | App/service protocol mismatch or unsafe updates | Version the protocol, enforce a compatibility range, publish one signed manifest, and test mixed-version refusal/rollback |
 

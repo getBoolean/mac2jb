@@ -1,6 +1,6 @@
 # iPad hardware feasibility matrix
 
-The release gate is **plausible but unproven** until the exact M1 iPad on iPadOS 17.0 completes this matrix. Repository builds and fixtures do not substitute for target-device evidence.
+The release gate is **plausible but unproven** until the exact M2 iPad Pro target (`iPad14,5` / `J620AP` / `T8112`) on iPadOS 17.0 completes this matrix. Repository builds and fixtures do not substitute for target-device evidence.
 
 ## Read-only inventory probe
 
@@ -26,7 +26,7 @@ Copy the variants to a root-owned directory on the jailbroken iPad. Run each bin
 
 ```sh
 ./mac2jb-ios-probe-baseline \
-  --soc T8103 \
+  --soc T8112 \
   --port-family thunderbolt-usb4 \
   --dopamine-build DOPAMINE_BUILD \
   --trollstore-build TROLLSTORE_BUILD \
@@ -39,7 +39,7 @@ Copy the variants to a root-owned directory on the jailbroken iPad. Run each bin
   --output /var/jb/var/mobile/Library/mac2jb-probe/capture-host-a-baseline-1.json
 ```
 
-Use the exact SoC and port family for the device. M1 iPad Pro models use `T8103` and `thunderbolt-usb4`; an M1 iPad Air must use its observed board/port family rather than copying this example.
+The connected target is the M2 iPad Pro 12.9-inch (6th generation), `iPad14,5` / `J620AP` / `T8112`, with a `thunderbolt-usb4` port family. Do not reuse its capability record for another ProductType or OS build.
 
 ## Authorization matrix
 

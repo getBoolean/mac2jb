@@ -1,7 +1,7 @@
-# USB HID device mode on an M1 iPad
+# USB HID device mode on the M2 iPad Pro target
 
 Date: 2026-10-28  
-Target: M1 iPad, iPadOS 17.0, Dopamine, TrollStore
+Target: M2 iPad Pro 12.9-inch (6th generation), `iPad14,5` / `J620AP` / `T8112`, iPadOS 17.0, Dopamine, TrollStore
 
 ## Verdict
 
@@ -51,7 +51,7 @@ Passing step 7 proves direct USB HID on the iPad. Passing step 9 proves the iPad
 ## Remaining risks
 
 - iPadOS 17.0 may retain the generic class but change the user-client selectors or deny one of the endpoint operations.
-- The M1 iPad Air and M1 iPad Pro have different port families; proof for one ProductType does not cover the other.
+- Evidence is bound to `iPad14,5` / `J620AP` / `T8112`; proof from another ProductType or SoC does not cover this target.
 - Two USB-C dual-role devices may choose an unusable role or power contract with a particular cable/orientation.
 - Replacing or extending the active description can remove usbmux, trust, or networking until reboot. The first mutation must follow a tested hard-reboot/re-jailbreak recovery drill and a durable restore journal.
 - The Switch may reject a descriptor that a desktop host accepts. Desktop capture is necessary but not sufficient.

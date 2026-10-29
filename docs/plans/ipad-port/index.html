@@ -4,8 +4,8 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="color-scheme" content="light">
-  <meta name="description" content="Execution overview for porting mac2jb to an M1 iPad on iPadOS 17.0 with Dopamine and TrollStore.">
-  <title>mac2jb — M1 iPad port flight plan</title>
+  <meta name="description" content="Execution overview for porting mac2jb to the M2 iPad Pro iPad14,5 on iPadOS 17.0 with Dopamine and TrollStore.">
+  <title>mac2jb — M2 iPad Pro port flight plan</title>
   <style>
     :root {
       --paper: #f7fafc;
@@ -756,7 +756,7 @@
 <body>
   <div class="page">
     <aside class="mission-rail" aria-label="Plan navigation">
-      <p class="rail-mark">mac2jb / iPad port<span>M1 · iPadOS 17.0 · Dopamine · TrollStore</span></p>
+      <p class="rail-mark">mac2jb / iPad port<span>M2 · iPad14,5 · iPadOS 17.0</span></p>
       <div class="mission-status">
         <strong>Planning complete</strong>
         Hardware proof is the next gate. No parity claim exists until it passes.
@@ -775,9 +775,9 @@
     <main>
       <header class="hero" id="overview">
         <h1>Port flight plan</h1>
-        <p class="hero-summary">A Mac-free mac2jb workflow on a jailbroken M1 iPad. The work is ordered around one hard truth: private USB behavior and safe restoration must be proven on the exact device before the runtime, interface, or packaging work earns a release path.</p>
+        <p class="hero-summary">A Mac-free mac2jb workflow on the jailbroken M2 iPad Pro target. The work is ordered around one hard truth: private USB behavior and safe restoration must be proven on the exact device before the runtime, interface, or packaging work earns a release path.</p>
         <dl class="mission-ledger">
-          <div><dt>Target</dt><dd>M1 iPad / iPadOS 17.0</dd></div>
+          <div><dt>Target</dt><dd>iPad14,5 / T8112 / iPadOS 17.0</dd></div>
           <div><dt>Install model</dt><dd>TrollStore app + rootless package</dd></div>
           <div><dt>Execution</dt><dd>Six gated implementation plans</dd></div>
           <div><dt>Current gate</dt><dd>Credible HID path; exact-device proof required</dd></div>
@@ -882,7 +882,7 @@
           <article class="problem release-blocker">
             <span class="problem-index">P–01</span>
             <h3>USB HID has an implementation path, not a device result</h3>
-            <p>The Mac kext forwards controller configuration rather than implementing HID; on that stack, userspace configures the resulting generic named interface with the class tuple, descriptors, interrupt pipe, and reports. iOS 17 retains the controller/interface family, and TrollStore can preserve the controller entitlement. No public result yet proves arbitrary-function materialization, endpoint operations, or direct Switch role negotiation on this physical M1 iPad running 17.0.</p>
+            <p>The Mac kext forwards controller configuration rather than implementing HID; on that stack, userspace configures the resulting generic named interface with the class tuple, descriptors, interrupt pipe, and reports. iOS 17 retains the controller/interface family, and TrollStore can preserve the controller entitlement. No public result yet proves arbitrary-function materialization, endpoint operations, or direct Switch role negotiation on this physical iPad14,5 running 17.0.</p>
             <p class="response"><strong>Plan response</strong>Reproduce the generic-interface sequence one operation at a time on the exact ProductType and build, capture generic-host enumeration, restore stock functions, and only then test the Switch. <a href="research/usb-hid-ipad-feasibility.md">Read the evidence chain and proof protocol.</a></p>
           </article>
           <article class="problem release-blocker">

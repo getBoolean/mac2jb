@@ -19,9 +19,9 @@ private func fixture(
         schemaVersion: 1,
         capturedAt: capturedAt,
         target: TargetIdentity(
-            productType: "iPad13,4",
-            boardIdentifier: "J517AP",
-            soc: "T8103",
+            productType: "iPad14,5",
+            boardIdentifier: "J620AP",
+            soc: "T8112",
             portFamily: "thunderbolt-usb4",
             osVersion: "17.0",
             osBuild: "21A329",
@@ -41,7 +41,7 @@ private func fixture(
                 registryID: 42,
                 name: "usb-drd0",
                 className: "IOUSBDeviceController",
-                ancestry: ["IOService", "AppleT8103USBXHCI"],
+                ancestry: ["IOService", "AppleT8112USBXHCI"],
                 userClientClasses: ["IOUSBDeviceControllerUserClient"],
                 openResults: [OpenResult(clientType: 0, ioReturn: 0)]
             )
