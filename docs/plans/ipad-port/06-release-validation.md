@@ -154,7 +154,7 @@ stateDiagram-v2
 - **Goal:** Make physical evidence reproducible, complete, and privacy-safe.
 - **Requirements:** R4, R5, R10, R12 and Roadmap R21
 - **Dependencies:** Hardware capability and release manifest schemas
-- **Files:** `scripts/ipad-hardware/release-run.schema.json`, `scripts/ipad-hardware/run-release-suite.cjs`, `scripts/ipad-hardware/import-release-run.cjs`, `scripts/test-ipad-release-run.cjs`, `docs/ipad/hardware-runner.md`
+- **Files:** `scripts/ipad-hardware/release-run.schema.json`, `scripts/ipad-hardware/run-release-suite.cjs`, `scripts/ipad-hardware/import-release-run.cjs`, `scripts/ipad-hardware/tests/test-ipad-release-run.cjs`, `docs/ipad/hardware-runner.md`
 - **Approach:** Bind test definitions to artifact/capability digests and the hardware plan's enrolled report-signing public-key fingerprint, collect structured results/metrics/log references, redact, sign locally with the same canonical record contract, verify on import, and generate a markdown summary.
 - **Test scenarios:**
   - Reject missing cases, changed artifact digest, unknown test ID, impossible timestamps, invalid signature, and unredacted protected fields.
@@ -168,7 +168,7 @@ stateDiagram-v2
 - **Goal:** Convert the hardware gates and destructive cases into a repeatable release suite.
 - **Requirements:** R6, R7, R9
 - **Dependencies:** U3 and hardware plan complete
-- **Files:** `scripts/ipad-hardware/test-usb-release.cjs`, `scripts/ipad-hardware/test-network-release.cjs`, `docs/ipad/usb-recovery.md`, `scripts/test-ipad-fault-runner.cjs`
+- **Files:** `scripts/ipad-hardware/tests/test-usb-release.cjs`, `scripts/ipad-hardware/tests/test-network-release.cjs`, `docs/ipad/usb-recovery.md`, `scripts/ipad-hardware/tests/test-ipad-fault-runner.cjs`
 - **Approach:** Prompt/coordinate safe physical actions, capture state before/after, enforce cycle/attempt counts, stop immediately on restore mismatch, and emit incident bundles.
 - **Test scenarios:**
   - Covers AE3. Inject app/worker/daemon death at each USB state, cable removal, userspace restart, and timeout.
@@ -182,7 +182,7 @@ stateDiagram-v2
 - **Goal:** Prove the whole product from clean install through cleanup.
 - **Requirements:** R8, R9 and Roadmap R21
 - **Dependencies:** U3, all feature plans complete
-- **Files:** `scripts/ipad-hardware/test-e2e-release.cjs`, `docs/ipad/release-checklist.md`, `docs/ipad/homebrew-matrix.md`, `scripts/test-ipad-e2e-runner.cjs`
+- **Files:** `scripts/ipad-hardware/tests/test-e2e-release.cjs`, `docs/ipad/release-checklist.md`, `docs/ipad/homebrew-matrix.md`, `scripts/ipad-hardware/tests/test-ipad-e2e-runner.cjs`
 - **Approach:** Encode guided cases for install/preflight, full/demo setup, standard/developer modes, keyboard, attach/dump, each homebrew app, Stremio, update/rollback, re-jailbreak, and uninstall.
 - **Test scenarios:**
   - Covers AE4. Complete the golden Mac-free full-version workflow and repeat the edition-specific setup path for demo.
