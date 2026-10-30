@@ -4,6 +4,7 @@
 #include <CoreFoundation/CoreFoundation.h>
 #include <IOKit/IOKitLib.h>
 #include <stdbool.h>
+#include <stddef.h>
 #include <stdint.h>
 
 typedef struct {
@@ -23,5 +24,11 @@ void MAC2JBProbePrivateAPI(MAC2JBPrivateAPIReadback *result);
 bool MAC2JBHasEntitlement(const char *name);
 bool MAC2JBEntitlementContainsString(const char *name, const char *expected);
 const char *MAC2JBIOReturnCategory(int32_t value);
+int32_t MAC2JBWriteExclusiveReport(
+    const char *directory,
+    const char *filename,
+    const uint8_t *bytes,
+    size_t length
+);
 
 #endif

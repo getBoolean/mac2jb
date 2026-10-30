@@ -1,7 +1,13 @@
 #include "MAC2JBProbeShim.h"
 
 #include <dlfcn.h>
+#include <errno.h>
+#include <fcntl.h>
+#include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
+#include <sys/stat.h>
+#include <unistd.h>
 
 typedef const void *MAC2JBControllerRef;
 typedef const void *MAC2JBDescriptionRef;
@@ -130,4 +136,104 @@ const char *MAC2JBIOReturnCategory(int32_t value) {
         case kIOReturnBadArgument: return "abi-or-argument-mismatch";
         default: return "iokit-error";
     }
+}
+
+int32_t MAC2JBWriteExclusiveReport(
+    const char *directory,
+    const char *filename,
+    const uint8_t *bytes,
+    size_t length
+) {
+    if (!directory || !filename || !bytes || strchr(filename, '/') != NULL) return EINVAL;
+
+    int directoryFD = open(directory, O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC);
+    if (directoryFD < 0) return errno;
+
+    struct stat directoryStatus;
+    if (fstat(directoryFD, &directoryStatus) != 0 || !S_ISDIR(directoryStatus.st_mode)) {
+        int saved = errno ? errno : ENOTDIR;
+        close(directoryFD);
+        return saved;
+    }
+
+    char temporaryName[96];
+    int reportFD = -1;
+    for (int attempt = 0; attempt < 8; attempt++) {
+        snprintf(
+            temporaryName,
+            sizeof(temporaryName),
+            ".mac2jb-probe-%08x-%08x.tmp",
+            (unsigned)getpid(),
+            (unsigned)arc4random()
+        );
+        reportFD = openat(
+            directoryFD,
+            temporaryName,
+            O_WRONLY | O_CREAT | O_EXCL | O_NOFOLLOW | O_CLOEXEC,
+            S_IRUSR | S_IWUSR
+        );
+        if (reportFD >= 0 || errno != EEXIST) break;
+    }
+    if (reportFD < 0) {
+        int saved = errno;
+        close(directoryFD);
+        return saved;
+    }
+
+    struct stat reportStatus;
+    if (fstat(reportFD, &reportStatus) != 0 || !S_ISREG(reportStatus.st_mode) || reportStatus.st_nlink != 1) {
+        int saved = errno ? errno : EINVAL;
+        close(reportFD);
+        unlinkat(directoryFD, temporaryName, 0);
+        close(directoryFD);
+        return saved;
+    }
+
+    size_t offset = 0;
+    while (offset < length) {
+        ssize_t count = write(reportFD, bytes + offset, length - offset);
+        if (count < 0) {
+            if (errno == EINTR) continue;
+            int saved = errno;
+            close(reportFD);
+            unlinkat(directoryFD, temporaryName, 0);
+            close(directoryFD);
+            return saved;
+        }
+        if (count == 0) {
+            close(reportFD);
+            unlinkat(directoryFD, temporaryName, 0);
+            close(directoryFD);
+            return EIO;
+        }
+        offset += (size_t)count;
+    }
+
+    if (fchmod(reportFD, S_IRUSR | S_IWUSR) != 0 || fsync(reportFD) != 0) {
+        int saved = errno;
+        close(reportFD);
+        unlinkat(directoryFD, temporaryName, 0);
+        close(directoryFD);
+        return saved;
+    }
+    if (close(reportFD) != 0) {
+        int saved = errno;
+        unlinkat(directoryFD, temporaryName, 0);
+        close(directoryFD);
+        return saved;
+    }
+
+    if (renameatx_np(directoryFD, temporaryName, directoryFD, filename, RENAME_EXCL) != 0) {
+        int saved = errno;
+        unlinkat(directoryFD, temporaryName, 0);
+        close(directoryFD);
+        return saved;
+    }
+    if (fsync(directoryFD) != 0) {
+        int saved = errno;
+        close(directoryFD);
+        return saved;
+    }
+    close(directoryFD);
+    return 0;
 }

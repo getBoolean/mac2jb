@@ -78,6 +78,8 @@ private func fixture(
 @main
 enum ProbeResultTests {
     static func main() throws {
+        try stdoutOnlyOptionsRejectFileOutput()
+        try fileOutputOptionsStillRequireAPath()
         try hashedIdentifiersNeverExposeRawValues()
         try topologyFingerprintIsStable()
         try topologyFingerprintDetectsMeaningfulChanges()
@@ -85,6 +87,52 @@ enum ProbeResultTests {
         try topologyFingerprintDetectsAncestryOrderChanges()
         try mutationCallsFailTheReadOnlyAudit()
         print("PASS ProbeResult tests")
+    }
+
+    private static func stdoutOnlyOptionsRejectFileOutput() throws {
+        let arguments = requiredProbeArguments()
+        let options = try ProbeOptions.parse(arguments, outputMode: .standardOutputOnly)
+        try expect(options.output == nil, "stdout-only options retained a file destination")
+
+        do {
+            _ = try ProbeOptions.parse(
+                arguments + ["--output", "/var/mobile/Documents/report.json"],
+                outputMode: .standardOutputOnly
+            )
+            throw TestFailure("stdout-only options accepted --output")
+        } catch let error as ProbeOptionError {
+            try expect(error.description == "--output is forbidden in stdout-only mode", "unexpected stdout-only error")
+        }
+    }
+
+    private static func fileOutputOptionsStillRequireAPath() throws {
+        let arguments = requiredProbeArguments()
+        do {
+            _ = try ProbeOptions.parse(arguments, outputMode: .exclusiveFile)
+            throw TestFailure("file-output options did not require --output")
+        } catch let error as ProbeOptionError {
+            try expect(error.description == "Missing --output", "unexpected missing-output error")
+        }
+
+        let options = try ProbeOptions.parse(
+            arguments + ["--output", "/var/mobile/Documents/report.json"],
+            outputMode: .exclusiveFile
+        )
+        try expect(options.output?.path == "/var/mobile/Documents/report.json", "file-output path changed")
+    }
+
+    private static func requiredProbeArguments() -> [String] {
+        [
+            "--soc", "T8112",
+            "--port-family", "thunderbolt-usb4",
+            "--dopamine-build", "3.0.12",
+            "--trollstore-build", "2.1.1",
+            "--peer-kind", "capture-host",
+            "--peer-id", "capture-host-1",
+            "--cable-id", "cable-1",
+            "--orientation", "a",
+            "--power-state", "observed-vbus"
+        ]
     }
 
     private static func hashedIdentifiersNeverExposeRawValues() throws {

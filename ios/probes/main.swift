@@ -3,74 +3,11 @@ import Darwin
 import Foundation
 import MAC2JBProbeShim
 
-private struct ProbeOptions {
-    let soc: String
-    let portFamily: String
-    let dopamineBuild: String
-    let trollStoreBuild: String
-    let peerKind: String
-    let peerIdentity: String
-    let cableIdentity: String
-    let orientation: String
-    let powerState: String
-    let clientTypes: [UInt32]
-    let output: URL
-
-    static func parse(_ arguments: [String]) throws -> ProbeOptions {
-        var values: [String: String] = [:]
-        var clientTypes: [UInt32] = []
-        var index = 0
-        while index < arguments.count {
-            let key = arguments[index]
-            guard key.hasPrefix("--"), index + 1 < arguments.count else {
-                throw ProbeError.usage("Expected --name value arguments")
-            }
-            let value = arguments[index + 1]
-            if key == "--client-type" {
-                guard let parsed = UInt32(value) else { throw ProbeError.usage("Invalid user-client type: \(value)") }
-                clientTypes.append(parsed)
-            } else {
-                guard values.updateValue(value, forKey: key) == nil else {
-                    throw ProbeError.usage("Duplicate option: \(key)")
-                }
-            }
-            index += 2
-        }
-
-        func required(_ name: String) throws -> String {
-            guard let value = values.removeValue(forKey: name), !value.isEmpty else {
-                throw ProbeError.usage("Missing \(name)")
-            }
-            return value
-        }
-
-        let options = ProbeOptions(
-            soc: try required("--soc"),
-            portFamily: try required("--port-family"),
-            dopamineBuild: try required("--dopamine-build"),
-            trollStoreBuild: try required("--trollstore-build"),
-            peerKind: try required("--peer-kind"),
-            peerIdentity: try required("--peer-id"),
-            cableIdentity: try required("--cable-id"),
-            orientation: try required("--orientation"),
-            powerState: try required("--power-state"),
-            clientTypes: clientTypes.isEmpty ? [0] : Array(Set(clientTypes)).sorted(),
-            output: URL(fileURLWithPath: try required("--output"))
-        )
-        guard values.isEmpty else { throw ProbeError.usage("Unknown option: \(values.keys.sorted()[0])") }
-        guard ["capture-host", "switch"].contains(options.peerKind) else {
-            throw ProbeError.usage("--peer-kind must be capture-host or switch")
-        }
-        guard ["a", "b"].contains(options.orientation.lowercased()) else {
-            throw ProbeError.usage("--orientation must be a or b")
-        }
-        return options
-    }
-}
-
 private enum ProbeError: Error, CustomStringConvertible {
     case usage(String)
     case iokit(String, Int32)
+    case reportWrite(Int32)
+    case standardOutputWrite(Int32)
     case unsafe([String])
 
     var description: String {
@@ -78,10 +15,42 @@ private enum ProbeError: Error, CustomStringConvertible {
         case .usage(let message): return message
         case .iokit(let operation, let status):
             return "\(operation) failed: 0x\(String(format: "%08x", UInt32(bitPattern: status)))"
+        case .reportWrite(let status): return "exclusive report write failed: errno \(status)"
+        case .standardOutputWrite(let status): return "stdout write failed: errno \(status)"
         case .unsafe(let violations): return violations.joined(separator: "; ")
         }
     }
 }
+
+#if MAC2JB_DIAGNOSTIC
+private enum DiagnosticPhase: String {
+    case launch
+    case identity
+    case controllerMatch = "controller-match"
+    case controllerMetadata = "controller-metadata"
+    case controllerOpen = "controller-open"
+    case interfaceMatch = "interface-match"
+    case interfaceMetadata = "interface-metadata"
+    case interfaceOpen = "interface-open"
+    case configurationFile = "configuration-file"
+    case deviceTree = "device-tree"
+    case symbols
+    case mutationSymbols = "mutation-symbols"
+    case privateReadback = "private-readback"
+    case entitlements
+    case serialization
+    case fullNoReport = "full-no-report"
+
+    static func parse(_ arguments: [String]) throws -> DiagnosticPhase {
+        guard arguments.count == 2,
+              arguments[0] == "--diagnostic-phase",
+              let phase = DiagnosticPhase(rawValue: arguments[1]) else {
+            throw ProbeError.usage("Invalid diagnostic invocation")
+        }
+        return phase
+    }
+}
+#endif
 
 private struct RegistryInventory {
     var controllers: [ControllerService] = []
@@ -152,6 +121,227 @@ private enum ProbeCollector {
         if !violations.isEmpty { throw ProbeError.unsafe(violations) }
         return result
     }
+
+#if MAC2JB_DIAGNOSTIC
+    static func emitDiagnosticProcessMarker() {
+        emitDiagnosticLine("MAC2JB_DIAG_PROCESS v1")
+    }
+
+    static func runDiagnostic(_ phase: DiagnosticPhase) throws {
+        emitDiagnosticLine("MAC2JB_DIAG_BEGIN v1 \(phase.rawValue)")
+        switch phase {
+        case .launch:
+            break
+        case .identity:
+            diagnosticStep(phase, "identity") {
+                _ = sysctlString("hw.machine")
+                _ = sysctlString("hw.model")
+                _ = sysctlString("kern.osversion")
+                _ = ProcessInfo.processInfo.operatingSystemVersionString
+                _ = HashedIdentifier("mac2jb-diagnostic")
+            }
+        case .controllerMatch:
+            try withDiagnosticServices(matching: "IOUSBDeviceController", phase: phase) { _ in }
+        case .controllerMetadata:
+            try withDiagnosticServices(matching: "IOUSBDeviceController", phase: phase) { entries in
+                diagnosticStep(phase, "inspect") {
+                    for entry in entries {
+                        _ = registryID(entry)
+                        _ = registryName(entry)
+                        _ = registryClass(entry)
+                        _ = ancestry(entry)
+                        _ = userClientClasses(entry)
+                        _ = safeProperties(entry, keys: [
+                            "idVendor", "idProduct", "bcdDevice", "bDeviceClass",
+                            "bDeviceSubClass", "bDeviceProtocol", "USB Vendor Name",
+                            "USB Product Name", "USBDeviceConfiguration", "current-available",
+                            "max-current"
+                        ])
+                    }
+                }
+            }
+        case .controllerOpen:
+            try withDiagnosticServices(matching: "IOUSBDeviceController", phase: phase) { entries in
+                diagnosticStep(phase, "open-close") {
+                    var operations: [OperationObservation] = []
+                    for entry in entries {
+                        _ = openResults(
+                            for: entry,
+                            serviceKind: "controller",
+                            clientTypes: [0],
+                            operations: &operations
+                        )
+                    }
+                }
+            }
+        case .interfaceMatch:
+            try withDiagnosticServices(matching: "IOUSBDeviceInterface", phase: phase) { _ in }
+        case .interfaceMetadata:
+            try withDiagnosticServices(matching: "IOUSBDeviceInterface", phase: phase) { entries in
+                diagnosticStep(phase, "inspect") {
+                    for entry in entries {
+                        _ = registryID(entry)
+                        _ = registryName(entry)
+                        _ = registryClass(entry)
+                        _ = stringProperty(entry, "USBDeviceFunction")
+                        _ = parentControllerID(entry)
+                        _ = userClientClasses(entry)
+                        _ = safeProperties(entry, keys: [
+                            "USBDeviceFunction", "bInterfaceClass", "bInterfaceSubClass",
+                            "bInterfaceProtocol", "USBConfigurationValue"
+                        ])
+                    }
+                }
+            }
+        case .interfaceOpen:
+            try withDiagnosticServices(matching: "IOUSBDeviceInterface", phase: phase) { entries in
+                diagnosticStep(phase, "open-close") {
+                    var operations: [OperationObservation] = []
+                    for entry in entries {
+                        _ = openResults(
+                            for: entry,
+                            serviceKind: "function",
+                            clientTypes: [0],
+                            operations: &operations
+                        )
+                    }
+                }
+            }
+        case .configurationFile:
+            diagnosticStep(phase, "read-file") {
+                let path = "/System/Library/AppleUSBDevice/USBDeviceConfiguration.plist"
+                if let data = try? Data(contentsOf: URL(fileURLWithPath: path)) {
+                    _ = SHA256.hash(data: data)
+                }
+            }
+        case .deviceTree:
+            diagnosticStep(phase, "read-tree") {
+                let root = IORegistryEntryFromPath(kIOMainPortDefault, "IODeviceTree:/")
+                if root != 0 {
+                    _ = stringProperty(root, "configuration-string")
+                    IOObjectRelease(root)
+                }
+            }
+        case .symbols:
+            diagnosticStep(phase, "resolve") {
+                _ = symbolObservations(readback: MAC2JBPrivateAPIReadback())
+            }
+        case .mutationSymbols:
+            diagnosticStep(phase, "resolve-only") {
+                for name in [
+                    "IOUSBDeviceControllerSetDescription",
+                    "IOUSBDeviceControllerSendCommand",
+                    "IOUSBDeviceControllerGoOffAndOnBus",
+                    "IOUSBDeviceControllerForceOffBus",
+                    "IORegistryEntrySetCFProperty",
+                    "IORegistryEntrySetCFProperties"
+                ] {
+                    _ = MAC2JBSymbolAvailable(name)
+                }
+            }
+        case .privateReadback:
+            diagnosticStep(phase, "readback") { _ = collectPrivateReadback() }
+        case .entitlements:
+            diagnosticStep(phase, "read") { _ = entitlementObservations() }
+        case .serialization:
+            try diagnosticStep(phase, "encode") {
+                _ = try diagnosticResult().canonicalJSON()
+            }
+        case .fullNoReport:
+            try diagnosticStep(phase, "collect-encode") {
+                let options = ProbeOptions(
+                    soc: "T8112",
+                    portFamily: "thunderbolt-usb4",
+                    dopamineBuild: "unknown",
+                    trollStoreBuild: "unknown",
+                    peerKind: "capture-host",
+                    peerIdentity: "mac2jb-diagnostic-peer",
+                    cableIdentity: "mac2jb-diagnostic-cable",
+                    orientation: "a",
+                    powerState: "diagnostic",
+                    clientTypes: [0],
+                    output: nil
+                )
+                _ = try collect(options: options).canonicalJSON()
+            }
+        }
+        emitDiagnosticLine("MAC2JB_DIAG_END v1 \(phase.rawValue) ok")
+    }
+
+    private static func diagnosticResult() -> ProbeResult {
+        ProbeResult(
+            schemaVersion: 1,
+            capturedAt: "diagnostic",
+            target: TargetIdentity(
+                productType: "diagnostic",
+                boardIdentifier: "diagnostic",
+                soc: "diagnostic",
+                portFamily: "diagnostic",
+                osVersion: "diagnostic",
+                osBuild: "diagnostic",
+                dopamineBuild: "diagnostic",
+                trollStoreBuild: "diagnostic"
+            ),
+            role: RoleObservation(
+                peerKind: "capture-host",
+                peerIdentity: HashedIdentifier("mac2jb-diagnostic-peer"),
+                cableIdentity: HashedIdentifier("mac2jb-diagnostic-cable"),
+                orientation: "a",
+                controllerPresent: false,
+                powerState: "diagnostic"
+            ),
+            controllers: [],
+            functions: [],
+            configuration: ConfigurationSource(path: "diagnostic", sha256: nil, deviceTreeConfiguration: nil),
+            symbols: [],
+            entitlements: [],
+            operations: []
+        )
+    }
+
+    private static func withDiagnosticServices(
+        matching className: String,
+        phase: DiagnosticPhase,
+        body: ([io_object_t]) throws -> Void
+    ) throws {
+        var operations: [OperationObservation] = []
+        let entries = try diagnosticStep(phase, "match") {
+            try services(matching: className, operations: &operations)
+        }
+        defer { entries.forEach { IOObjectRelease($0) } }
+        try body(entries)
+    }
+
+    private static func diagnosticStep<T>(
+        _ phase: DiagnosticPhase,
+        _ step: String,
+        body: () throws -> T
+    ) rethrows -> T {
+        emitDiagnosticLine("MAC2JB_DIAG_STEP v1 \(phase.rawValue) \(step) begin")
+        let result = try body()
+        emitDiagnosticLine("MAC2JB_DIAG_STEP v1 \(phase.rawValue) \(step) ok")
+        return result
+    }
+
+    private static func emitDiagnosticLine(_ line: String) {
+        let bytes = Array("\(line)\n".utf8)
+        bytes.withUnsafeBufferPointer { buffer in
+            guard let baseAddress = buffer.baseAddress else { exit(74) }
+            var offset = 0
+            while offset < buffer.count {
+                let address = UnsafeRawPointer(baseAddress.advanced(by: offset))
+                let count = Darwin.write(STDOUT_FILENO, address, buffer.count - offset)
+                if count > 0 {
+                    offset += count
+                } else if count < 0 && errno == EINTR {
+                    continue
+                } else {
+                    exit(74)
+                }
+            }
+        }
+    }
+#endif
 
     private static func collectRegistry(clientTypes: [UInt32]) throws -> RegistryInventory {
         var result = RegistryInventory()
@@ -398,6 +588,11 @@ private enum ProbeCollector {
             "IOUSBDeviceDescriptionCopyInterfaces",
             "IOUSBDeviceDescriptionGetTypeID"
         ]
+#if MAC2JB_DIAGNOSTIC
+        return readOnly.map {
+            SymbolObservation(name: $0, available: MAC2JBSymbolAvailable($0), kind: .readOnly, invoked: readOnlySymbolInvoked($0, readback: readback))
+        }
+#else
         let mutation = [
             "IOUSBDeviceControllerSetDescription",
             "IOUSBDeviceControllerSendCommand",
@@ -411,6 +606,7 @@ private enum ProbeCollector {
         } + mutation.map {
             SymbolObservation(name: $0, available: MAC2JBSymbolAvailable($0), kind: .mutation, invoked: false)
         }
+#endif
     }
 
     private static func readOnlySymbolInvoked(_ name: String, readback: MAC2JBPrivateAPIReadback) -> Bool {
@@ -457,16 +653,141 @@ private enum ProbeCollector {
     }
 }
 
+#if MAC2JB_DIAGNOSTIC
 do {
-    let options = try ProbeOptions.parse(Array(CommandLine.arguments.dropFirst()))
-    let result = try ProbeCollector.collect(options: options)
-    let data = try result.canonicalJSON()
-    try FileManager.default.createDirectory(at: options.output.deletingLastPathComponent(), withIntermediateDirectories: true)
-    try data.write(to: options.output, options: .atomic)
-    print("MAC2JB_PROBE_REPORT \(options.output.path)")
-    print("MAC2JB_TOPOLOGY_SHA256 \(try result.topologyFingerprint())")
+    ProbeCollector.emitDiagnosticProcessMarker()
+    let phase = try DiagnosticPhase.parse(Array(CommandLine.arguments.dropFirst()))
+    try ProbeCollector.runDiagnostic(phase)
 } catch {
-    fputs("mac2jb-ios-probe: \(error)\n", stderr)
-    fputs("Required: --soc --port-family --dopamine-build --trollstore-build --peer-kind --peer-id --cable-id --orientation --power-state --output [--client-type N]\n", stderr)
+    fputs("mac2jb-ios-probe-diagnostic: phase failed\n", stderr)
     exit(2)
 }
+#else
+#if MAC2JB_SPRINGBOARD_R2
+// SpringBoard does not pass the probe's command-line options. This entry point
+// records only authorization boundaries, with physical peer fields explicitly
+// unattributed. It makes the same read-only IOKit calls as the CLI collector.
+do {
+    guard CommandLine.arguments.count == 1 else { throw ProbeError.usage("Unexpected app arguments") }
+    let options = ProbeOptions(
+        soc: "T8112",
+        portFamily: "thunderbolt-usb4",
+        dopamineBuild: "3.0.12",
+        trollStoreBuild: "2.1.1",
+        peerKind: "unattributed",
+        peerIdentity: "springboard-admission-only",
+        cableIdentity: "unattributed",
+        orientation: "unknown",
+        powerState: "unobserved",
+        clientTypes: [0, 123],
+        output: nil
+    )
+    let result = try ProbeCollector.collect(options: options)
+    let data = try result.canonicalJSON()
+    guard !data.isEmpty && data.count <= 1_048_576 else {
+        throw ProbeError.usage("App report size outside bound")
+    }
+    guard let environmentTmp = ProcessInfo.processInfo.environment["TMPDIR"] else {
+        throw ProbeError.usage("Missing app tmp directory")
+    }
+    let tmp = environmentTmp.hasSuffix("/") ? String(environmentTmp.dropLast()) : environmentTmp
+    guard (tmp.hasPrefix("/var/mobile/Containers/Data/Application/") ||
+           tmp.hasPrefix("/private/var/mobile/Containers/Data/Application/")),
+          tmp.hasSuffix("/tmp"), !tmp.contains("/../"), !tmp.contains("/./") else {
+        throw ProbeError.usage("Unsafe app tmp directory")
+    }
+    let status = data.withUnsafeBytes { bytes in
+        tmp.withCString { directory in
+            ".mac2jb-u1-r2-report.json".withCString { filename in
+                MAC2JBWriteExclusiveReport(
+                    directory,
+                    filename,
+                    bytes.baseAddress?.assumingMemoryBound(to: UInt8.self),
+                    bytes.count
+                )
+            }
+        }
+    }
+    guard status == 0 else { throw ProbeError.reportWrite(status) }
+} catch {
+    fputs("mac2jb-u1-springboard-r2: collection failed\n", stderr)
+    exit(2)
+}
+#else
+#if MAC2JB_STDOUT_ONLY
+private func writeStandardOutput(_ data: Data) throws {
+    var terminated = data
+    terminated.append(0x0a)
+    try terminated.withUnsafeBytes { bytes in
+        guard let baseAddress = bytes.baseAddress else { return }
+        var offset = 0
+        while offset < bytes.count {
+            let written = Darwin.write(
+                STDOUT_FILENO,
+                baseAddress.advanced(by: offset),
+                bytes.count - offset
+            )
+            if written > 0 {
+                offset += written
+            } else if written < 0 && errno == EINTR {
+                continue
+            } else {
+                throw ProbeError.standardOutputWrite(errno)
+            }
+        }
+    }
+}
+#endif
+
+do {
+#if MAC2JB_STDOUT_ONLY
+    let options = try ProbeOptions.parse(
+        Array(CommandLine.arguments.dropFirst()),
+        outputMode: .standardOutputOnly
+    )
+#else
+    let options = try ProbeOptions.parse(
+        Array(CommandLine.arguments.dropFirst()),
+        outputMode: .exclusiveFile
+    )
+#endif
+    let result = try ProbeCollector.collect(options: options)
+    let data = try result.canonicalJSON()
+#if MAC2JB_STDOUT_ONLY
+    try writeStandardOutput(data)
+    let reportFingerprint = SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined()
+    fputs("MAC2JB_REPORT_SHA256 \(reportFingerprint)\n", stderr)
+    fputs("MAC2JB_TOPOLOGY_SHA256 \(try result.topologyFingerprint())\n", stderr)
+#else
+    guard let output = options.output else { throw ProbeError.usage("Missing --output") }
+    let outputDirectory = output.deletingLastPathComponent().path
+    let outputFilename = output.lastPathComponent
+    let reportWriteStatus = data.withUnsafeBytes { bytes in
+        outputDirectory.withCString { directory in
+            outputFilename.withCString { filename in
+                MAC2JBWriteExclusiveReport(
+                    directory,
+                    filename,
+                    bytes.baseAddress?.assumingMemoryBound(to: UInt8.self),
+                    bytes.count
+                )
+            }
+        }
+    }
+    guard reportWriteStatus == 0 else { throw ProbeError.reportWrite(reportWriteStatus) }
+    let reportFingerprint = SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined()
+    print("MAC2JB_PROBE_REPORT \(output.path)")
+    print("MAC2JB_REPORT_SHA256 \(reportFingerprint)")
+    print("MAC2JB_TOPOLOGY_SHA256 \(try result.topologyFingerprint())")
+#endif
+} catch {
+    fputs("mac2jb-ios-probe: \(error)\n", stderr)
+#if MAC2JB_STDOUT_ONLY
+    fputs("Required: --soc --port-family --dopamine-build --trollstore-build --peer-kind --peer-id --cable-id --orientation --power-state [--client-type N]\n", stderr)
+#else
+    fputs("Required: --soc --port-family --dopamine-build --trollstore-build --peer-kind --peer-id --cable-id --orientation --power-state --output [--client-type N]\n", stderr)
+#endif
+    exit(2)
+}
+#endif
+#endif

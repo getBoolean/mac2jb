@@ -1,0 +1,4 @@
+module MAC2JBUSBRestoreShim [system] {
+  header "USBRestoreControllerShim.h"
+  export *
+}
