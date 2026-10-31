@@ -1,0 +1,224 @@
+import Foundation
+
+// Mac-only golden tests for the canary's HID model, its configuration plan and
+// its exit behaviour. Every descriptor value here is the corrected value from
+// the macOS sender, not the upstream example: the report length is derived from
+// the real report descriptor, and no device-level identity is configured.
+// The report sink and the lease are injected, so the exit paths are observed
+// without the canary growing a test-only mode.
+
+private struct Failure: Error { let message: String }
+
+private func require(_ condition: Bool, _ message: String) throws {
+    if !condition { throw Failure(message: message) }
+}
+
+private final class RecordingSink: HIDReportSink {
+    private let outcomes: [HIDReportWriteOutcome]
+    var written: [[UInt8]] = []
+
+    // outcomes is consumed per write; the last one repeats forever.
+    init(_ outcomes: [HIDReportWriteOutcome] = [.delivered]) {
+        self.outcomes = outcomes
+    }
+
+    func write(_ report: [UInt8]) -> HIDReportWriteOutcome {
+        written.append(report)
+        return outcomes[min(written.count - 1, outcomes.count - 1)]
+    }
+
+    var neutralWrites: Int {
+        written.filter { $0 == HIDKeyboard.neutralReport }.count
+    }
+}
+
+private final class FakeLease: CanaryLease {
+    private let heldChecks: Int
+    private(set) var checks = 0
+    private(set) var released = false
+    private(set) var releasedNeutral: Bool?
+
+    // Held for the first heldChecks queries, gone from then on.
+    init(heldChecks: Int) { self.heldChecks = heldChecks }
+
+    func isHeld() -> Bool {
+        checks += 1
+        return checks <= heldChecks
+    }
+
+    func release(neutralDelivered: Bool) {
+        released = true
+        releasedNeutral = neutralDelivered
+    }
+}
+
+@main
+enum HIDReportTests {
+    static func main() throws {
+        let expectedReportDescriptor: [UInt8] = [
+            0x05, 0x01, 0x09, 0x06, 0xA1, 0x01, 0x05, 0x07, 0x19, 0xE0, 0x29, 0xE7, 0x15, 0x00, 0x25, 0x01,
+            0x75, 0x01, 0x95, 0x08, 0x81, 0x02, 0x95, 0x01, 0x75, 0x08, 0x81, 0x01, 0x95, 0x03, 0x75, 0x01,
+            0x05, 0x08, 0x19, 0x01, 0x29, 0x03, 0x91, 0x02, 0x95, 0x05, 0x75, 0x01, 0x91, 0x01, 0x95, 0x06,
+            0x75, 0x08, 0x15, 0x00, 0x26, 0xFF, 0x00, 0x05, 0x07, 0x19, 0x00, 0x2A, 0xFF, 0x00, 0x81, 0x00, 0xC0,
+        ]
+
+        // 1. The 9-byte HID descriptor, with the report length derived from the
+        // descriptor that is actually appended (65 bytes -> 41 00).
+        try require(HIDKeyboard.hidDescriptor == [0x09, 0x21, 0x11, 0x01, 0x00, 0x01, 0x22, 0x41, 0x00],
+                    "HID descriptor golden: \(HIDKeyboard.hidDescriptor)")
+        try require(HIDKeyboard.hidDescriptor.count == 9, "HID descriptor must be 9 bytes")
+        try require(Int(HIDKeyboard.hidDescriptor[7]) |
+                    Int(HIDKeyboard.hidDescriptor[8]) << 8 == HIDKeyboard.reportDescriptor.count,
+                    "report length bytes must be derived from the report descriptor")
+
+        // 2. The 65-byte boot-keyboard report descriptor, byte for byte.
+        try require(HIDKeyboard.reportDescriptor == expectedReportDescriptor,
+                    "report descriptor golden")
+        try require(HIDKeyboard.reportDescriptor.count == 65, "report descriptor must be 65 bytes")
+
+        // 3. Boot-keyboard tuple and the interrupt-IN endpoint.
+        try require(HIDKeyboard.interfaceClass == 3 && HIDKeyboard.interfaceSubClass == 1 &&
+                    HIDKeyboard.interfaceProtocol == 1, "interface tuple must be 3/1/1")
+        try require(HIDKeyboard.endpoint == HIDEndpointPlan(transferType: 3, direction: 1,
+                                                            maxPacketSize: 8, interval: 10),
+                    "endpoint must be interrupt IN, 8 bytes, interval 10: \(HIDKeyboard.endpoint)")
+
+        // 4. No device-level identity anywhere in the plan's vocabulary: the
+        // device keeps the vendor ID, product ID, version and strings it
+        // reports, so an external stock-value check stays meaningful.
+        let identityTokens = ["vendor", "product", "version", "serial", "string", "manufacturer", "device"]
+        for kind in HIDFunctionConfigurationStep.kindNames {
+            for token in identityTokens {
+                try require(!kind.lowercased().contains(token),
+                            "configuration step \(kind) names a device-level identity field")
+            }
+        }
+
+        // 5. The reference backend's operation order, made explicit: the pipe
+        // when the endpoint is added, then the buffers, the commit and only
+        // then the class-command callbacks, as its finalize step does them.
+        try require(HIDFunctionConfigurationPlan.steps.map(\.kindName) == [
+            "interfaceOpen", "setClass", "setSubClass", "setProtocol",
+            "appendStandardDescriptor", "appendNonstandardDescriptor",
+            "createPipe", "createBuffer", "commit", "setClassCommandCallbacks",
+        ], "plan order: \(HIDFunctionConfigurationPlan.steps.map(\.kindName))")
+        try require(HIDFunctionConfigurationPlan.steps.contains(
+            .appendStandardDescriptor(type: 0x21, bytes: HIDKeyboard.hidDescriptor)),
+                    "standard append must carry type 0x21 and the HID descriptor")
+        try require(HIDFunctionConfigurationPlan.steps.contains(
+            .appendNonstandardDescriptor(type: 0x22, bytes: HIDKeyboard.reportDescriptor)),
+                    "nonstandard append must carry type 0x22 and the report descriptor")
+
+        // 6. Report validation, ported from the keyboard forwarder.
+        let valid: [UInt8] = [0x02, 0, 0x04, 0x05, 0, 0, 0, 0]
+        try require(HIDKeyboard.isValidReport(valid), "a valid report must be accepted")
+        try require(HIDKeyboard.isValidReport([0x02, 0, 0, 0, 0, 0, 0, 0]),
+                    "a modifiers-only report must be accepted")
+        try require(HIDKeyboard.isValidReport(HIDKeyboard.neutralReport),
+                    "the neutral report must be valid")
+        try require(!HIDKeyboard.isValidReport([0, 0x01, 0x04, 0, 0, 0, 0, 0]),
+                    "a non-zero reserved byte must be rejected")
+        try require(!HIDKeyboard.isValidReport([0, 0, 0x04, 0, 0x05, 0, 0, 0]),
+                    "a keycode after an empty slot must be rejected")
+        try require(!HIDKeyboard.isValidReport([0, 0, 0x03, 0, 0, 0, 0, 0]),
+                    "a keycode below 4 must be rejected")
+        try require(!HIDKeyboard.isValidReport([0, 0, 0x74, 0, 0, 0, 0, 0]),
+                    "a keycode above 0x73 must be rejected")
+        try require(!HIDKeyboard.isValidReport([0, 0, 0x04, 0x04, 0, 0, 0, 0]),
+                    "a duplicate keycode must be rejected")
+        try require(!HIDKeyboard.isValidReport([0, 0, 0x04, 0, 0, 0, 0]),
+                    "a report that is not 8 bytes must be rejected")
+
+        // 7. A controlled exit emits exactly one neutral report.
+        var sink = RecordingSink()
+        var lease = FakeLease(heldChecks: .max)
+        var summary = HIDCanaryRun(sink: sink, lease: lease,
+                                   reports: [valid, HIDKeyboard.neutralReport]).run()
+        try require(summary.stop == .completed, "a delivered run completes: \(summary)")
+        try require(summary.reportsWritten == 2, "both reports must be written: \(summary)")
+        try require(summary.neutralAttempts == 1,
+                    "a controlled exit writes the neutral report exactly once: \(summary)")
+        try require(sink.written.last == HIDKeyboard.neutralReport,
+                    "the last write must be the neutral report")
+        try require(summary.neutralDelivered && lease.released && lease.releasedNeutral == true,
+                    "a delivered neutral must be reported and the lease given up: \(summary)")
+
+        // 8. Once the lease is gone nothing more is written, not even neutral:
+        // the broker cannot protect the description against a late write.
+        sink = RecordingSink()
+        lease = FakeLease(heldChecks: 0)
+        summary = HIDCanaryRun(sink: sink, lease: lease, reports: [valid]).run()
+        try require(summary.stop == .leaseLost && summary.reportsWritten == 0 &&
+                    summary.neutralAttempts == 0 && sink.written.isEmpty,
+                    "no write is allowed without the lease: \(summary)")
+        try require(lease.released && lease.releasedNeutral == false,
+                    "the lease must still be given up: \(summary)")
+        sink = RecordingSink()
+        lease = FakeLease(heldChecks: 1)
+        summary = HIDCanaryRun(sink: sink, lease: lease, reports: [valid, valid, valid]).run()
+        try require(summary.stop == .leaseLost && summary.reportsWritten == 1 &&
+                    summary.neutralAttempts == 0 && sink.written == [valid],
+                    "writes must stop the moment the lease expires: \(summary)")
+
+        // 9. A disconnect bounds the neutral attempts at three.
+        sink = RecordingSink([.failed])
+        lease = FakeLease(heldChecks: .max)
+        summary = HIDCanaryRun(sink: sink, lease: lease, reports: [valid]).run()
+        try require(summary.stop == .writeFailed && summary.reportsWritten == 0,
+                    "a refused write stops the run: \(summary)")
+        try require(summary.neutralAttempts == 3 && !summary.neutralDelivered,
+                    "a failing sink must be retried at most three times: \(summary)")
+        try require(sink.neutralWrites == 3, "exactly three neutral writes: \(sink.neutralWrites)")
+        sink = RecordingSink([.disconnected])
+        lease = FakeLease(heldChecks: .max)
+        summary = HIDCanaryRun(sink: sink, lease: lease, reports: [valid]).run()
+        try require(summary.stop == .disconnected && summary.neutralAttempts <= 3 &&
+                    !summary.neutralDelivered,
+                    "a disconnect stops retrying within the bound: \(summary)")
+
+        // 10. An invalid report is refused before it reaches the sink.
+        sink = RecordingSink()
+        lease = FakeLease(heldChecks: .max)
+        summary = HIDCanaryRun(sink: sink, lease: lease,
+                               reports: [valid, [0, 0x01, 0, 0, 0, 0, 0, 0]]).run()
+        try require(summary.stop == .invalidReport && summary.reportsWritten == 1 &&
+                    sink.written == [valid, HIDKeyboard.neutralReport],
+                    "an invalid report must never be written: \(sink.written)")
+
+        // 11. The fixed canary string: a press and a release per character,
+        // every one of them a valid boot-keyboard report.
+        let canary = HIDKeyboard.canaryReports()
+        try require(canary.count == HIDKeyboard.canaryText.count * 2,
+                    "one press and one release per character: \(canary.count)")
+        try require(canary.allSatisfy { HIDKeyboard.isValidReport($0) },
+                    "every canary report must be valid")
+        try require(stride(from: 1, to: canary.count, by: 2)
+                        .allSatisfy { canary[$0] == HIDKeyboard.neutralReport },
+                    "every press must be followed by a release")
+        // 12. The pipe transport: delivery needs both a successful call and a
+        // transferred count equal to the report length.
+        var submitted: [UInt32] = []
+        func transport(_ ioReturn: Int32, _ transferred: UInt64,
+                       staged: Bool = true) -> PipeReportTransport {
+            PipeReportTransport(stage: { _ in staged },
+                                submit: { length in
+                                    submitted.append(length)
+                                    return (ioReturn, transferred)
+                                })
+        }
+        try require(transport(0, 8).write(valid) == .delivered,
+                    "a full transfer with a successful call is delivered")
+        try require(submitted == [8], "the submit must carry the report length: \(submitted)")
+        try require(transport(0, 4).write(valid) == .failed,
+                    "a short write is not delivered even when the call succeeded")
+        try require(transport(0, 0).write(valid) == .failed,
+                    "a zero-byte transfer is not delivered")
+        try require(transport(Int32(bitPattern: 0xE00002D6), 0).write(valid) == .failed,
+                    "a refused write is a failure, not a disconnect")
+        try require(transport(PipeReportTransport.notEnumerated, 0).write(valid) == .disconnected,
+                    "a host that is not enumerated reads as a disconnect")
+        try require(transport(0, 8, staged: false).write(valid) == .failed,
+                    "a payload that cannot be staged is never submitted")
+        print("PASS HID canary report, plan and exit-path tests (12 scenarios)")
+    }
+}
