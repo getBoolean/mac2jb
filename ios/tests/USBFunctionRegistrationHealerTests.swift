@@ -39,7 +39,8 @@ private final class FakeProbe: USBFunctionHealProbe {
 @main
 enum USBFunctionRegistrationHealerTests {
     static func main() throws {
-        let policy = USBFunctionHealPolicy()
+        var policy = USBFunctionHealPolicy()
+        policy.owners = ["Valeria": "com.apple.audiomxd"]  // as learned on the reference iPad
         // Observed: loop attempt 2 left only Valeria; restarting audiomxd healed it.
         var probe = FakeProbe([["Valeria", "PTP"]], ownerFixes: ["com.apple.audiomxd": ["Valeria"]])
         var outcome = try USBFunctionRegistrationHealer(probe: probe, policy: policy).heal()

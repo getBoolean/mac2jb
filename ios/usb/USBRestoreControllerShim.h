@@ -66,6 +66,13 @@ MAC2JBUSBResult MAC2JBUSBCopyConfiguredState(
 MAC2JBUSBResult MAC2JBUSBCopyUnservedFunctions(
     uint64_t expectedControllerRegistryID, char *names, size_t capacity
 );
+// Read-only: one line per IOUSBDeviceInterface nub under the exact controller,
+// "function\tclientClass\tcreator\n" per client (creator is the raw
+// IOUserClientCreator string or empty), or "function\t\t\n" for an unserved
+// nub. Used to learn the device profile; never opens a user client.
+MAC2JBUSBResult MAC2JBUSBCopyFunctionClients(
+    uint64_t expectedControllerRegistryID, char *lines, size_t capacity
+);
 void MAC2JBUSBFreeCapturedDescription(uint8_t *bytes);
 
 #endif

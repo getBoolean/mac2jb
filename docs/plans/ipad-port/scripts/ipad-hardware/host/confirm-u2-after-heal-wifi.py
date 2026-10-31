@@ -46,16 +46,18 @@ def main():
         raise ValueError("journal not awaitingVerification after heal")
     evidence = []
     code, usb = run([sys.executable, str(HOST / "diagnose-usb-recognition.py")])
-    if b"USBMUX query=ok count=1\n" not in usb or b"raw-ipad=yes current-configuration=5" not in usb:
+    if b"USBMUX query=ok count=1\n" not in usb:
         raise ValueError("Mac USB not healthy")
     evidence.append(usb)
     ids = run(["/opt/homebrew/bin/idevice_id", "-l"])[1].split()
     if len(ids) != 1 or run(["/opt/homebrew/bin/idevicepair", "validate", "-u", ids[0].decode()])[0]:
         raise ValueError("pairing not valid")
     evidence.append(b"pairing=valid\n")
+    profile = runpy.run_path(str(HOST / "u2_broker_profile.py"))["fetch"](ssh)
     code, child = run([sys.executable, str(HOST / "read-u2-xdci-child-census-wifi.py")])
-    if (b"DeviceState=configured OnBus=yes SelectedConfiguration=5" not in child or
-            b"BcdUSBVersion=784 MPS0=9" not in child):
+    healthy = ("BcdUSBVersion=%d MPS0=%d" % (profile["healthyBcdUSB"], profile["healthyMPS0"])).encode()
+    if (b"DeviceState=configured OnBus=yes SelectedConfiguration=" not in child or
+            b"SelectedConfiguration=0" in child or healthy not in child):
         raise ValueError("controller not in healthy configured state")
     evidence.append(child)
     code, census = run([sys.executable, str(HOST / "read-u2-xdci-function-census-wifi.py")])

@@ -17,7 +17,7 @@ import subprocess
 ROOT = Path(__file__).resolve().parents[6]
 HOST = ROOT / "docs/plans/ipad-port/scripts/ipad-hardware/host"
 SOURCE = ROOT / "docs/plans/ipad-port/scripts/ipad-hardware/device/u2-readonly-xdci-function-census.py"
-SOURCE_SHA256 = "f4d33dafc4442c166adbfc38fe5bffc75206913cb7f0e518ba721711d9f33674"
+SOURCE_SHA256 = "278d38cb66f491f553d2cace3db9b30afa45d4ef80a14c3ef2560380b61eefcd"
 HEADER = re.compile(rb"U2_XDCI_FUNCTIONS nodes=([1-9][0-9]{0,2})\n")
 NODE = re.compile(
     rb"U2_XDCI_NODE i=([0-9]{1,3}) parent=(-1|[0-9]{1,3}) depth=([0-6]) "
@@ -41,7 +41,7 @@ def validate(output):
             raise ValueError("invalid node line")
         parent, depth = int(match[2]), int(match[3])
         if expected == 0:
-            if parent != -1 or depth != 0 or b"class=AppleT8112USBXDCI " not in line:
+            if parent != -1 or depth != 0:
                 raise ValueError("invalid root")
         elif parent not in depths or depths[parent] != depth - 1:
             raise ValueError("invalid parent relation")

@@ -41,13 +41,14 @@ private final class NativeExternalVerifier: USBExternalRestoreVerifier {
                     from: live, options: [], format: nil)) as? [String: Any],
               let saved = (try? PropertyListSerialization.propertyList(
                     from: original, options: [], format: nil)) as? [String: Any],
-              saved.count == 16, saved["AllowMultipleCreates"] == nil else {
+              saved["AllowMultipleCreates"] == nil else {
             return false
         }
-        if current.count == 17 {
+        // Stock shape is the journaled original; allow only the replacement flag on top.
+        if current.count == saved.count + 1 {
             guard let flag = current.removeValue(forKey: "AllowMultipleCreates") as? Bool,
                   flag else { return false }
-        } else if current.count != 16 {
+        } else if current.count != saved.count {
             return false
         }
         return NSDictionary(dictionary: current).isEqual(to: saved)
@@ -72,6 +73,7 @@ final class NativeUSBWatchdogService {
     private let unservedFunctions: (() throws -> Set<String>)?
     private let restartOwner: ((String) throws -> Void)?
     private let healPolicy: USBFunctionHealPolicy
+    private let deviceProfile: USBDeviceProfile?
     private var lastHeal = "none"
     private var worker: Int32 = -1
     private var singleton: Int32 = -1
@@ -80,6 +82,7 @@ final class NativeUSBWatchdogService {
     convenience init(publicationEnabled: Bool) throws {
         guard geteuid() == 0 else { throw NativeUSBWatchdogError.unsafeState }
         let identity = try TargetUSBRestoreSnapshot.captureIdentity()
+        let profile = try TargetUSBRestoreSnapshot.activeProfile()
         #if MAC2JB_U2_CONTROLLER_CLONE
         #if MAC2JB_U2_NO_INITIAL_CYCLE
         let controller = try TargetUSBRestoreController(
@@ -115,7 +118,8 @@ final class NativeUSBWatchdogService {
             },
             controllerConfigured: { try controller.isConfigured() },
             unservedFunctions: { try controller.unservedFunctions() },
-            restartOwner: { try USBFunctionOwnerRestarter.restart($0) },
+            restartOwner: { try USBFunctionOwnerRestarter.restart($0, allowed: profile.ownerProcesses) },
+            healPolicy: profile.healPolicy(), deviceProfile: profile,
             leaseNanoseconds: Self.leaseNanoseconds)
     }
 
@@ -134,6 +138,7 @@ final class NativeUSBWatchdogService {
          unservedFunctions: (() throws -> Set<String>)? = nil,
          restartOwner: ((String) throws -> Void)? = nil,
          healPolicy: USBFunctionHealPolicy = USBFunctionHealPolicy(),
+         deviceProfile: USBDeviceProfile? = nil,
          leaseNanoseconds: UInt64) throws {
         guard geteuid() == expectedOwner else {
             throw NativeUSBWatchdogError.unsafeState
@@ -146,6 +151,7 @@ final class NativeUSBWatchdogService {
         self.unservedFunctions = unservedFunctions
         self.restartOwner = restartOwner
         self.healPolicy = healPolicy
+        self.deviceProfile = deviceProfile
         verifier = NativeExternalVerifier(snapshotProvider: verificationSnapshotProvider)
         journal = USBRestoreJournal(directory: stateDirectory, expectedOwner: expectedOwner)
         coordinator = USBRestoreCoordinator(
@@ -329,6 +335,13 @@ final class NativeUSBWatchdogService {
                 throw NativeUSBWatchdogError.invalidRequest
             }
             return autoHeal()
+        }
+        // The learned device profile (no private identifiers) for host tools.
+        if command == "profile" {
+            guard let deviceProfile, let text = String(data: try deviceProfile.json(), encoding: .utf8) else {
+                return "profile none"
+            }
+            return "profile " + text
         }
         if command == "heal-status" {
             return "last-heal " + lastHeal

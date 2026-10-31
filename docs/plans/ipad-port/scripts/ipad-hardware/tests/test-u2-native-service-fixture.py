@@ -21,6 +21,7 @@ ROOT = Path(__file__).resolve().parents[6]
 SOURCES = [
     "ios/usb/USBRestoreJournal.swift",
     "ios/watchdog/USBRestoreCoordinator.swift",
+    "ios/watchdog/USBDeviceProfile.swift",
     "ios/watchdog/USBFunctionRegistrationHealer.swift",
     "ios/watchdog/USBFunctionOwnerRestarter.swift",
     "ios/watchdog/NativeUSBWatchdogService.swift",

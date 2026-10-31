@@ -28,6 +28,7 @@ JETSAM = {"JetsamMemoryLimit": 96, "JetsamPriority": -49}
 BROKERS = {
     "v9": ("dev.mac2jb.u2.nooptrialv9", "507b5889012f5f3177cab9443bc1b0c92f50cc79b39aff4012887eedca1733cc"),
     "v10": ("dev.mac2jb.u2.nooptrialv10", "1acbd2495497b0f0b6cb996e1397f2b18bd5b85151536cdc932bd0cd4eefc8e1"),
+    "v12": ("dev.mac2jb.u2.nooptrialv12", "9629611372c6f570db18064a2cfcd077601f59a1b5a2a4644dbc3bdbefe37a3e"),
     "v11": ("dev.mac2jb.u2.nooptrialv11", "8fdb044ff8840084e27e896432de060deecd6cdc9d27913b9ae3f379077b3736"),
 }
 

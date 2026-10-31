@@ -23,6 +23,10 @@ struct TargetUSBRestoreSnapshot {
     static func captureForVerification() throws -> Self {
         throw FixtureFailure()
     }
+
+    static func activeProfile() throws -> USBDeviceProfile {
+        throw FixtureFailure()
+    }
 }
 
 struct TargetUSBRestoreController: USBRestoreController {
@@ -123,6 +127,7 @@ enum NativeUSBWatchdogServiceFixture {
                 }
             } }, healPolicy: {
                 var policy = USBFunctionHealPolicy()
+                policy.owners = ["Valeria": "com.apple.audiomxd"]
                 policy.settleSeconds = 1
                 policy.pollSeconds = 0.1
                 return policy

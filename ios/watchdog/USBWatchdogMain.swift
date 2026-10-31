@@ -22,12 +22,13 @@ enum USBWatchdogMain {
 #endif
             guard arguments == ["--snapshot"] else { exit(2) }
             let snapshot = try TargetUSBRestoreSnapshot.capture()
-            guard snapshot.identity.productType == "iPad14,5",
-                  snapshot.identity.osBuild == "21A329",
+            let profile = try TargetUSBRestoreSnapshot.activeProfile()
+            guard snapshot.identity.productType == profile.productType,
+                  snapshot.identity.osBuild == profile.osBuild,
                   snapshot.liveDescription.count > 8 else {
                 throw TargetUSBRestoreSnapshotError.changedTarget
             }
-            print("U2_NATIVE_SNAPSHOT target=expected controller=one live=dict:16 source=expected")
+            print("U2_NATIVE_SNAPSHOT target=expected controller=one live=dict:\(profile.liveDescriptionFieldCount) source=expected")
         } catch {
             print("U2_NATIVE_SNAPSHOT rejected")
             exit(1)

@@ -13,7 +13,7 @@ import subprocess
 ROOT = Path(__file__).resolve().parents[6]
 HOST = ROOT / "docs/plans/ipad-port/scripts/ipad-hardware/host"
 SOURCE = ROOT / "docs/plans/ipad-port/scripts/ipad-hardware/device/u2-readonly-xdci-child-census.py"
-SOURCE_SHA256 = "8a0191a05af9aa56d789dfb5bd18cbb5fe7d4e4f1ba8e44ac70bb6d977c79674"
+SOURCE_SHA256 = "d91cf47e88f1763dc4476b711f03c1afe6a5fc90f01e267cfe11de4dde04f27a"
 CLASS = rb"[A-Za-z][A-Za-z0-9_]{0,99}"
 EDGE = re.compile(rb"U2_XDCI_EDGE depth=([1-5]) provider=(" + CLASS +
                   rb") client=(" + CLASS + rb") count=([1-9][0-9]{0,1})\n")
@@ -38,7 +38,9 @@ def validate(output):
         raise ValueError("invalid census cardinality")
     if int(desc[1]) > 65535 or int(desc[2]) > 255 or int(state[3]) > 255:
         raise ValueError("invalid scalar range")
-    previous = {0: {b"AppleT8112USBXDCI"}}
+    # The controller class is device-specific: take it from the first depth-1 edge.
+    first = EDGE.fullmatch(lines[3]) if len(lines) > 4 else None
+    previous = {0: {first[2]}} if first else {0: set()}
     seen = set()
     ordered = []
     total = 0

@@ -3,6 +3,7 @@
 #include <CoreFoundation/CoreFoundation.h>
 #include <IOKit/IOKitLib.h>
 #include <dlfcn.h>
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -146,7 +147,9 @@ MAC2JBUSBResult MAC2JBUSBCaptureLiveDescription(
     CFTypeRef description = CFDictionaryGetValue(properties, CFSTR("DeviceDescription"));
     CFIndex fieldCount = description && CFGetTypeID(description) == CFDictionaryGetTypeID()
         ? CFDictionaryGetCount((CFDictionaryRef)description) : 0;
-    if (fieldCount != 16 && fieldCount != 17) {
+    // Stock count comes from the device profile; the journal and Swift side
+    // enforce it. Here only bound it (stock or stock + AllowMultipleCreates).
+    if (fieldCount < 4 || fieldCount > 65) {
         result = MAC2JBUSBDescriptionMismatch;
         goto release_properties;
     }
@@ -248,6 +251,87 @@ MAC2JBUSBResult MAC2JBUSBCopyUnservedFunctions(
     return result;
 }
 
+static void copy_string_property(io_registry_entry_t entry, CFStringRef key, char *out, size_t size) {
+    out[0] = 0;
+    CFTypeRef value = IORegistryEntryCreateCFProperty(entry, key, kCFAllocatorDefault, 0);
+    if (value && CFGetTypeID(value) == CFStringGetTypeID())
+        CFStringGetCString((CFStringRef)value, out, (CFIndex)size, kCFStringEncodingUTF8);
+    if (value) CFRelease(value);
+    for (char *c = out; *c; c++) if (*c == '\t' || *c == '\n') *c = ' ';
+}
+
+static bool append_line(char *lines, size_t capacity, size_t *used,
+                        const char *a, const char *b, const char *c) {
+    int n = snprintf(lines + *used, capacity - *used, "%s\t%s\t%s\n", a, b, c);
+    if (n < 0 || (size_t)n >= capacity - *used) return false;
+    *used += (size_t)n;
+    return true;
+}
+
+MAC2JBUSBResult MAC2JBUSBCopyFunctionClients(
+    uint64_t expectedControllerRegistryID, char *lines, size_t capacity
+) {
+    if (!lines || capacity < 2 || expectedControllerRegistryID == 0) return MAC2JBUSBInvalidInput;
+    lines[0] = 0;
+    CFMutableDictionaryRef matching = IOServiceMatching("IOUSBDeviceController");
+    if (!matching) return MAC2JBUSBControllerUnavailable;
+    io_iterator_t iterator = IO_OBJECT_NULL;
+    if (IOServiceGetMatchingServices(kIOMainPortDefault, matching, &iterator) != kIOReturnSuccess)
+        return MAC2JBUSBControllerUnavailable;
+    io_service_t service = IOIteratorNext(iterator);
+    io_service_t extra = service ? IOIteratorNext(iterator) : IO_OBJECT_NULL;
+    IOObjectRelease(iterator);
+    if (!service) return MAC2JBUSBControllerUnavailable;
+    if (extra) {
+        IOObjectRelease(extra);
+        IOObjectRelease(service);
+        return MAC2JBUSBControllerUnavailable;
+    }
+    uint64_t registryID = 0;
+    if (IORegistryEntryGetRegistryEntryID(service, &registryID) != kIOReturnSuccess ||
+        registryID != expectedControllerRegistryID) {
+        IOObjectRelease(service);
+        return MAC2JBUSBWrongController;
+    }
+    io_iterator_t children = IO_OBJECT_NULL;
+    if (IORegistryEntryGetChildIterator(service, kIOServicePlane, &children) != kIOReturnSuccess) {
+        IOObjectRelease(service);
+        return MAC2JBUSBControllerUnavailable;
+    }
+    MAC2JBUSBResult result = MAC2JBUSBSuccess;
+    size_t used = 0;
+    io_registry_entry_t nub;
+    while ((nub = IOIteratorNext(children))) {
+        if (IOObjectConformsTo(nub, "IOUSBDeviceInterface")) {
+            char function[96];
+            copy_string_property(nub, CFSTR("USBDeviceFunction"), function, sizeof(function));
+            io_iterator_t clients = IO_OBJECT_NULL;
+            bool any = false;
+            if (function[0] &&
+                IORegistryEntryGetChildIterator(nub, kIOServicePlane, &clients) == kIOReturnSuccess) {
+                io_registry_entry_t client;
+                while ((client = IOIteratorNext(clients))) {
+                    io_name_t cls;
+                    char creator[128];
+                    if (IOObjectGetClass(client, cls) != kIOReturnSuccess) cls[0] = 0;
+                    copy_string_property(client, CFSTR("IOUserClientCreator"), creator, sizeof(creator));
+                    if (!append_line(lines, capacity, &used, function, cls, creator))
+                        result = MAC2JBUSBDescriptionMismatch;
+                    any = true;
+                    IOObjectRelease(client);
+                }
+                IOObjectRelease(clients);
+            }
+            if (function[0] && !any && !append_line(lines, capacity, &used, function, "", ""))
+                result = MAC2JBUSBDescriptionMismatch;
+        }
+        IOObjectRelease(nub);
+    }
+    IOObjectRelease(children);
+    IOObjectRelease(service);
+    return result;
+}
+
 void MAC2JBUSBFreeCapturedDescription(uint8_t *bytes) {
     free(bytes);
 }
@@ -278,8 +362,10 @@ static MAC2JBUSBResult reconstruct_or_clone(
     CFRelease(input);
     if (error) CFRelease(error);
     if (!decoded) return result;
-    if (CFGetTypeID(decoded) != CFDictionaryGetTypeID() ||
-        CFDictionaryGetCount((CFDictionaryRef)decoded) != 16) goto finished;
+    // The journaled original defines the stock field count for this device.
+    if (CFGetTypeID(decoded) != CFDictionaryGetTypeID()) goto finished;
+    CFIndex originalCount = CFDictionaryGetCount((CFDictionaryRef)decoded);
+    if (originalCount < 4 || originalCount > 64) goto finished;
 
     void *handle = dlopen("/System/Library/Frameworks/IOKit.framework/IOKit", RTLD_NOW | RTLD_LOCAL);
     if (!handle) { result = MAC2JBUSBMissingAPI; goto finished; }
@@ -327,17 +413,18 @@ static MAC2JBUSBResult reconstruct_or_clone(
     }
     if (cloneCurrent) {
         CFIndex count = CFDictionaryGetCount(info);
-        if (count != 16 && count != 17) {
+        if (count != originalCount && count != originalCount + 1) {
             result = MAC2JBUSBDescriptionMismatch;
             goto release_description;
         }
         CFTypeRef flag = CFDictionaryGetValue(info, CFSTR("AllowMultipleCreates"));
-        if ((count == 16 && flag) || (count == 17 && flag != kCFBooleanTrue)) {
+        if ((count == originalCount && flag) ||
+            (count == originalCount + 1 && flag != kCFBooleanTrue)) {
             result = MAC2JBUSBDescriptionMismatch;
             goto release_description;
         }
-        const void *keys[17];
-        const void *values[17];
+        const void *keys[65];
+        const void *values[65];
         CFDictionaryGetKeysAndValues(info, keys, values);
         for (CFIndex index = 0; index < count; index++) {
             if (CFEqual(keys[index], CFSTR("AllowMultipleCreates"))) continue;

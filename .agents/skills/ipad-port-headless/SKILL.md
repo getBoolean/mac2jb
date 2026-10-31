@@ -46,6 +46,10 @@ If the current-state block forbids an action, it stays forbidden until the owner
 3. USB only when the task needs usbmux: `python3 docs/plans/ipad-port/scripts/ipad-hardware/host/diagnose-usb-recognition.py`; require `USBMUX query=ok count=1` before `host/start-usb-ssh-tunnel.sh` on `127.0.0.1:2222`. Check for an existing listener first (`lsof -nP -iTCP:2222 -sTCP:LISTEN`) and never displace it.
 4. Confirm the exact target with the pinned key plus any task-specific device check, then run only documented repo scripts.
 
+## Device data
+
+Never hard-code device facts (product/build, controller class, USB IDs, functions, owners). The broker learns them on the device; read them with `host/u2_broker_profile.py`. Trials: `host/run-u2-noop-trial-auto-heal-wifi.py --broker vNN normal|worker-kill|watchdog-kill`.
+
 ## When a trial loses Mac USB
 
 Owner policy: try a restore over pinned Wi-Fi SSH before asking for a restart.

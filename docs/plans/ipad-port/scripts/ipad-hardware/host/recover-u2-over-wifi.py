@@ -32,7 +32,7 @@ DEVICE = ROOT / "docs/plans/ipad-port/scripts/ipad-hardware/device"
 KITS = ROOT / "build/ipad-hardware/u2-wifi-restore-kit"
 READERS = ("xdci-function-census", "usb-function-providers", "provider-job-state",
            "accessory-ports", "typec-scalar-state", "lock-state", "xdci-child-census")
-VENDOR, PRODUCT = "0x05ac", "0x12ab"
+PROFILE = runpy.run_path(str(HOST / "u2_broker_profile.py"))
 
 
 def run(argv, timeout):
@@ -103,8 +103,9 @@ def main():
     evidence.mkdir(mode=0o700)
     capture(evidence, "failed")
     syslog = start_syslog(evidence / "syslog.txt")
+    profile = PROFILE["fetch"]()
     observer = subprocess.Popen([sys.executable, str(HOST / "u2-usb-return-observer.py"),
-                                 VENDOR, PRODUCT, "20"],
+                                 "0x%04x" % profile["usbVendorID"], "0x%04x" % profile["usbProductID"], "20"],
                                 stdout=open(evidence / "observer.ndjson", "wb"),
                                 stderr=subprocess.DEVNULL)
     time.sleep(1.5)

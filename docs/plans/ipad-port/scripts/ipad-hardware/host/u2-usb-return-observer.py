@@ -23,8 +23,6 @@ def sample(vendor, product):
     text = result.stdout.decode("utf-8", "replace")
     devices = text.split("+-o ")
     for device in devices[1:]:
-        if "iPad" not in device.split("  <", 1)[0]:
-            continue
         v = re.search(r'"idVendor"\s*=\s*(\d+)', device)
         p = re.search(r'"idProduct"\s*=\s*(\d+)', device)
         if v and p and int(v[1]) == vendor and int(p[1]) == product:

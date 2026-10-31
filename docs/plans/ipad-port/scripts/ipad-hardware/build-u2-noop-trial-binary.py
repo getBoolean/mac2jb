@@ -33,6 +33,7 @@ OUTPUT_V8 = BUILD / "u2-native-noop-trial-v8-wifi-restore"
 OUTPUT_V9 = BUILD / "u2-native-noop-trial-v9-auto-heal"
 OUTPUT_V10 = BUILD / "u2-native-noop-trial-v10-auto-heal-5"
 OUTPUT_V11 = BUILD / "u2-native-noop-trial-v11-auto-heal-restart"
+OUTPUT_V12 = BUILD / "u2-native-noop-trial-v12-learned-profile"
 OUTPUT_NO_INITIAL_CYCLE = BUILD / "u2-native-noop-trial-clone-no-initial-cycle"
 # Resolve the installed iPhoneOS SDK instead of pinning an Xcode point release.
 SDK = subprocess.run(["/usr/bin/xcrun", "--sdk", "iphoneos", "--show-sdk-path"],
@@ -43,6 +44,7 @@ SWIFT = [
     ROOT / "ios/watchdog/USBRestoreCoordinator.swift",
     ROOT / "ios/watchdog/TargetUSBRestoreSnapshot.swift",
     ROOT / "ios/watchdog/TargetUSBRestoreController.swift",
+    ROOT / "ios/watchdog/USBDeviceProfile.swift",
     ROOT / "ios/watchdog/USBFunctionRegistrationHealer.swift",
     ROOT / "ios/watchdog/USBFunctionOwnerRestarter.swift",
     ROOT / "ios/watchdog/NativeUSBWatchdogService.swift",
@@ -121,6 +123,13 @@ def main():
     elif len(sys.argv) == 2 and sys.argv[1] == "--v11-auto-heal":
         # v10 plus healing on watchdog restart and lease expiry.
         OUTPUT = OUTPUT_V11
+        explicit_cycle = True
+        controller_clone = True
+        post_clone = True
+        ready_gated = True
+    elif len(sys.argv) == 2 and sys.argv[1] == "--v12-learned-profile":
+        # v11 plus an on-device learned device profile (no compiled-in device data).
+        OUTPUT = OUTPUT_V12
         explicit_cycle = True
         controller_clone = True
         post_clone = True

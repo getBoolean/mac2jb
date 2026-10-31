@@ -33,9 +33,11 @@ struct USBFunctionHealPolicy {
     var pollSeconds = 0.25
     // Clients that exist only while a host is connected (ptpd waits 10 s for
     // a host, then exits), so their absence is an effect, not the cause.
-    var hostDependentFunctions: Set<String> = ["PTP"]
+    var hostDependentFunctions: Set<String> = USBFunctionHealPolicy.defaultHostDependent
     // User-space owners whose restart re-registers the function.
-    var owners: [String: String] = ["Valeria": "com.apple.audiomxd"]
+    // Learned per device (USBDeviceProfile.healPolicy); empty means re-publish only.
+    var owners: [String: String] = [:]
+    static let defaultHostDependent: Set<String> = ["PTP"]
 }
 
 enum USBFunctionHealOutcome: Equatable {

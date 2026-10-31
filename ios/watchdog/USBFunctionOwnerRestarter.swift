@@ -6,14 +6,16 @@ import Foundation
 // TrollStore / no launchctl: SIGKILL the owner by process name as root;
 // launchd relaunches the on-demand daemon when its Mach services are next used.
 enum USBFunctionOwnerRestarter {
-    static let allowed: [String: String] = ["com.apple.audiomxd": "audiomxd"]
-
     enum Failure: Error { case notAllowed, failed }
 
-    static func restart(_ label: String) throws {
+    // `allowed` maps launchd label -> process name, from the active device
+    // profile's owners (labels validated as com.apple.*).
+    static func restart(_ label: String, allowed: [String: String]) throws {
         guard let process = allowed[label] else { throw Failure.notAllowed }
+        // A learned launchd label (jailbreak) is kickstarted; a bare process
+        // token (no launchctl, e.g. TrollStore) goes straight to SIGKILL.
         for launchctl in ["/var/jb/usr/bin/launchctl", "/var/jb/bin/launchctl", "/bin/launchctl"]
-        where access(launchctl, X_OK) == 0 {
+        where label != process && access(launchctl, X_OK) == 0 {
             if run([launchctl, "kickstart", "-k", "system/" + label]) == 0 { return }
         }
         guard killAll(named: process) > 0 else { throw Failure.failed }

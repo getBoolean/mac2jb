@@ -38,6 +38,19 @@ loop:
 
 Kernel-owned gaps need a re-publication, which recreates all nubs. When only user-space-owned functions remain, the healer restarts their owners rather than re-publishing, because a re-publication would start a new race. Owner map: `Valeria` → `com.apple.audiomxd`. Restart: `launchctl kickstart -k system/<label>` when `launchctl` exists. Otherwise SIGKILL the process by name, and launchd relaunches the on-demand daemon (`USBFunctionOwnerRestarter.swift`).
 
+## Device profile: learned on the device (v12)
+
+No device data is compiled in or committed per device. On its first start on a given product and OS build, while the controller is configured, every non-host-dependent function is served, and no journal exists, the broker **learns a profile** (`ios/watchdog/USBDeviceProfile.swift`) and stores it as root-owned 0600 `device-profile.json` in its state directory. It re-learns after an OS update under the same conditions; until then it refuses to publish. The profile records:
+
+- `productType`, `osBuild`;
+- the stock `USBDeviceConfiguration.plist` SHA-256 and size, or none if the device has no such file;
+- the stock live field count, with any `AllowMultipleCreates` flag stripped;
+- USB vendor/product IDs and healthy `bcdUSB`/`MPS0`;
+- the function list;
+- the owners.
+
+An owner is a function whose direct client is an `IOUSBDeviceInterfaceUserClient`. The broker takes the process from `IOUserClientCreator` and the launchd label from `launchctl list` when available (`MAC2JBUSBCopyFunctionClients`). The only built-in rule is iOS-wide: `PTP` is host-dependent. The profile contains no serials or UDIDs. Host tools read it with the broker's `profile` command (`host/u2_broker_profile.py`), and the trial runner, confirmer and Wi-Fi recovery take USB IDs and healthy values from it. On the reference iPad, v12 learned exactly the hand-derived facts: 16 functions, `Valeria → audiomxd` (`com.apple.audiomxd`), PTP host-dependent, `784/9`, IDs `0x05ac/0x12ab`. A TrollStore app learns the same way, with `launchdLabel` nil, and restarts owners by SIGKILL.
+
 ## Broker integration (implemented, v9)
 
 `NativeUSBWatchdogService` runs the healer automatically:
@@ -80,6 +93,8 @@ Reuse three pieces unchanged: the C shim (`USBRestoreControllerShim.c/.h`), `USB
 - The existing service, readiness-gate, settled-recovery and Wi-Fi-restore fixtures still pass.
 
 ## Status and open items
+
+- **v12 (learned profile), 2026-10-31:** `host/run-u2-noop-trial-auto-heal-wifi.py --broker v12` passed a normal trial (72 s; 5 re-publications plus an `audiomxd` restart) and a watchdog-kill trial (29 s; 1 re-publication). Both passed the strict check and were confirmed. The normal trial used the full re-publication bound; raising `maxRepublications` (memory now allows it) or restarting known owners alongside re-publication is a tuning follow-up.
 
 - **U2 PASS (2026-10-31), v11 broker:** heals after a failed first enumeration, worker death, watchdog restart (start-up recovery, at most 3 start heals per journal) and lease expiry, with `maxRepublications` 5 and JetsamMemoryLimit 96. Five consecutive hardware no-op trials (normal ×3, worker-kill, watchdog-kill) recovered without owner action in 46–61 s and passed the strict external check. Heals used 1–3 re-publications; two also restarted `audiomxd` automatically.
 

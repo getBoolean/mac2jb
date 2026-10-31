@@ -141,9 +141,7 @@ def main():
     lines = []
     try:
         nodes.append((root, 0, -1, 0, ""))
-        root_class = class_of(root)
-        if root_class != "AppleT8112USBXDCI":
-            raise ValueError("controller class")
+        root_class = class_of(root)  # any IOUSBDeviceController subclass (device-specific)
         nodes[0] = (root, 0, -1, 0, root_class)
         position = 0
         while position < len(nodes):

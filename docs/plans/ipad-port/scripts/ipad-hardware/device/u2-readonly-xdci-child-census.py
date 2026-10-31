@@ -125,12 +125,9 @@ def main():
         io.IOObjectRelease(root)
         signal.alarm(0)
         raise
-    if root_class != "AppleT8112USBXDCI":
-        io.IOObjectRelease(root)
-        signal.alarm(0)
-        raise ValueError("controller class")
+    # The controller class is device-specific; it is recorded, not required.
 
-    queue = [(root, "AppleT8112USBXDCI", 0)]
+    queue = [(root, root_class, 0)]
     edges = {}
     count = 1
     try:
