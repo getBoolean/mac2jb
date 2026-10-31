@@ -8,7 +8,7 @@ Redacted gate decisions for the iPad port's hardware plan (`docs/plans/ipad-port
 |---|---|---|
 | U1 read-only target inventory | **Pass (2026-10-30)** | R1–R3 and U1-scoped R14, below. Read-only inventory, authorization and role/power only. |
 | U2 restoration journal and watchdog | **Pass (2026-10-31)** | Automatic same-boot recovery: v11 5/5 and v12 2/2 hardware no-op trials. Semantic external equivalence; the `AllowMultipleCreates` flag is an accepted deviation. Below. |
-| U3 additive HID canary | In progress, blocked on host enumeration | The device side works end to end: the appended function materializes, its user client opens, and **every configuration operation this build authorizes returns success**. The host never enumerates the keyboard, and forcing it with a second bus cycle destabilized function re-registration badly enough to need operator-assisted recovery. All below. |
+| U3 additive HID canary | In progress; host side not yet observable | The device side works end to end: the appended function **registers with the controller**, materializes as an interface, its user client opens, and every configuration operation returns success. Whether a host can see it is **still unmeasured** - every attempt so far observed outside the window in which the function existed. All below. |
 | U4 exclusive-HID fallback | Not tested | Conditional fallback only. |
 | U5 network topology | Not tested | No paired 20-attempt exploit comparison. |
 | U6 capability contract | Not tested | No signed final capability record. |
@@ -46,24 +46,45 @@ reads 0 rather than 8 while no host has configured the interface, and this
 heal needed one owner restart (`com.apple.audiomxd`) after two
 re-publications, the first HID trial to need one.
 
-## U3 host enumeration (2026-10-31): not achieved, and the obvious lever is too costly
+## U3 host enumeration (2026-10-31): not yet measured, and why the rig could not measure it
 
-The keyboard exists on the device and the host cannot see it.
+**The host-side results so far are void, not negative.** An independent review
+of the retained evidence established that no trial was positioned to see a
+keyboard, and this section previously drew a conclusion the evidence does not
+support.
+
+The descriptor capture ran about ninety seconds after publication - past the
+lease, and after the healer had re-published the stock description several
+times. It measured a **stock** device and correctly reported that a stock
+device has no keyboard interface:
 
 ```
 outcome=interface-absent interfaces=8 reports=0
-control-request get-descriptor configuration=observed
-control-request set-configuration=observed
-control-request get-descriptor hid-report=not-observed
+get-descriptor configuration=observed  set-configuration=observed
+get-descriptor hid-report=not-observed
 ```
 
-The host reads the configuration descriptor and selects a configuration when
-the publication cycles the bus - **before** the appended interface has a class,
-descriptors or endpoints. Committing the interface afterwards changes the
-device's own state only, so the interface is absent from the host's view and it
-never asks for a report descriptor. The macOS backend this follows pokes its
-gadget kext to re-present the device; this controller has no such path, and the
-equivalent here is the controller's off-and-on-bus cycle.
+The device-side verdict was equally empty: the waiting process is bounded by
+the lease, so every trial ended `lease-lost` rather than reaching an answer.
+
+**The window was empty by construction.** This device takes 29-72 s to come
+back on bus after a description change; the lease caps at 30 s; and the
+mechanism that brings the bus back is the healer re-publishing the journaled
+original, which deletes the appended function. So the function existed only
+while the device was off bus, and the only thing that restored the bus also
+removed the function.
+
+What the device's own log does establish, decisively, is that the appended
+function is accepted by the controller:
+
+```
+gated_registerFunction: register function Mac2jbCanary
+```
+
+It registers alongside the stock functions, and `remoted` reads the published
+description with the appended name last in the host-selected configuration. The
+two functions that failed to register in that trial were stock ones
+(`Valeria`, `USBAudio2Control`), which is the ordinary registration race.
 
 Issuing that cycle after the commit worked as an operation (`io=0x00000000`)
 and made things worse overall. Replacing the description already races the
@@ -80,13 +101,17 @@ re-publications, the Mac saw the device again, and the journal was confirmed
 only on the strict external check's own output. Interfaces, scalars, pairing
 and packet flow all compared equal afterwards.
 
-**The conclusion is about the approach, not the incident.** The host does have
-to re-read the configuration descriptor, but driving that with a second full
-bus cycle multiplies the one race this project spent seven trial designs
-characterizing. The untried alternative is to publish **without** the initial
-cycle - the broker already has that shape for its recovery path - configure the
-interface, and then cycle once, so the host's first and only enumeration
-already contains the keyboard and the race runs once instead of twice.
+Publishing without the initial cycle and cycling once after the commit was
+tried and is materially safer - USB returned unaided - but it did not make the
+result observable, for the structural reason above.
+
+**What remains genuinely unknown** is whether a configuration committed after
+the kernel has built the device object can reach a host's configuration
+descriptor on this controller. Nothing observed contradicts the reference's
+model, and every device-side precondition is met; no trial has yet been
+instrumented to ask the question. Answering it needs an observer that outlives
+the device's own on-bus recovery and a heal path that re-publishes the intended
+description rather than the bare original.
 
 ## U3 interface gate (2026-10-31): the appended function appears and opens
 

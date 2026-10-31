@@ -28,6 +28,7 @@ M2 iPad Pro 12.9-inch (6th generation), `iPad14,5` / `T8112`, iPadOS 17.0 (`21A3
 
 - **Off bus after a swap.** After `SetDescription` the controller goes on bus only when all functions re-register, and each swap leaves a random one or two unregistered. Nothing else recovers it: re-sending, `GoOffAndOnBus`, `ForceOffBus`, replugging, a different host. Bounded re-publication plus restarting the user-space owner of the remaining function does.
 - **API success is not recovery.** Only external Mac checks prove USB came back.
+- **An observer bounded by the lease cannot see a published function on the bus.** The device takes 29-72 s to return to the bus after a description change, the lease caps at 30 s, and the healer's remedy re-publishes the journaled original, which removes anything appended. Any gate that needs to observe a changed description on the bus needs a renewable lease and a heal path that restores the intended description, or it measures a restored stock device and reports a confident falsehood.
 - **Refuted causes, not to be re-investigated:**
   - a speed mismatch (`BcdUSBVersion/MPS0 528/64` is just the disconnected default);
   - a lost `ptpd` launch event (`ptpd` attaches, then exits when no host is connected);
@@ -39,6 +40,7 @@ M2 iPad Pro 12.9-inch (6th generation), `iPad14,5` / `T8112`, iPadOS 17.0 (`21A3
   - iOS launch constraints SIGKILL Apple daemons started outside launchd, so `ptpd` can't be run by hand.
   - The live description keeps `AllowMultipleCreates=true` after any publication (an accepted deviation).
 - **Debugging without USB:** the iPad's syslog streams over Wi-Fi even while USB is off bus (`idevicesyslog -n`). The recovery tools record it, reconnecting when the stream drops.
+  - Measured 2026-10-31: on two HID trials the stream stopped about two seconds after publication with no reconnect marker, losing the bus cycle, the heal re-publications and the restore. The reconnect loop is not reliable as written, so treat a short syslog as a capture gap rather than device silence.
 - **Sandbox false negatives:** a restricted sandbox can falsely report SSH, usbmux or local-network failure. Rerun with normal permissions before diagnosing the iPad.
 - **USB data vs power:** charging or a raw USB node does not prove a USB data connection.
 

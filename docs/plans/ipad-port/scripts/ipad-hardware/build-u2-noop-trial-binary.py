@@ -32,6 +32,10 @@ VARIANTS = {
     "--v13-additive-function": "u3-native-additive-function-v13",
     "--v14-additive-lease": "u3-native-additive-function-v14",
     "--v15-additive-cycle": "u3-native-additive-function-v15",
+    # Publishes without cycling the bus, so the one cycle happens after the
+    # interface is configured and the host enumerates a configuration that
+    # already carries it. Two cycles destabilized function re-registration.
+    "--v16-additive-single-cycle": "u3-native-additive-function-v16",
 }
 # Resolve the installed iPhoneOS SDK instead of pinning an Xcode point release.
 SDK = subprocess.run(["/usr/bin/xcrun", "--sdk", "iphoneos", "--show-sdk-path"],
@@ -70,13 +74,13 @@ def main():
         raise ValueError("usage: " + " | ".join(sorted(VARIANTS)))
     output = BUILD / VARIANTS[sys.argv[1]]
     additive_function = sys.argv[1] in ("--v13-additive-function", "--v14-additive-lease",
-                                        "--v15-additive-cycle")
+                                        "--v15-additive-cycle", "--v16-additive-single-cycle")
     explicit_cycle = True
     controller_clone = True
     post_clone = True
     settled_recovery = False
     ready_gated = True
-    no_initial_cycle = False
+    no_initial_cycle = sys.argv[1] == "--v16-additive-single-cycle"
     if output.exists() or not BUILD.is_dir() or not Path(SDK).is_dir():
         raise ValueError("unsafe output or missing SDK")
     if plistlib.loads(ENTITLEMENTS.read_bytes()) != EXPECTED_ENTITLEMENTS:
