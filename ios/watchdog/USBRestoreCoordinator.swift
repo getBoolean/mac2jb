@@ -5,6 +5,19 @@ import Foundation
 // are injected so the fault path can be exercised without a USB mutation.
 protocol USBRestoreController {
     func publish(_ description: Data) throws
+    // Publish the journaled original with one named function appended last in
+    // the given configuration. The appended description is built from live
+    // controller state inside the controller backend, so it never exists as
+    // bytes here.
+    func publishAppending(_ description: Data, function: String, configuration: Int) throws
+}
+
+extension USBRestoreController {
+    // Only the device controller backend can build an appended description.
+    // Every other conformer refuses rather than publishing something unchecked.
+    func publishAppending(_ description: Data, function: String, configuration: Int) throws {
+        throw USBRestoreCoordinatorError.additivePublicationUnsupported
+    }
 }
 
 protocol USBExternalRestoreVerifier {
@@ -19,6 +32,7 @@ protocol USBMonotonicClock {
 
 enum USBRestoreCoordinatorError: Error {
     case leaseExpired, plannedDescriptionMismatch, recoveryRequired
+    case additivePublicationUnsupported
 }
 
 struct USBRestoreCoordinator {
@@ -82,6 +96,33 @@ struct USBRestoreCoordinator {
         try journal.transition(from: prepared, to: changed(prepared, .published))
         do {
             try controller.publish(plannedDescription)
+        } catch {
+            try? recover()
+            throw error
+        }
+    }
+
+    // Publish the original plus one appended function. The recipe's
+    // plannedDescriptionSHA256 stays the digest of the unmodified original and
+    // the journal keeps byte-equal original bytes: for an additive publication
+    // that field is the restore target, not the bytes on the bus, because the
+    // appended description is built inside the shim from live controller state
+    // and never materializes as bytes in Swift. Every failure path restores
+    // recipe.originalDescription exactly as the no-op path does.
+    func publishAdditive(function: String, configuration: Int) throws {
+        let prepared = try journal.read()
+        try prepared.recipe.validateAgainst(currentIdentity)
+        guard prepared.phase == .prepared,
+              clock.uptimeNanoseconds < prepared.leaseDeadlineUptime else {
+            throw USBRestoreCoordinatorError.leaseExpired
+        }
+        // The durable phase change precedes the controller call. A crash at
+        // either side of that call therefore leads the watchdog to restore.
+        try journal.transition(from: prepared, to: changed(prepared, .published))
+        do {
+            try controller.publishAppending(prepared.recipe.originalDescription,
+                                            function: function,
+                                            configuration: configuration)
         } catch {
             try? recover()
             throw error

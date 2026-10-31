@@ -16,7 +16,11 @@ typedef enum {
     MAC2JBUSBWrongController = 4,
     MAC2JBUSBDescriptionMismatch = 5,
     MAC2JBUSBSetFailed = 6,
-    MAC2JBUSBBusCycleFailed = 7
+    MAC2JBUSBBusCycleFailed = 7,
+    // The requested added function name or configuration number was refused
+    // before any controller write. Kept distinct from MAC2JBUSBInvalidInput so
+    // the Swift side and the host tools can tell a bad request from a bad call.
+    MAC2JBUSBFunctionRejected = 8
 } MAC2JBUSBResult;
 
 MAC2JBUSBResult MAC2JBUSBReconstructOrPublish(
@@ -42,6 +46,42 @@ MAC2JBUSBResult MAC2JBUSBCloneOrPublish(
     bool cycleBus,
     int32_t *setReturn,
     int32_t *busReturn
+);
+
+// Additive publication: clone the current controller description, require it
+// to be byte-equal to the journaled original exactly as MAC2JBUSBCloneOrPublish
+// does, and only then append one named function last in the given
+// configuration before a guarded SetDescription. The journaled original is the
+// restore target and is never modified. A dry run appends into the in-process
+// clone only; it never writes the controller or bus.
+MAC2JBUSBResult MAC2JBUSBCloneAppendFunctionOrPublish(
+    const uint8_t *livePlist,
+    size_t livePlistLength,
+    uint64_t expectedControllerRegistryID,
+    const char *functionName,
+    int32_t configurationNumber,
+    bool publish,
+    bool cycleBus,
+    int32_t *setReturn,
+    int32_t *busReturn
+);
+
+// Pure: deserialize a device-description plist, append one function last in the
+// given configuration, and serialize the result. No IOKit, no controller. The
+// caller owns *out and must free it with MAC2JBUSBFreeCapturedDescription.
+// Same implementation the publication path above uses, so it is testable on a
+// Mac with no device.
+MAC2JBUSBResult MAC2JBUSBAppendFunctionToDescriptionData(
+    const uint8_t *plist, size_t plistLength,
+    const char *functionName, int32_t configurationNumber,
+    uint8_t **out, size_t *outLength
+);
+
+// Read-only: the configuration number the host has currently selected on the
+// exact controller, from CurrentState.SelectedConfiguration. Success only when
+// that value is a typed number greater than zero; the number is never assumed.
+MAC2JBUSBResult MAC2JBUSBCopySelectedConfiguration(
+    uint64_t expectedControllerRegistryID, int32_t *configurationNumber
 );
 
 // Read-only capture of the sole controller's live registry description.

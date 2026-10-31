@@ -70,6 +70,8 @@ final class NativeUSBWatchdogService {
     private let snapshotProvider: () throws -> TargetUSBRestoreSnapshot
     private let validateInMemory: (Data) throws -> Void
     private let controllerConfigured: (() throws -> Bool)?
+    // Injected so this file never links the C publication shim.
+    private let selectedConfiguration: (() throws -> Int)?
     private let unservedFunctions: (() throws -> Set<String>)?
     private let restartOwner: ((String) throws -> Void)?
     private let healPolicy: USBFunctionHealPolicy
@@ -117,6 +119,7 @@ final class NativeUSBWatchdogService {
                 try Self.waitForConfigured { try controller.isConfigured() }
             },
             controllerConfigured: { try controller.isConfigured() },
+            selectedConfiguration: { try controller.selectedConfiguration() },
             unservedFunctions: { try controller.unservedFunctions() },
             restartOwner: { try USBFunctionOwnerRestarter.restart($0, allowed: profile.ownerProcesses) },
             healPolicy: profile.healPolicy(), deviceProfile: profile,
@@ -135,6 +138,7 @@ final class NativeUSBWatchdogService {
          validateInMemory: @escaping (Data) throws -> Void,
          beforeRecovery: @escaping () throws -> Void,
          controllerConfigured: (() throws -> Bool)? = nil,
+         selectedConfiguration: (() throws -> Int)? = nil,
          unservedFunctions: (() throws -> Set<String>)? = nil,
          restartOwner: ((String) throws -> Void)? = nil,
          healPolicy: USBFunctionHealPolicy = USBFunctionHealPolicy(),
@@ -148,6 +152,7 @@ final class NativeUSBWatchdogService {
         self.snapshotProvider = snapshotProvider
         self.validateInMemory = validateInMemory
         self.controllerConfigured = controllerConfigured
+        self.selectedConfiguration = selectedConfiguration
         self.unservedFunctions = unservedFunctions
         self.restartOwner = restartOwner
         self.healPolicy = healPolicy
@@ -307,6 +312,23 @@ final class NativeUSBWatchdogService {
             try coordinator.publish(record.recipe.originalDescription)
             return "published"
         }
+        // Publish the journaled original plus one named function, under the
+        // same lease, worker and journal guards as publish-noop. The journal
+        // keeps the unmodified original, so restore is unchanged.
+        if command.hasPrefix("publish-hid ") {
+            let name = String(command.dropFirst("publish-hid ".count))
+            guard publicationEnabled, worker >= 0, let selectedConfiguration else {
+                throw NativeUSBWatchdogError.disabled
+            }
+            guard Self.isFunctionName(name),
+                  !(deviceProfile?.functions.contains(name) ?? false),
+                  let record = try currentRecord(), record.phase == .prepared else {
+                throw NativeUSBWatchdogError.invalidRequest
+            }
+            try coordinator.publishAdditive(function: name,
+                                            configuration: try selectedConfiguration())
+            return "published-additive"
+        }
         if command == "restore" {
             guard let record = try currentRecord() else { return "already-clear" }
             if record.phase == .awaitingVerification {
@@ -358,6 +380,18 @@ final class NativeUSBWatchdogService {
             return "verified-and-cleared"
         }
         throw NativeUSBWatchdogError.invalidRequest
+    }
+
+    // ^[A-Za-z0-9][A-Za-z0-9_.-]{0,31}$ , the same shape the shim enforces.
+    // Checked here so a malformed name never reaches the controller.
+    static func isFunctionName(_ name: String) -> Bool {
+        guard (1...32).contains(name.utf8.count) else { return false }
+        for (index, byte) in name.utf8.enumerated() {
+            if (65...90).contains(byte) || (97...122).contains(byte) ||
+                (48...57).contains(byte) { continue }
+            guard index > 0, byte == 95 || byte == 46 || byte == 45 else { return false }
+        }
+        return true
     }
 
     private func workerClosed(neutral: Bool) {

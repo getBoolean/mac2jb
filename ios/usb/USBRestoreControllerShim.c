@@ -30,6 +30,118 @@ static bool contains_equal_values(CFDictionaryRef source, CFDictionaryRef expect
     return true;
 }
 
+// ^[A-Za-z0-9][A-Za-z0-9_.-]{0,31}$ . A function name becomes a registry
+// property and an interface string, so keep it to that shape in C as well as
+// at the Swift command boundary.
+static bool valid_function_name(const char *name) {
+    if (!name) return false;
+    size_t length = strlen(name);
+    if (length < 1 || length > 32) return false;
+    for (size_t index = 0; index < length; index++) {
+        char c = name[index];
+        if ((c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z') ||
+            (c >= '0' && c <= '9')) continue;
+        if (index > 0 && (c == '_' || c == '.' || c == '-')) continue;
+        return false;
+    }
+    return true;
+}
+
+// Append one function name last in the given configuration's Interfaces array
+// and change nothing else. Last position keeps every existing interface number
+// stable. The name must not already appear in any configuration.
+static bool append_function(CFMutableDictionaryRef info, CFStringRef name,
+                            int32_t configurationNumber) {
+    if (!info || !name || configurationNumber < 1 || configurationNumber > 255) return false;
+    CFIndex target = (CFIndex)configurationNumber - 1;
+    CFTypeRef value = CFDictionaryGetValue(info, CFSTR("ConfigurationDescriptors"));
+    if (!value || CFGetTypeID(value) != CFArrayGetTypeID()) return false;
+    CFArrayRef configurations = (CFArrayRef)value;
+    CFIndex count = CFArrayGetCount(configurations);
+    if (target >= count) return false;
+    for (CFIndex index = 0; index < count; index++) {
+        CFTypeRef entry = CFArrayGetValueAtIndex(configurations, index);
+        if (!entry || CFGetTypeID(entry) != CFDictionaryGetTypeID()) return false;
+        CFTypeRef names = CFDictionaryGetValue((CFDictionaryRef)entry, CFSTR("Interfaces"));
+        // Only the configuration being appended to must carry an interface
+        // list. Whether every stock configuration carries one is unknown, and
+        // refusing the whole request over an unrelated configuration's shape
+        // would read as "this device rejects the function" on the first trial.
+        if (!names && index != target) continue;
+        if (!names || CFGetTypeID(names) != CFArrayGetTypeID()) return false;
+        CFIndex nameCount = CFArrayGetCount((CFArrayRef)names);
+        for (CFIndex slot = 0; slot < nameCount; slot++) {
+            CFTypeRef existing = CFArrayGetValueAtIndex((CFArrayRef)names, slot);
+            if (!existing || CFGetTypeID(existing) != CFStringGetTypeID()) return false;
+            if (CFEqual(existing, name)) return false;
+        }
+    }
+    CFDictionaryRef configuration = (CFDictionaryRef)CFArrayGetValueAtIndex(configurations, target);
+    CFArrayRef names = (CFArrayRef)CFDictionaryGetValue(configuration, CFSTR("Interfaces"));
+    // _IOUSBDeviceDescriptionGetInfo may hand back immutable containers, so
+    // copy the target configuration and its interface array before mutating.
+    CFMutableArrayRef newNames = CFArrayCreateMutableCopy(kCFAllocatorDefault, 0, names);
+    CFMutableDictionaryRef newConfiguration = CFDictionaryCreateMutableCopy(
+        kCFAllocatorDefault, 0, configuration);
+    CFMutableArrayRef newConfigurations = CFArrayCreateMutableCopy(
+        kCFAllocatorDefault, 0, configurations);
+    bool appended = newNames && newConfiguration && newConfigurations;
+    if (appended) {
+        CFArrayAppendValue(newNames, name);
+        CFDictionarySetValue(newConfiguration, CFSTR("Interfaces"), newNames);
+        CFArraySetValueAtIndex(newConfigurations, target, newConfiguration);
+        CFDictionarySetValue(info, CFSTR("ConfigurationDescriptors"), newConfigurations);
+    }
+    if (newNames) CFRelease(newNames);
+    if (newConfiguration) CFRelease(newConfiguration);
+    if (newConfigurations) CFRelease(newConfigurations);
+    return appended;
+}
+
+MAC2JBUSBResult MAC2JBUSBAppendFunctionToDescriptionData(
+    const uint8_t *plist, size_t plistLength,
+    const char *functionName, int32_t configurationNumber,
+    uint8_t **out, size_t *outLength
+) {
+    if (!out || !outLength) return MAC2JBUSBInvalidInput;
+    *out = NULL;
+    *outLength = 0;
+    if (!plist || plistLength < 8 || plistLength > 1024 * 1024) return MAC2JBUSBInvalidInput;
+    if (!valid_function_name(functionName)) return MAC2JBUSBFunctionRejected;
+    MAC2JBUSBResult result = MAC2JBUSBInvalidInput;
+    CFDataRef input = CFDataCreate(kCFAllocatorDefault, plist, (CFIndex)plistLength);
+    if (!input) return result;
+    CFPropertyListRef decoded = CFPropertyListCreateWithData(
+        kCFAllocatorDefault, input, kCFPropertyListMutableContainers, NULL, NULL);
+    CFRelease(input);
+    if (!decoded) return result;
+    if (CFGetTypeID(decoded) != CFDictionaryGetTypeID()) goto finished;
+    CFStringRef name = CFStringCreateWithCString(kCFAllocatorDefault, functionName,
+                                                 kCFStringEncodingUTF8);
+    if (!name) goto finished;
+    if (!append_function((CFMutableDictionaryRef)decoded, name, configurationNumber)) {
+        result = MAC2JBUSBFunctionRejected;
+        goto release_name;
+    }
+    CFDataRef data = CFPropertyListCreateData(kCFAllocatorDefault, decoded,
+                                              kCFPropertyListBinaryFormat_v1_0, 0, NULL);
+    if (!data) { result = MAC2JBUSBDescriptionMismatch; goto release_name; }
+    CFIndex size = CFDataGetLength(data);
+    uint8_t *copy = size > 0 ? malloc((size_t)size) : NULL;
+    if (!copy) { result = MAC2JBUSBInvalidInput; goto release_data; }
+    memcpy(copy, CFDataGetBytePtr(data), (size_t)size);
+    *out = copy;
+    *outLength = (size_t)size;
+    result = MAC2JBUSBSuccess;
+release_data:
+    CFRelease(data);
+release_name:
+    CFRelease(name);
+finished:
+    CFRelease(decoded);
+    return result;
+}
+
 MAC2JBUSBResult MAC2JBUSBCaptureControllerRegistryID(uint64_t *controllerRegistryID) {
     if (!controllerRegistryID) return MAC2JBUSBInvalidInput;
     *controllerRegistryID = 0;
@@ -107,6 +219,59 @@ MAC2JBUSBResult MAC2JBUSBCopyConfiguredState(
     }
     *configured = CFEqual(deviceState, CFSTR("Configured")) &&
         CFBooleanGetValue((CFBooleanRef)onBus) && configurationNumber > 0;
+    result = MAC2JBUSBSuccess;
+release_properties:
+    CFRelease(properties);
+release_service:
+    IOObjectRelease(service);
+done:
+    IOObjectRelease(iterator);
+    return result;
+}
+
+MAC2JBUSBResult MAC2JBUSBCopySelectedConfiguration(
+    uint64_t expectedControllerRegistryID, int32_t *configurationNumber
+) {
+    if (!configurationNumber || expectedControllerRegistryID == 0) return MAC2JBUSBInvalidInput;
+    *configurationNumber = 0;
+    CFMutableDictionaryRef matching = IOServiceMatching("IOUSBDeviceController");
+    if (!matching) return MAC2JBUSBControllerUnavailable;
+    io_iterator_t iterator = IO_OBJECT_NULL;
+    if (IOServiceGetMatchingServices(kIOMainPortDefault, matching, &iterator) !=
+        kIOReturnSuccess) return MAC2JBUSBControllerUnavailable;
+    MAC2JBUSBResult result = MAC2JBUSBControllerUnavailable;
+    io_service_t service = IOIteratorNext(iterator);
+    if (!service) goto done;
+    io_service_t extra = IOIteratorNext(iterator);
+    if (extra) {
+        IOObjectRelease(extra);
+        goto release_service;
+    }
+    uint64_t registryID = 0;
+    if (IORegistryEntryGetRegistryEntryID(service, &registryID) != kIOReturnSuccess ||
+        registryID != expectedControllerRegistryID) {
+        result = MAC2JBUSBWrongController;
+        goto release_service;
+    }
+    CFMutableDictionaryRef properties = NULL;
+    if (IORegistryEntryCreateCFProperties(service, &properties,
+                                          kCFAllocatorDefault, 0) != kIOReturnSuccess ||
+        !properties) goto release_service;
+    CFTypeRef current = CFDictionaryGetValue(properties, CFSTR("CurrentState"));
+    if (!current || CFGetTypeID(current) != CFDictionaryGetTypeID()) {
+        result = MAC2JBUSBDescriptionMismatch;
+        goto release_properties;
+    }
+    CFTypeRef configuration = CFDictionaryGetValue((CFDictionaryRef)current,
+                                                   CFSTR("SelectedConfiguration"));
+    int32_t selected = 0;
+    if (!configuration || CFGetTypeID(configuration) != CFNumberGetTypeID() ||
+        !CFNumberGetValue((CFNumberRef)configuration, kCFNumberSInt32Type, &selected) ||
+        selected < 1 || selected > 255) {
+        result = MAC2JBUSBDescriptionMismatch;
+        goto release_properties;
+    }
+    *configurationNumber = selected;
     result = MAC2JBUSBSuccess;
 release_properties:
     CFRelease(properties);
@@ -343,6 +508,8 @@ static MAC2JBUSBResult reconstruct_or_clone(
     bool publish,
     bool cycleBus,
     bool cloneCurrent,
+    const char *functionName,
+    int32_t configurationNumber,
     int32_t *setReturn,
     int32_t *busReturn
 ) {
@@ -352,6 +519,8 @@ static MAC2JBUSBResult reconstruct_or_clone(
         expectedControllerRegistryID == 0 || (cycleBus && !publish)) {
         return MAC2JBUSBInvalidInput;
     }
+    // Refuse a malformed added name before any controller user client opens.
+    if (functionName && !valid_function_name(functionName)) return MAC2JBUSBFunctionRejected;
 
     MAC2JBUSBResult result = MAC2JBUSBInvalidInput;
     CFDataRef input = CFDataCreate(kCFAllocatorDefault, livePlist, (CFIndex)livePlistLength);
@@ -476,6 +645,19 @@ static MAC2JBUSBResult reconstruct_or_clone(
         goto release_description;
     }
     result = MAC2JBUSBSuccess;
+    // Only now, with the clone proven byte-equal to the journaled original,
+    // may the one added function go in: an additive publication must still
+    // start from exactly what restore will put back.
+    if (functionName) {
+        CFStringRef added = CFStringCreateWithCString(kCFAllocatorDefault, functionName,
+                                                      kCFStringEncodingUTF8);
+        bool appended = added && append_function(info, added, configurationNumber);
+        if (added) CFRelease(added);
+        if (!appended) {
+            result = MAC2JBUSBFunctionRejected;
+            goto release_description;
+        }
+    }
     if (publish) {
         CFDictionarySetValue(info, CFSTR("AllowMultipleCreates"), kCFBooleanTrue);
         IOReturn setStatus = setDescription(controller, description);
@@ -509,7 +691,7 @@ MAC2JBUSBResult MAC2JBUSBReconstructOrPublish(
 ) {
     return reconstruct_or_clone(livePlist, livePlistLength,
                                 expectedControllerRegistryID, publish, cycleBus,
-                                false, setReturn, busReturn);
+                                false, NULL, 0, setReturn, busReturn);
 }
 
 MAC2JBUSBResult MAC2JBUSBCloneOrPublish(
@@ -519,5 +701,19 @@ MAC2JBUSBResult MAC2JBUSBCloneOrPublish(
 ) {
     return reconstruct_or_clone(livePlist, livePlistLength,
                                 expectedControllerRegistryID, publish, cycleBus,
-                                true, setReturn, busReturn);
+                                true, NULL, 0, setReturn, busReturn);
+}
+
+MAC2JBUSBResult MAC2JBUSBCloneAppendFunctionOrPublish(
+    const uint8_t *livePlist, size_t livePlistLength,
+    uint64_t expectedControllerRegistryID,
+    const char *functionName, int32_t configurationNumber,
+    bool publish, bool cycleBus,
+    int32_t *setReturn, int32_t *busReturn
+) {
+    if (!functionName) return MAC2JBUSBInvalidInput;
+    return reconstruct_or_clone(livePlist, livePlistLength,
+                                expectedControllerRegistryID, publish, cycleBus,
+                                true, functionName, configurationNumber,
+                                setReturn, busReturn);
 }

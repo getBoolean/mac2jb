@@ -1,0 +1,276 @@
+// Mac-only tests for the pure additive-description helper in the USB restore
+// shim. No IOKit controller is created and nothing is published: the helper
+// works on plist bytes only, so the exact code the broker runs on the device
+// can be proved here. Run from the additive-publication python test.
+#include "../usb/USBRestoreControllerShim.h"
+
+#include <CoreFoundation/CoreFoundation.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+
+#define CONFIGURATION_COUNT 9
+// The host-selected configuration is read from the controller on the device;
+// here it is just the configuration the tests target.
+#define TARGET_CONFIGURATION 5
+
+static int failures = 0;
+
+static void check(bool condition, const char *what) {
+    if (!condition) {
+        fprintf(stderr, "FAIL %s\n", what);
+        failures++;
+    }
+}
+
+static CFMutableDictionaryRef make_configuration(int index, const char *const *interfaces) {
+    CFMutableArrayRef names = CFArrayCreateMutable(kCFAllocatorDefault, 0,
+                                                   &kCFTypeArrayCallBacks);
+    for (const char *const *name = interfaces; name && *name; name++) {
+        CFStringRef value = CFStringCreateWithCString(kCFAllocatorDefault, *name,
+                                                      kCFStringEncodingUTF8);
+        CFArrayAppendValue(names, value);
+        CFRelease(value);
+    }
+    CFMutableDictionaryRef configuration = CFDictionaryCreateMutable(
+        kCFAllocatorDefault, 0, &kCFTypeDictionaryKeyCallBacks,
+        &kCFTypeDictionaryValueCallBacks);
+    CFStringRef description = CFStringCreateWithFormat(
+        kCFAllocatorDefault, NULL, CFSTR("configuration-%d"), index);
+    CFDictionarySetValue(configuration, CFSTR("Description"), description);
+    CFDictionarySetValue(configuration, CFSTR("Interfaces"), names);
+    CFRelease(description);
+    CFRelease(names);
+    return configuration;
+}
+
+static void set_number(CFMutableDictionaryRef dictionary, CFStringRef key, int value) {
+    CFNumberRef number = CFNumberCreate(kCFAllocatorDefault, kCFNumberIntType, &value);
+    CFDictionarySetValue(dictionary, key, number);
+    CFRelease(number);
+}
+
+// A synthetic stand-in for the live device description: device-level scalars
+// plus an array of configurations, each holding an array of function names.
+static CFDictionaryRef make_description(void) {
+    CFMutableDictionaryRef info = CFDictionaryCreateMutable(
+        kCFAllocatorDefault, 0, &kCFTypeDictionaryKeyCallBacks,
+        &kCFTypeDictionaryValueCallBacks);
+    set_number(info, CFSTR("vendorID"), 1452);
+    set_number(info, CFSTR("productID"), 4779);
+    set_number(info, CFSTR("deviceClass"), 0);
+    set_number(info, CFSTR("deviceSubClass"), 0);
+    set_number(info, CFSTR("deviceProtocol"), 0);
+    set_number(info, CFSTR("BcdUSBVersion"), 768);
+    set_number(info, CFSTR("MPS0"), 9);
+    set_number(info, CFSTR("MaxPower"), 112);
+    CFDictionarySetValue(info, CFSTR("productString"), CFSTR("synthetic"));
+    CFDictionarySetValue(info, CFSTR("serialNumber"), CFSTR("synthetic-serial"));
+    CFMutableArrayRef configurations = CFArrayCreateMutable(kCFAllocatorDefault, 0,
+                                                            &kCFTypeArrayCallBacks);
+    static const char *const first[] = {"Valeria", NULL};
+    static const char *const selected[] = {"PTP", "USBAudio2StreamOUT", "AppleUSBMux", NULL};
+    for (int index = 1; index <= CONFIGURATION_COUNT; index++) {
+        const char *const *interfaces = NULL;
+        if (index == 1) interfaces = first;
+        if (index == TARGET_CONFIGURATION) interfaces = selected;
+        CFMutableDictionaryRef configuration = make_configuration(index, interfaces);
+        CFArrayAppendValue(configurations, configuration);
+        CFRelease(configuration);
+    }
+    CFDictionarySetValue(info, CFSTR("ConfigurationDescriptors"), configurations);
+    CFRelease(configurations);
+    return info;
+}
+
+static CFDataRef encode(CFDictionaryRef info) {
+    return CFPropertyListCreateData(kCFAllocatorDefault, info,
+                                    kCFPropertyListBinaryFormat_v1_0, 0, NULL);
+}
+
+static CFDictionaryRef decode(const uint8_t *bytes, size_t length) {
+    CFDataRef data = CFDataCreate(kCFAllocatorDefault, bytes, (CFIndex)length);
+    if (!data) return NULL;
+    CFPropertyListRef plist = CFPropertyListCreateWithData(
+        kCFAllocatorDefault, data, kCFPropertyListImmutable, NULL, NULL);
+    CFRelease(data);
+    if (plist && CFGetTypeID(plist) != CFDictionaryGetTypeID()) {
+        CFRelease(plist);
+        return NULL;
+    }
+    return (CFDictionaryRef)plist;
+}
+
+static MAC2JBUSBResult append_to(CFDataRef input, const char *name,
+                                 int32_t configurationNumber, CFDictionaryRef *out) {
+    uint8_t *bytes = NULL;
+    size_t length = 0;
+    MAC2JBUSBResult result = MAC2JBUSBAppendFunctionToDescriptionData(
+        CFDataGetBytePtr(input), (size_t)CFDataGetLength(input), name,
+        configurationNumber, &bytes, &length);
+    if (out) *out = NULL;
+    if (result == MAC2JBUSBSuccess && out) *out = decode(bytes, length);
+    if (result != MAC2JBUSBSuccess) check(bytes == NULL && length == 0,
+                                         "rejected append returned no buffer");
+    MAC2JBUSBFreeCapturedDescription(bytes);
+    return result;
+}
+
+static CFArrayRef configurations_of(CFDictionaryRef info) {
+    CFTypeRef value = CFDictionaryGetValue(info, CFSTR("ConfigurationDescriptors"));
+    return value && CFGetTypeID(value) == CFArrayGetTypeID() ? (CFArrayRef)value : NULL;
+}
+
+static void expect_rejected(CFDataRef input, const char *name,
+                            int32_t configurationNumber, const char *what) {
+    CFDictionaryRef out = NULL;
+    MAC2JBUSBResult result = append_to(input, name, configurationNumber, &out);
+    check(result == MAC2JBUSBFunctionRejected, what);
+    check(out == NULL, what);
+    if (out) CFRelease(out);
+}
+
+int main(void) {
+    CFDictionaryRef original = make_description();
+    CFDataRef input = encode(original);
+    if (!input) {
+        fprintf(stderr, "FAIL could not encode the synthetic description\n");
+        return 1;
+    }
+
+    CFDictionaryRef appended = NULL;
+    check(append_to(input, "Mac2jbCanary", TARGET_CONFIGURATION, &appended) ==
+          MAC2JBUSBSuccess, "append to the selected configuration succeeds");
+    if (!appended) {
+        fprintf(stderr, "FAIL no appended description was produced\n");
+        CFRelease(input);
+        CFRelease(original);
+        return 1;
+    }
+
+    // Every device-level scalar and every other key is untouched: dropping the
+    // configurations from both sides must leave two equal dictionaries.
+    CFMutableDictionaryRef strippedOriginal = CFDictionaryCreateMutableCopy(
+        kCFAllocatorDefault, 0, original);
+    CFMutableDictionaryRef strippedAppended = CFDictionaryCreateMutableCopy(
+        kCFAllocatorDefault, 0, appended);
+    CFDictionaryRemoveValue(strippedOriginal, CFSTR("ConfigurationDescriptors"));
+    CFDictionaryRemoveValue(strippedAppended, CFSTR("ConfigurationDescriptors"));
+    check(CFEqual(strippedOriginal, strippedAppended),
+          "device-level fields unchanged");
+    check(CFDictionaryGetCount(original) == CFDictionaryGetCount(appended),
+          "top-level field count unchanged");
+    CFRelease(strippedOriginal);
+    CFRelease(strippedAppended);
+
+    CFArrayRef before = configurations_of(original);
+    CFArrayRef after = configurations_of(appended);
+    check(before && after, "both descriptions carry configurations");
+    check(after && CFArrayGetCount(after) == CONFIGURATION_COUNT,
+          "configuration count unchanged");
+    for (CFIndex index = 0; before && after && index < CFArrayGetCount(after); index++) {
+        CFDictionaryRef was = (CFDictionaryRef)CFArrayGetValueAtIndex(before, index);
+        CFDictionaryRef is = (CFDictionaryRef)CFArrayGetValueAtIndex(after, index);
+        if (index != TARGET_CONFIGURATION - 1) {
+            check(CFEqual(was, is), "untargeted configuration unchanged");
+            continue;
+        }
+        CFArrayRef wasNames = (CFArrayRef)CFDictionaryGetValue(was, CFSTR("Interfaces"));
+        CFArrayRef isNames = (CFArrayRef)CFDictionaryGetValue(is, CFSTR("Interfaces"));
+        CFIndex count = CFArrayGetCount(isNames);
+        check(count == CFArrayGetCount(wasNames) + 1, "exactly one interface added");
+        check(CFEqual(CFArrayGetValueAtIndex(isNames, count - 1), CFSTR("Mac2jbCanary")),
+              "the new interface is last");
+        // Existing interface numbers must not shift, so compare position by
+        // position rather than as a set.
+        for (CFIndex slot = 0; slot < count - 1; slot++) {
+            check(CFEqual(CFArrayGetValueAtIndex(wasNames, slot),
+                          CFArrayGetValueAtIndex(isNames, slot)),
+                  "existing interface order unchanged");
+        }
+        CFMutableDictionaryRef trimmed = CFDictionaryCreateMutableCopy(
+            kCFAllocatorDefault, 0, is);
+        CFMutableArrayRef trimmedNames = CFArrayCreateMutableCopy(
+            kCFAllocatorDefault, 0, isNames);
+        CFArrayRemoveValueAtIndex(trimmedNames, count - 1);
+        CFDictionarySetValue(trimmed, CFSTR("Interfaces"), trimmedNames);
+        check(CFEqual(trimmed, was), "nothing else in the configuration changed");
+        CFRelease(trimmedNames);
+        CFRelease(trimmed);
+    }
+    CFRelease(appended);
+
+    // A name already on the bus, in the target configuration or any other one.
+    expect_rejected(input, "USBAudio2StreamOUT", TARGET_CONFIGURATION,
+                    "duplicate in the target configuration refused");
+    expect_rejected(input, "Valeria", TARGET_CONFIGURATION,
+                    "duplicate in another configuration refused");
+    expect_rejected(input, "Valeria", 1, "duplicate in configuration one refused");
+
+    expect_rejected(input, "Mac2jbCanary", 0, "configuration zero refused");
+    expect_rejected(input, "Mac2jbCanary", -1, "negative configuration refused");
+    expect_rejected(input, "Mac2jbCanary", CONFIGURATION_COUNT + 1,
+                    "configuration past the array refused");
+    expect_rejected(input, "Mac2jbCanary", 256, "configuration above 255 refused");
+
+    expect_rejected(input, "", TARGET_CONFIGURATION, "empty name refused");
+    expect_rejected(input, "_leading", TARGET_CONFIGURATION,
+                    "non-alphanumeric first character refused");
+    expect_rejected(input, "has space", TARGET_CONFIGURATION, "space in name refused");
+    expect_rejected(input, "has/slash", TARGET_CONFIGURATION, "slash in name refused");
+    char tooLong[34];
+    memset(tooLong, 'a', sizeof(tooLong) - 1);
+    tooLong[sizeof(tooLong) - 1] = 0;
+    expect_rejected(input, tooLong, TARGET_CONFIGURATION, "over-long name refused");
+
+    // The accepted shape: trailing underscore, dot, dash and digits.
+    CFDictionaryRef permitted = NULL;
+    check(append_to(input, "0hid_canary.v1-a", TARGET_CONFIGURATION, &permitted) ==
+          MAC2JBUSBSuccess, "permitted name characters accepted");
+    if (permitted) CFRelease(permitted);
+
+    uint8_t *bytes = NULL;
+    size_t length = 0;
+    check(MAC2JBUSBAppendFunctionToDescriptionData(NULL, 0, "Mac2jbCanary",
+                                                   TARGET_CONFIGURATION, &bytes,
+                                                   &length) == MAC2JBUSBInvalidInput,
+          "missing plist refused as invalid input");
+
+    // Whether every stock configuration carries an interface list is unknown.
+    // An unrelated configuration without one must not sink the request, since
+    // that would look like the device refusing the function; the configuration
+    // actually being appended to must still carry one.
+    for (int absent = 1; absent <= 2; absent++) {
+        CFMutableDictionaryRef variant = CFDictionaryCreateMutableCopy(
+            kCFAllocatorDefault, 0, original);
+        CFMutableArrayRef list = CFArrayCreateMutableCopy(
+            kCFAllocatorDefault, 0, configurations_of(original));
+        int stripped = absent == 1 ? 1 : TARGET_CONFIGURATION;
+        CFMutableDictionaryRef bare = CFDictionaryCreateMutableCopy(
+            kCFAllocatorDefault, 0, CFArrayGetValueAtIndex(list, stripped - 1));
+        CFDictionaryRemoveValue(bare, CFSTR("Interfaces"));
+        CFArraySetValueAtIndex(list, stripped - 1, bare);
+        CFDictionarySetValue(variant, CFSTR("ConfigurationDescriptors"), list);
+        CFDataRef encoded = encode(variant);
+        MAC2JBUSBResult result = append_to(encoded, "Mac2jbCanary",
+                                           TARGET_CONFIGURATION, NULL);
+        check(result == (absent == 1 ? MAC2JBUSBSuccess : MAC2JBUSBFunctionRejected),
+              absent == 1 ? "another configuration without an interface list is skipped"
+                          : "target configuration without an interface list refused");
+        CFRelease(encoded);
+        CFRelease(bare);
+        CFRelease(list);
+        CFRelease(variant);
+    }
+
+    CFRelease(input);
+    CFRelease(original);
+    if (failures) {
+        fprintf(stderr, "%d assertion(s) failed\n", failures);
+        return 1;
+    }
+    printf("PASS USB description append: appended last in the selected "
+           "configuration, order and device fields unchanged, duplicate, "
+           "configuration range and malformed names refused\n");
+    return 0;
+}

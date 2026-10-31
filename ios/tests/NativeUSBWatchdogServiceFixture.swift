@@ -49,12 +49,47 @@ struct TargetUSBRestoreController: USBRestoreController {
     func unservedFunctions() throws -> Set<String> {
         throw FixtureFailure()
     }
+
+    func selectedConfiguration() throws -> Int {
+        throw FixtureFailure()
+    }
 }
 
 private struct FileBackedController: USBRestoreController {
     let eventPath: String
+    let appendedPath: String?
 
     func publish(_ description: Data) throws {
+        try record()
+    }
+
+    // Mac stand-in for the shim's additive publication: append the name last
+    // in the selected configuration's Interfaces and write the resulting
+    // description where the test can compare it with the journaled original.
+    // This file is never linked against the C shim, so the append is done with
+    // plist serialization here.
+    func publishAppending(_ description: Data, function: String, configuration: Int) throws {
+        guard let appendedPath,
+              var plist = (try? PropertyListSerialization.propertyList(
+                  from: description, options: [], format: nil)) as? [String: Any],
+              var configurations = plist["ConfigurationDescriptors"] as? [[String: Any]],
+              (1...configurations.count).contains(configuration),
+              !configurations.contains(where: {
+                  ($0["Interfaces"] as? [String])?.contains(function) ?? false
+              }) else {
+            throw FixtureFailure()
+        }
+        var interfaces = configurations[configuration - 1]["Interfaces"] as? [String] ?? []
+        interfaces.append(function)
+        configurations[configuration - 1]["Interfaces"] = interfaces
+        plist["ConfigurationDescriptors"] = configurations
+        let appended = try PropertyListSerialization.data(
+            fromPropertyList: plist, format: .binary, options: 0)
+        try appended.write(to: URL(fileURLWithPath: appendedPath))
+        try record()
+    }
+
+    private func record() throws {
         let fd = open(eventPath, O_WRONLY | O_APPEND | O_CREAT | O_NOFOLLOW, 0o600)
         guard fd >= 0 else { throw FixtureFailure() }
         defer { _ = close(fd) }
@@ -89,10 +124,14 @@ enum NativeUSBWatchdogServiceFixture {
         let unservedPath = ProcessInfo.processInfo.environment["MAC2JB_U2_FIXTURE_UNSERVED_QUEUE"]
         let restartPath = ProcessInfo.processInfo.environment["MAC2JB_U2_FIXTURE_RESTART_LOG"]
         let healOnRestart = ProcessInfo.processInfo.environment["MAC2JB_U2_FIXTURE_HEAL_ON_RESTART"] == "1"
+        let appendedPath = ProcessInfo.processInfo.environment["MAC2JB_U3_FIXTURE_APPENDED_FILE"]
+        let selected = ProcessInfo.processInfo.environment["MAC2JB_U3_FIXTURE_SELECTED_CONFIGURATION"]
+            .flatMap(Int.init)
         let service = try NativeUSBWatchdogService(
             publicationEnabled: true, stateDirectory: state,
             expectedOwner: geteuid(), currentIdentity: identity,
-            controller: FileBackedController(eventPath: events),
+            controller: FileBackedController(eventPath: events,
+                                             appendedPath: appendedPath),
             snapshotProvider: snapshot,
             verificationSnapshotProvider: snapshot,
             validateInMemory: { data in
@@ -110,7 +149,8 @@ enum NativeUSBWatchdogServiceFixture {
                 guard let readinessPath else { return false }
                 return try Data(contentsOf: URL(fileURLWithPath: readinessPath)) ==
                     Data("1".utf8)
-            }, unservedFunctions: unservedPath.map { path in {
+            }, selectedConfiguration: selected.map { value in { value } },
+            unservedFunctions: unservedPath.map { path in {
                 // Line N of the queue = unserved functions after publication N
                 // (publication count = bytes in the event file).
                 let lines = try String(contentsOfFile: path, encoding: .utf8)

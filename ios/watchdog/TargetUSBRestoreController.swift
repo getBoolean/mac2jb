@@ -31,6 +31,36 @@ struct TargetUSBRestoreController: USBRestoreController {
         try invoke(description, publish: true)
     }
 
+    // The clone is proven byte-equal to the journaled original inside the shim
+    // before the one named function is appended last in the given
+    // configuration, so this still starts from exactly what restore puts back.
+    func publishAppending(_ description: Data, function: String, configuration: Int) throws {
+        guard let number = Int32(exactly: configuration), number > 0 else {
+            throw TargetUSBRestoreError.operation(MAC2JBUSBFunctionRejected, 0, 0)
+        }
+        var setStatus: Int32 = 0
+        var busStatus: Int32 = 0
+        let result = description.withUnsafeBytes { bytes in
+            MAC2JBUSBCloneAppendFunctionOrPublish(
+                bytes.bindMemory(to: UInt8.self).baseAddress, description.count,
+                controllerRegistryID, function, number, true, cycleBus,
+                &setStatus, &busStatus)
+        }
+        guard result == MAC2JBUSBSuccess else {
+            throw TargetUSBRestoreError.operation(result, setStatus, busStatus)
+        }
+    }
+
+    // The configuration the host currently selects; never assumed.
+    func selectedConfiguration() throws -> Int {
+        var number: Int32 = 0
+        let result = MAC2JBUSBCopySelectedConfiguration(controllerRegistryID, &number)
+        guard result == MAC2JBUSBSuccess, number > 0 else {
+            throw TargetUSBRestoreError.operation(result, number, 0)
+        }
+        return Int(number)
+    }
+
     func isConfigured() throws -> Bool {
         var configured = false
         let result = MAC2JBUSBCopyConfiguredState(controllerRegistryID, &configured)
