@@ -46,6 +46,24 @@ private func facts(configured: Bool = true, clients: [String: [Client]] = refere
                            functionClients: clients, launchdLabels: labels)
 }
 
+private func hid(name: String = "Mac2JBHID", selfOwned: Bool = true) -> USBDeviceProfile.AddedFunction {
+    .init(name: name, configurationNumber: 1, selfOwned: selfOwned, ownerProcess: "mac2jbcanary",
+          ownerLaunchdLabel: "dev.mac2jb.canary",
+          selectorResults: [.init(operation: "class", selector: 0, ioReturn: 0),
+                            .init(operation: "createPipe", selector: 7, ioReturn: -536_870_201)])
+}
+
+// Stored JSON a prior broker version could have written, by editing the
+// encoded form: the decoder, not the writer, defines what still loads.
+private func stored(_ profile: USBDeviceProfile,
+                    _ edit: (inout [String: Any]) -> Void) throws -> Data {
+    guard var object = try JSONSerialization.jsonObject(with: try profile.json()) as? [String: Any] else {
+        throw Failure(message: "profile json")
+    }
+    edit(&object)
+    return try JSONSerialization.data(withJSONObject: object)
+}
+
 @main
 enum USBDeviceProfileTests {
     static func main() throws {
@@ -58,6 +76,7 @@ enum USBDeviceProfileTests {
                     profile.usbProductID == 4779 && profile.healthyBcdUSB == 784 && profile.healthyMPS0 == 9,
                     "scalars")
         try require(profile.healPolicy().owners == ["Valeria": "com.apple.audiomxd"], "policy owners")
+        try require(profile.schemaVersion == 3 && profile.addedFunctions.isEmpty, "learned stock profile")
         try require(!String(decoding: try profile.json(), as: UTF8.self).contains("redacted"),
                     "profile must not contain serial/UDID")
 
@@ -88,6 +107,43 @@ enum USBDeviceProfileTests {
         do { _ = try USBDeviceProfile.learn(facts(clients: evil)); throw Failure(message: "bad name") }
         catch USBDeviceProfile.Failure.invalid {}
 
+        // An added function joins both lists, so `functions` stays the single
+        // source of truth for what the published description carries.
+        let added = hid()
+        let extended = try profile.recording(added)
+        try require(extended.addedFunctions == [added] && extended.functions.count == 17 &&
+                    extended.functions.contains(added.name), "recording extends both lists")
+
+        // A name already published cannot be added again.
+        do { _ = try profile.recording(hid(name: "Valeria")); throw Failure(message: "duplicate added") }
+        catch USBDeviceProfile.Failure.invalid {}
+
+        // A self-owned added function is restartable like any stock owner,
+        // alongside (not instead of) the stock owners.
+        try require(extended.healPolicy().owners ==
+                    ["Valeria": "com.apple.audiomxd", "Mac2JBHID": "dev.mac2jb.canary"] &&
+                    extended.ownerProcesses ==
+                    ["com.apple.audiomxd": "audiomxd", "dev.mac2jb.canary": "mac2jbcanary"],
+                    "added owner \(extended.healPolicy().owners) \(extended.ownerProcesses)")
+
+        // A function owned by something else must never be restarted by us.
+        let foreign = try profile.recording(hid(name: "ForeignHID", selfOwned: false))
+        try require(foreign.healPolicy().owners == ["Valeria": "com.apple.audiomxd"] &&
+                    foreign.ownerProcesses == ["com.apple.audiomxd": "audiomxd"], "foreign owner")
+
+        // An added function absent from the function list cannot be published.
+        var orphaned = try JSONDecoder().decode(USBDeviceProfile.self, from: try stored(extended) {
+            $0["functions"] = extended.functions.filter { $0 != added.name }
+        })
+        do { try orphaned.validate(); throw Failure(message: "orphan added function validated") }
+        catch USBDeviceProfile.Failure.invalid {}
+
+        // A profile predating added functions cannot describe one.
+        orphaned = try JSONDecoder().decode(USBDeviceProfile.self,
+                                            from: try stored(extended) { $0["schemaVersion"] = 2 })
+        do { try orphaned.validate(); throw Failure(message: "v2 added function validated") }
+        catch USBDeviceProfile.Failure.invalid {}
+
         // Store: private round trip; a group/other-readable file is refused.
         let directory = NSTemporaryDirectory() + "mac2jb-profile-\(getpid())"
         mkdir(directory, 0o700)
@@ -95,8 +151,23 @@ enum USBDeviceProfileTests {
         let store = USBDeviceProfileStore(path: directory + "/device-profile.json", requireRootOwner: false)
         try store.save(profile)
         try require(store.load() == profile, "store round trip")
+        try store.save(extended)
+        try require(store.load() == extended, "added function store round trip")
+        try require(!String(decoding: try extended.json(), as: UTF8.self).contains("redacted"),
+                    "extended profile must not contain serial/UDID")
+
+        // A profile learned before added functions existed keeps loading, with
+        // the section empty: no key, no re-learn.
+        try (try stored(profile) { $0["schemaVersion"] = 2; $0.removeValue(forKey: "addedFunctions") })
+            .write(to: URL(fileURLWithPath: store.path))
+        chmod(store.path, 0o600)
+        let legacy = store.load()
+        try require(legacy?.schemaVersion == 2 && legacy?.addedFunctions.isEmpty == true &&
+                    legacy?.functions == profile.functions && legacy?.owners == profile.owners,
+                    "stored profile without the added section must still load")
+
         chmod(store.path, 0o644)
         try require(store.load() == nil, "readable profile must be refused")
-        print("PASS USBDeviceProfile learning tests (8 scenarios)")
+        print("PASS USBDeviceProfile learning tests (15 scenarios)")
     }
 }

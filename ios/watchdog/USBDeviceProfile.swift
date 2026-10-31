@@ -17,6 +17,27 @@ struct USBDeviceProfile: Codable, Equatable {
         let launchdLabel: String?
     }
 
+    // One user-client call made on an added function's interface, kept verbatim
+    // so a later run can tell a working selector from a rejected one.
+    struct SelectorResult: Codable, Equatable {
+        let operation: String
+        // User-client selector number that was used.
+        let selector: Int
+        let ioReturn: Int32
+    }
+
+    // A function this port appended to the stock device description.
+    struct AddedFunction: Codable, Equatable {
+        let name: String
+        // 1-based USB configuration it was appended to.
+        let configurationNumber: Int
+        // true when this port's own canary owns the registration.
+        let selfOwned: Bool
+        let ownerProcess: String
+        let ownerLaunchdLabel: String?
+        let selectorResults: [SelectorResult]
+    }
+
     let schemaVersion: Int
     let productType: String
     let osBuild: String
@@ -34,6 +55,8 @@ struct USBDeviceProfile: Codable, Equatable {
     // Functions whose client exists only while a host is connected.
     let hostDependentFunctions: [String]
     let owners: [Owner]
+    // Empty on a stock profile; every name here is also in `functions`.
+    let addedFunctions: [AddedFunction]
 
     enum Failure: Error { case invalid(String), notHealthy(String) }
 
@@ -82,14 +105,32 @@ struct USBDeviceProfile: Codable, Equatable {
             }
         }
         let profile = USBDeviceProfile(
-            schemaVersion: 2, productType: facts.productType, osBuild: facts.osBuild,
+            schemaVersion: 3, productType: facts.productType, osBuild: facts.osBuild,
             stockSourcePath: stockSourcePath,
             stockSourceSHA256: facts.stockSource.map(sha256),
             stockSourceSize: facts.stockSource?.count,
             liveDescriptionFieldCount: live.count,
             usbVendorID: try int("vendorID"), usbProductID: try int("productID"),
             healthyBcdUSB: try int("BcdUSBVersion"), healthyMPS0: try int("MPS0"),
-            functions: functions, hostDependentFunctions: hostDependent, owners: owners)
+            functions: functions, hostDependentFunctions: hostDependent, owners: owners,
+            addedFunctions: [])
+        try profile.validate()
+        return profile
+    }
+
+    // Pure: this device's profile once `added` is appended to its description.
+    // The name joins `functions` too, so that list stays the single source of
+    // truth for the set of functions the published description carries.
+    func recording(_ added: AddedFunction) throws -> USBDeviceProfile {
+        guard !functions.contains(added.name) else { throw Failure.invalid("added function name") }
+        let profile = USBDeviceProfile(
+            schemaVersion: 3, productType: productType, osBuild: osBuild,
+            stockSourcePath: stockSourcePath, stockSourceSHA256: stockSourceSHA256,
+            stockSourceSize: stockSourceSize, liveDescriptionFieldCount: liveDescriptionFieldCount,
+            usbVendorID: usbVendorID, usbProductID: usbProductID,
+            healthyBcdUSB: healthyBcdUSB, healthyMPS0: healthyMPS0,
+            functions: functions + [added.name], hostDependentFunctions: hostDependentFunctions,
+            owners: owners, addedFunctions: addedFunctions + [added])
         try profile.validate()
         return profile
     }
@@ -100,7 +141,10 @@ struct USBDeviceProfile: Codable, Equatable {
                 throw Failure.invalid(what)
             }
         }
-        guard schemaVersion == 2 else { throw Failure.invalid("schema") }
+        // A profile learned before added functions existed stays valid, but
+        // cannot describe one.
+        guard schemaVersion == 2 || schemaVersion == 3,
+              schemaVersion == 3 || addedFunctions.isEmpty else { throw Failure.invalid("schema") }
         try check(productType, "^[A-Za-z]+[0-9]+,[0-9]+$", "productType")
         try check(osBuild, "^[0-9]{2}[A-Z][0-9]{1,5}[a-z]?$", "osBuild")
         if let digest = stockSourceSHA256 { try check(digest, "^[0-9a-f]{64}$", "stockSourceSHA256") }
@@ -120,6 +164,24 @@ struct USBDeviceProfile: Codable, Equatable {
                 try check(label, "^[A-Za-z0-9][A-Za-z0-9.-]{0,127}$", "launchdLabel")
             }
         }
+        guard addedFunctions.count <= 4,
+              Set(addedFunctions.map { $0.name }).count == addedFunctions.count else {
+            throw Failure.invalid("added function counts")
+        }
+        for added in addedFunctions {
+            guard functions.contains(added.name) else { throw Failure.invalid("added function") }
+            try check(added.name, "^[A-Za-z0-9][A-Za-z0-9_+ .,-]{0,63}$", "added function name")
+            guard (1...255).contains(added.configurationNumber),
+                  added.selectorResults.count <= 64 else { throw Failure.invalid("added function") }
+            try check(added.ownerProcess, "^[A-Za-z0-9._-]{1,32}$", "added owner process")
+            if let label = added.ownerLaunchdLabel {
+                try check(label, "^[A-Za-z0-9][A-Za-z0-9.-]{0,127}$", "added launchdLabel")
+            }
+            for result in added.selectorResults {
+                try check(result.operation, "^[A-Za-z][A-Za-z0-9]{0,31}$", "selector operation")
+                guard (0...255).contains(result.selector) else { throw Failure.invalid("selector") }
+            }
+        }
     }
 
     func healPolicy() -> USBFunctionHealPolicy {
@@ -127,21 +189,53 @@ struct USBDeviceProfile: Codable, Equatable {
         policy.hostDependentFunctions = Set(hostDependentFunctions)
         // The healer keys owners by an opaque restart token: the launchd label
         // when known, else the process name (restarted by SIGKILL).
-        policy.owners = Dictionary(owners.map { ($0.function, $0.launchdLabel ?? $0.process) },
+        // A function this port added and owns itself is restartable the same
+        // way; one owned by anything else is not ours to restart.
+        policy.owners = Dictionary(owners.map { ($0.function, $0.launchdLabel ?? $0.process) } +
+                                   selfOwned.map { ($0.name, $0.ownerLaunchdLabel ?? $0.ownerProcess) },
                                    uniquingKeysWith: { first, _ in first })
         return policy
     }
 
     // restart token -> process name, the only processes the broker may restart.
     var ownerProcesses: [String: String] {
-        Dictionary(owners.map { ($0.launchdLabel ?? $0.process, $0.process) },
+        Dictionary(owners.map { ($0.launchdLabel ?? $0.process, $0.process) } +
+                   selfOwned.map { ($0.ownerLaunchdLabel ?? $0.ownerProcess, $0.ownerProcess) },
                    uniquingKeysWith: { first, _ in first })
     }
+
+    private var selfOwned: [AddedFunction] { addedFunctions.filter { $0.selfOwned } }
 
     func json() throws -> Data {
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.sortedKeys]
         return try encoder.encode(self)
+    }
+}
+
+extension USBDeviceProfile {
+    // Stored profiles from before added functions existed have no
+    // addedFunctions key: absent decodes as none rather than failing, so a
+    // learned profile survives the schema change without a re-learn. Declared
+    // here, not in the body, to keep the memberwise initializer.
+    init(from decoder: Decoder) throws {
+        let fields = try decoder.container(keyedBy: CodingKeys.self)
+        self.init(
+            schemaVersion: try fields.decode(Int.self, forKey: .schemaVersion),
+            productType: try fields.decode(String.self, forKey: .productType),
+            osBuild: try fields.decode(String.self, forKey: .osBuild),
+            stockSourcePath: try fields.decode(String.self, forKey: .stockSourcePath),
+            stockSourceSHA256: try fields.decodeIfPresent(String.self, forKey: .stockSourceSHA256),
+            stockSourceSize: try fields.decodeIfPresent(Int.self, forKey: .stockSourceSize),
+            liveDescriptionFieldCount: try fields.decode(Int.self, forKey: .liveDescriptionFieldCount),
+            usbVendorID: try fields.decode(Int.self, forKey: .usbVendorID),
+            usbProductID: try fields.decode(Int.self, forKey: .usbProductID),
+            healthyBcdUSB: try fields.decode(Int.self, forKey: .healthyBcdUSB),
+            healthyMPS0: try fields.decode(Int.self, forKey: .healthyMPS0),
+            functions: try fields.decode([String].self, forKey: .functions),
+            hostDependentFunctions: try fields.decode([String].self, forKey: .hostDependentFunctions),
+            owners: try fields.decode([Owner].self, forKey: .owners),
+            addedFunctions: try fields.decodeIfPresent([AddedFunction].self, forKey: .addedFunctions) ?? [])
     }
 }
 

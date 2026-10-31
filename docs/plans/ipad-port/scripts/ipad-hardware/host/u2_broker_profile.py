@@ -25,6 +25,8 @@ def fetch(ssh=None):
     if result.returncode or not text.startswith("OK profile {"):
         raise ValueError("broker has no learned device profile")
     profile = json.loads(text[len("OK profile "):])
-    if profile.get("schemaVersion") != 2 or not profile.get("functions"):
+    # 2 is a stock-only profile; 3 adds the appended-function section. Both
+    # carry the fields host tools read, so accept either.
+    if profile.get("schemaVersion") not in (2, 3) or not profile.get("functions"):
         raise ValueError("unsupported device profile")
     return profile
