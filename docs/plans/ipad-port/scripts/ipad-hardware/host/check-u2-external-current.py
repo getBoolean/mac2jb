@@ -81,7 +81,7 @@ def main():
     if network_driver != (0, 0):
         raise ValueError("USB network driver differs from baseline")
     journal = subprocess.run(
-        ["/usr/bin/python3", str(HOST / "run-u2-readonly-default-description-wifi.py"),
+        ["/usr/bin/python3", str(HOST / "read-u2-journal-state-wifi.py"),
          "--native-journal"], stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
         timeout=20)
     if journal.returncode != 0 or len(journal.stdout) > 128:

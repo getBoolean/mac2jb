@@ -1,5 +1,5 @@
 #!/usr/bin/env swift
-// Generic-host USB arrival/termination monitor for the U1 read-only gate.
+// Passive Mac USB arrival/termination monitor for a target vendor/product (used by trials).
 //
 // What this code does:
 // 1. Subscribes to macOS IOKit first-match and termination notifications for

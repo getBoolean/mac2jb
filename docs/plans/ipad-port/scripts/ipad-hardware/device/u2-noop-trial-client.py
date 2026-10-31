@@ -1,5 +1,5 @@
 #!/var/jb/usr/bin/python3
-"""Drive only the v11 (auto-heal incl. restart) watchdog during a bounded no-op trial.
+"""Drive the auto-heal broker through one bounded no-op trial (job label substituted by the runner).
 
 This client never opens an IOKit controller or writes a system file. It sends
 prepare, watch, and publish-noop to the separately supervised native broker,

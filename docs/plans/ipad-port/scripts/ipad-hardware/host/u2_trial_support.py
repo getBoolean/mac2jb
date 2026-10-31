@@ -47,7 +47,7 @@ def usb_present():
 
 
 def journal_absent():
-    result = subprocess.run([sys.executable, str(HOST / "run-u2-readonly-default-description-wifi.py"),
+    result = subprocess.run([sys.executable, str(HOST / "read-u2-journal-state-wifi.py"),
                              "--native-journal"], stdout=subprocess.PIPE,
                             stderr=subprocess.DEVNULL, timeout=20)
     if result.returncode or result.stdout != b"U2_NATIVE_JOURNAL phase=absent sha256=none\n":

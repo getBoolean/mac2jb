@@ -89,7 +89,7 @@ def main():
     mac = "present" if (b"USBMUX query=ok count=1\n" in usb and
                         b"IOREG raw-ipad=yes " in usb) else "absent"
     journal = bounded(["/usr/bin/python3", str(
-        HOST / "run-u2-readonly-default-description-wifi.py"), "--native-journal"])
+        HOST / "read-u2-journal-state-wifi.py"), "--native-journal"])
     expected = ("U2_NATIVE_JOURNAL phase=restoring sha256=" +
                 "77caed18edb899d919eddc6f65229464883b20091b0ae3849bf2af0743abda39\n").encode()
     retained = "yes" if journal == expected else "changed"

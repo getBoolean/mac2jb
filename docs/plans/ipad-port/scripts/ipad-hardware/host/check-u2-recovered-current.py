@@ -73,7 +73,7 @@ def reference():
 
 def journal(phase):
     result = subprocess.run(["/usr/bin/python3", str(
-        HOST / "run-u2-readonly-default-description-wifi.py"), "--native-journal"],
+        HOST / "read-u2-journal-state-wifi.py"), "--native-journal"],
         stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, timeout=20)
     if result.returncode or len(result.stdout) > 128:
         raise ValueError("journal status unavailable")

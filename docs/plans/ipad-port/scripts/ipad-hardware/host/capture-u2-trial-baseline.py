@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Capture a twice-stable private external baseline for v9 trials on the current boot.
+"""Capture a twice-stable private external baseline for auto-heal trials on the current boot.
 
 Effect: read-only on the iPad. Requires no active journal. The live
 description must equal the stock 16-field original (taken from the last stock

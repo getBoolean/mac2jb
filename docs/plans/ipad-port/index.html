@@ -826,9 +826,9 @@
             <div class="phase-marker" aria-label="Plan 1"></div>
             <div>
               <h3><a href="01-hardware-feasibility.md">Hardware feasibility gates</a></h3>
-              <p>Proves USB-C device role, private API/entitlement access, bindable HID function publication, exact restoration, and a viable Switch-to-iPad network topology. Its read-only U1 inventory and authorization gate has passed: the earlier controller/interface and platform profiles and two attested ordinary SpringBoard baseline/set-description apps each have two validated rounds for Mac A/B and direct Switch 2 A/B. Six complete Mac host lifecycle windows recorded zero target events. Both owner-reported Switch orientations had configured, on-bus controller and external-power observations. The older toolbox and platform test apps were removed by the owner; their raw evidence remains retained privately. Earlier U2 no-op trials failed external recovery; their journals were preserved and archived after owner-assisted restarts. One v4 normal trial restored external USB functions, but a guarded clean-start v4 repeat failed to re-enumerate. Its active journal and private evidence are preserved. Exact restoration and fault recovery remain open. HID and network gates remain open, with reversible device artifacts in a cleanup ledger.</p>
+              <p>Proves USB-C device role, private API/entitlement access, bindable HID function publication, restoration, and a viable Switch-to-iPad network topology on the reference iPad, then generalizes to other jailbroken/TrollStore USB-C devices. U1 (read-only inventory and authorization) and U2 (restoration journal, watchdog and automatic same-boot USB recovery) have passed. HID publication (U3) and the network gate are next.</p>
             </div>
-            <div class="plan-output"><strong>Gate status</strong>Hardware child-plan U1 passes for read-only R1–R3 and its scoped R14 evidence decision. The raw reports, exact installed-code attestations, host lifecycle bindings, stock-source cross-check, and operator peer labels are retained privately. U2 passed on 2026-10-31 with automatic same-boot USB recovery (5/5 hardware trials). U3 is next. <a href="../../ipad/usb-auto-recovery.md">How automatic recovery works.</a> <a href="../../ipad/u2-usb-recovery-failure-analysis.md">Review the recovery analysis.</a> <a href="scripts/README.md">Browse the iPad test scripts.</a> <a href="../../ipad/hardware-matrix.md">Review the U1 evidence decision.</a></div>
+            <div class="plan-output"><strong>Gate status</strong>Hardware child-plan U1 passes for read-only R1–R3 and its scoped R14 evidence decision. The raw reports, exact installed-code attestations, host lifecycle bindings, stock-source cross-check, and operator peer labels are retained privately. U2 passed on 2026-10-31 with automatic same-boot USB recovery (7/7 hardware trials across the v11 and v12 brokers). U3 is next. <a href="../../ipad/usb-auto-recovery.md">How automatic recovery works.</a> <a href="../../ipad/hardware-matrix.md">Review the gate evidence.</a> <a href="scripts/README.md">Browse the iPad scripts.</a></div>
           </li>
           <li class="plan">
             <div class="phase-marker" aria-label="Plan 2"></div>
@@ -943,8 +943,8 @@
         </div>
         <div class="gates">
           <article class="gate block">
-            <strong>USB safety gate — U1 read-only passed; restoration pending</strong>
-            <p>Read-only U1 passes: exact app-build evidence, verified TrollStore installations, installed-code and entitlement attestation, and two validated rounds for each client, platform, and ordinary baseline/set-description profile in Mac A/B and owner-confirmed direct Switch 2 A/B. The interface-client entitlement opened all 16 observed function services with both tested client types; other profiles were denied, and both tested controller opens were unsupported. Pinned Wi-Fi SSH worked with ChatGPT open. Mac A/B each have complete zero-event 90-second USB lifecycle windows for all three profile pairs. The iPad controller reported configured and on-bus with external power on both Switch orientations. Private default/live controller description snapshots matched across two reads; the live configuration list matched the stock source and nine live fields matched the Mac host. The profile remains unchanged with a private backup. U2 no-op restoration, HID publication, and independent Switch 2 enumeration remain untested; the latter is not part of U1's written pass condition.</p>
+            <strong>USB safety gate — U1 and U2 passed; HID pending</strong>
+            <p>U1 read-only inventory and authorization passed. U2 passed: the broker journals the original description and heals automatically after a swap leaves functions unregistered, verified by strict external USB checks across normal, worker-kill and watchdog-kill trials. U3 must prove HID publication and enumeration on a generic host before any Switch typing.</p>
           </article>
           <article class="gate measure">
             <strong>Network viability gate — not tested</strong>
@@ -976,7 +976,7 @@
         <div class="next-action">
           <div>
             <h2>Start with evidence, not the app</h2>
-            <p>The owner removed the older toolbox and platform admission test apps; their validated reports remain historical evidence. Two ordinary SpringBoard R2 apps remain installed and attested, with validated baseline and set-description-only reports in every U1 physical row. The <a href="../../ipad/device-cleanup-ledger.md">device cleanup ledger</a> tracks current apps, staged archives, report files, SSH entries, and profile backup. U1's read-only decision is recorded as pass. Start U2 by proving its journal, watchdog, and recovery path before any descriptor-changing experiment.</p>
+            <p>The reference iPad runs only the auto-heal broker and SSH keys; all test apps and leftovers were removed. Read the current state first, then the runbook, before any device action. Next: the U3 HID canary on top of the broker.</p>
           </div>
           <a href="../../ipad/target-device-findings.md">Open target findings</a>
         </div>

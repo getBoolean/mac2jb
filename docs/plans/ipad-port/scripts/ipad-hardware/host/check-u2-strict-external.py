@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Compare the current iPad/Mac USB state with the v7 pretrial reference.
+"""Strict external USB check: compare the current device/Mac USB state with a pinned private baseline.
 
 This read-only checker accepts the journal phase named by its fixed CLI mode.
 It verifies the pinned private reference, same boot, original live description
@@ -73,7 +73,7 @@ def reference():
 
 def journal(phase):
     result = subprocess.run(["/usr/bin/python3", str(
-        HOST / "run-u2-readonly-default-description-wifi.py"), "--native-journal"],
+        HOST / "read-u2-journal-state-wifi.py"), "--native-journal"],
         stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, timeout=20)
     if result.returncode or len(result.stdout) > 128:
         raise ValueError("journal status unavailable")

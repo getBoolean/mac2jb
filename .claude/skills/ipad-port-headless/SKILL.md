@@ -1,6 +1,6 @@
 ---
 name: ipad-port-headless
-description: Use when doing any mac2jb iPad hardware work - connecting to the target M2 iPad over Wi-Fi SSH or USB, running device probes or host checks, U1/U2/U3 gate work, USB description publication or restore trials, recovering lost USB data, attestation, staging, or device cleanup. Not for other iOS devices.
+description: Use when doing any mac2jb iPad/iPhone hardware work - connecting to a jailbroken or TrollStore target device over Wi-Fi SSH or USB, running device probes or host checks, hardware gate work (U3 HID onward), USB description publication or restore trials, recovering lost USB data, broker deployment, or device cleanup.
 ---
 
 # Headless mac2jb iPad work

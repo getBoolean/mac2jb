@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Full read-only external USB check against the v9 trial baseline.
+"""Full read-only external USB check against the current-boot trial baseline.
 
 Effect: runs the strict codex checker (check-u2-strict-external.py main) pinned to
 build/ipad-hardware/u2-v9-trial-baseline/ (manifest SHA-256 below): live
