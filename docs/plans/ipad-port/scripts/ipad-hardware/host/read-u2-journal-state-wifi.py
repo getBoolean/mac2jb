@@ -18,7 +18,7 @@ import sys
 ROOT = Path(__file__).resolve().parents[6]
 HOST = ROOT / "docs/plans/ipad-port/scripts/ipad-hardware/host"
 PAYLOAD = ROOT / "docs/plans/ipad-port/scripts/ipad-hardware/device/u2-readonly-native-journal-state.py"
-PAYLOAD_SHA256 = "cb5992879a3f216eb12a51433f33dd73f51735a5ce6263783ed4e014c8ab24a3"
+PAYLOAD_SHA256 = "471459fc3a266d4005448fbe5f257e889c4e5dbfc69c55ec45272d93c779ecd7"
 RESULT = re.compile(
     rb"U2_NATIVE_JOURNAL phase=(?:absent|prepared|published|restoring|awaitingVerification|recoveryRequired|restored) "
     rb"sha256=(?:none|[0-9a-f]{64})\n\Z")

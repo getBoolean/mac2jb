@@ -6,12 +6,12 @@ Current state and the durable findings for the iPad port's hardware work. Dated 
 
 *Single source of truth for what is true now. Replace this block (do not append below it) after every device action. The repository skill holds procedure only and never status.*
 
-- **As of:** 2026-10-31, after the v12 broker trials and the script/doc cleanup.
-- **Gates:** U1 passed. **U2 passed** (automatic USB recovery; see [hardware matrix](hardware-matrix.md)). **U3 (HID canary) is next.**
-- **USB:** healthy. The strict external check (`host/check-u2-trial-current.py --expect-journal=absent`) passes. Pinned Wi-Fi SSH healthy.
-- **On device:** only the v12 broker `dev.mac2jb.u2.nooptrialv12` (binary `/var/jb/usr/libexec/.mac2jb-u2-noop-trial-96296113`, JetsamMemoryLimit 96) and its state directory `/var/jb/var/lib/mac2jb-u2-native/` (lock, socket, learned `device-profile.json`), the retained v11 binary `.mac2jb-u2-noop-trial-8fdb044f` (no plist), and the SSH `authorized_keys`. No active journal. Details: [device inventory](device-cleanup-ledger.md).
+- **As of:** 2026-10-31, after deploying the appending-capable broker and staging the keyboard canary for the first HID trial.
+- **Gates:** U1 passed. U2 passed. **U3's offline half is complete** (code review found and fixed two blocking defects before any trial); **no HID publication has been attempted on hardware.**
+- **USB:** healthy. Strict external check passes with no journal (`boot=same`, interfaces and scalars equal, pairing valid, host-selected configuration 5). Pinned Wi-Fi SSH healthy.
+- **On device:** the appending-capable broker `dev.mac2jb.u2.additivev13` (binary `.mac2jb-u2-noop-trial-71cf7b63`, JetsamMemoryLimit 96) is loaded and answering, and it is the only broker with a plist. Its state directory holds the lock, socket and the learned `device-profile.json`, still at schema 2 with an empty added-function section — the new broker reads the profile the previous one wrote rather than re-learning. The keyboard canary is staged at `.mac2jb-u3-hid-canary-53c00afe` (root, 0755). The earlier broker binaries `.mac2jb-u2-noop-trial-96296113` (the previously installed one) and `.mac2jb-u2-noop-trial-8fdb044f` are retained with no plist as rollback targets. No active journal. Details: [device inventory](device-cleanup-ledger.md).
 - **Product goal:** every jailbroken or TrollStore-capable USB-C iPad and iPhone; Lightning is a stretch goal. This iPad is the reference device; other devices learn their own profile.
-- **Next step:** U3 HID canary on top of the v12 broker. Tuning follow-up: one v12 normal trial used all 5 re-publications.
+- **Next step:** the first device trial of the plan's device phase, publishing a changed description with no HID configuration. Still outstanding before it: Input Monitoring must be granted on the Mac to the report reader and to the terminal that launches the trial, or report capture refuses and the trial cannot reach a pass.
 
 ## Reference device
 

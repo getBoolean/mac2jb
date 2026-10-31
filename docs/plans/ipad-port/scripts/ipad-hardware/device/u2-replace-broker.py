@@ -28,6 +28,10 @@ JETSAM = {"JetsamMemoryLimit": 96, "JetsamPriority": -49}
 BROKERS = {
     "v12": ("dev.mac2jb.u2.nooptrialv12", "9629611372c6f570db18064a2cfcd077601f59a1b5a2a4644dbc3bdbefe37a3e"),
     "v11": ("dev.mac2jb.u2.nooptrialv11", "8fdb044ff8840084e27e896432de060deecd6cdc9d27913b9ae3f379077b3736"),
+    # The broker that also carries the appending command. The two entries above
+    # have no such command compiled in, so a rollback to either removes the
+    # capability rather than leaving it unused.
+    "v13": ("dev.mac2jb.u2.additivev13", "71cf7b63072919370e2e6b41aa6b249a761cc10ff684aa79fa3a49f6348dcc97"),
 }
 
 
@@ -57,6 +61,24 @@ def status():
         peer.connect(SOCKET)
         peer.sendall(b"status\n")
         return peer.recv(128)
+
+
+def status_when_ready(deadline_seconds):
+    """Wait for the newly started broker to answer, then return its reply.
+
+    The broker recovers any journal before it binds its socket, so the socket
+    does not exist the moment launchd starts it. A single fixed sleep followed by
+    one connect reports a completed swap as a failure when the broker is merely
+    slow, which invites an operator to re-run a swap that already happened.
+    """
+    deadline = time.monotonic() + deadline_seconds
+    while True:
+        try:
+            return status()
+        except (FileNotFoundError, ConnectionRefusedError, socket.timeout, OSError):
+            if time.monotonic() >= deadline:
+                raise
+            time.sleep(0.5)
 
 
 def create(path, data, mode):
@@ -126,8 +148,7 @@ def main(mode, old, new):
     if subprocess.run([LAUNCHCTL, "bootstrap", "system", new_plist], stdout=subprocess.DEVNULL,
                       stderr=subprocess.DEVNULL, timeout=10).returncode != 0:
         raise ValueError("new bootstrap failed")
-    time.sleep(8)
-    after = status()
+    after = status_when_ready(60)
     if after != before or (journal_sha and sha(JOURNAL) != journal_sha):
         raise ValueError("new broker state differs after start")
     print("U2_REPLACE replaced %s->%s %s journal=%s" % (old, new, after.decode().strip().replace("OK ", ""),

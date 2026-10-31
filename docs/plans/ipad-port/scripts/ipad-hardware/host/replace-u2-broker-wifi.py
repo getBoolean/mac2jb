@@ -18,7 +18,11 @@ ROOT = Path(__file__).resolve().parents[6]
 HOST = ROOT / "docs/plans/ipad-port/scripts/ipad-hardware/host"
 PAYLOAD = ROOT / "docs/plans/ipad-port/scripts/ipad-hardware/device/u2-replace-broker.py"
 BINARIES = {"v12": ("u2-native-noop-trial-v12-learned-profile", "9629611372c6f570db18064a2cfcd077601f59a1b5a2a4644dbc3bdbefe37a3e"),
-            "v11": ("u2-native-noop-trial-v11-auto-heal-restart", "8fdb044ff8840084e27e896432de060deecd6cdc9d27913b9ae3f379077b3736")}
+            "v11": ("u2-native-noop-trial-v11-auto-heal-restart", "8fdb044ff8840084e27e896432de060deecd6cdc9d27913b9ae3f379077b3736"),
+            # Digests pin the exact artifact, not the variant name: rebuilding an
+            # older variant from changed sources yields a different binary, so the
+            # entry for an installed broker keeps the digest that is on the device.
+            "v13": ("u3-native-additive-function-v13", "71cf7b63072919370e2e6b41aa6b249a761cc10ff684aa79fa3a49f6348dcc97")}
 SUPPORT = runpy.run_path(str(HOST / "u2_trial_support.py"))
 
 
