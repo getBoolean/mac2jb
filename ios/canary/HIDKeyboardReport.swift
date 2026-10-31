@@ -47,8 +47,14 @@ enum HIDKeyboard {
     // One fixed string, with its keycodes written out beside each character.
     // Text encoding, indentation and bootstrap belong to later work; proving
     // that reports reach a host needs nothing more than this.
-    static let canaryKeystrokes: [(character: Character, keycode: UInt8)] = [
-        ("m", 0x10), ("a", 0x04), ("c", 0x06), ("2", 0x1F), ("j", 0x0D), ("b", 0x05),
+    static let leftShift: UInt8 = 0x02
+
+    // Upper case on purpose: the accepted canary string is upper case, and a
+    // shifted character is the only thing that puts a non-zero value in the
+    // modifier byte, so a run that typed lower case would never exercise it.
+    static let canaryKeystrokes: [(character: Character, modifiers: UInt8, keycode: UInt8)] = [
+        ("M", leftShift, 0x10), ("A", leftShift, 0x04), ("C", leftShift, 0x06),
+        ("2", 0, 0x1F), ("J", leftShift, 0x0D), ("B", leftShift, 0x05),
     ]
 
     static var canaryText: String { String(canaryKeystrokes.map(\.character)) }
@@ -56,7 +62,9 @@ enum HIDKeyboard {
     // A press and its release for each character: a held key that is never
     // released is exactly the failure the neutral report exists to prevent.
     static func canaryReports() -> [[UInt8]] {
-        canaryKeystrokes.flatMap { [report(modifiers: 0, keycode: $0.keycode), neutralReport] }
+        canaryKeystrokes.flatMap {
+            [report(modifiers: $0.modifiers, keycode: $0.keycode), neutralReport]
+        }
     }
 
     static func report(modifiers: UInt8, keycode: UInt8) -> [UInt8] {

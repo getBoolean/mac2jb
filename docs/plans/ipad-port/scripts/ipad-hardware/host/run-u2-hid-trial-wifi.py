@@ -1,0 +1,259 @@
+#!/usr/bin/env python3
+"""One HID keyboard trial, wrapped in the same safety shape as the no-op trial runner.
+
+Usage: --broker vNN --function NAME --controller REGISTRY_ID
+       --canary-path /var/jb/... --canary-sha256 HEX --broker-sha256 HEX
+       --configuration N --stock-interfaces N [--reports FILE]
+
+The expected binary digests are arguments rather than pins, because the canary
+is still changing; the trial refuses unless the Mac-built binaries and the copy
+staged on the device all match the digests given here. The host-selected
+configuration number and its pre-publication interface count come from the
+trial baseline, so nothing device-specific is compiled in.
+
+Refuses to start, with its own message for each, unless: both binaries exist at
+the expected digests; pinned Wi-Fi SSH reaches the device, since that is the
+control channel that survives USB going down; the broker is idle; the broker
+has no journal; the device is not already publishing the function; and a fresh
+restore kit was taken.
+
+Then, with network syslog recording and the passive Mac lifecycle monitor
+armed: `prepare`, `publish-hid NAME`, the canary, and the host-side enumeration
+capture. It then waits up to 120 s with no host action for USB to return, runs
+the strict external check, and sends `confirm <sha256(check output)>` only when
+that check's own output is the proof - never on a successful canary write, a
+passing descriptor comparison or anything else. On any failure the journal is
+left alone and the broker's heal-status is reported.
+
+The command surface is injected (`live_environment`), so the refusals and the
+proof-gated confirm are testable with no device and no network.
+"""
+
+import hashlib
+import json
+from pathlib import Path
+import re
+import runpy
+import secrets
+import shlex
+import subprocess
+import sys
+import tempfile
+import time
+
+ROOT = Path(__file__).resolve().parents[6]
+HOST = ROOT / "docs/plans/ipad-port/scripts/ipad-hardware/host"
+BUILD = ROOT / "build/ipad-hardware"
+SUPPORT = runpy.run_path(str(HOST / "u2_trial_support.py"))
+RECOVER = runpy.run_path(str(HOST / "recover-u2-over-wifi.py"))
+PROFILE = runpy.run_path(str(HOST / "u2_broker_profile.py"))
+IDLE_STATUS = "OK phase=absent publication=enabled"
+USB_RETURN_SECONDS = 120
+PREFIX = "U2_HID_TRIAL"
+ASK = ('import socket,sys;s=socket.socket(socket.AF_UNIX);s.settimeout(150);'
+       's.connect("/var/jb/var/lib/mac2jb-u2-native/broker.sock");'
+       's.sendall(sys.argv[1].encode()+b"\\n");print(s.recv(512).decode().strip())')
+DIGEST = ('import hashlib,sys;print(hashlib.sha256(open(sys.argv[1],"rb").read()).hexdigest())')
+BROKER = re.compile(r"v[0-9]{1,3}\Z")
+NAME = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.-]{0,31}\Z")
+DEVICE_PATH = re.compile(r"/var/jb/[A-Za-z0-9._/-]{1,128}\Z")
+HEX64 = re.compile(r"[0-9a-f]{64}\Z")
+
+
+def main(options, env):
+    """One trial. Every refusal carries its own message and leaves the journal alone."""
+    digests = env["local_digests"]()
+    if digests.get("canary") != options["canary_sha256"]:
+        raise ValueError("canary binary absent or not at the expected digest")
+    if digests.get("broker") != options["broker_sha256"]:
+        raise ValueError("broker binary absent or not at the expected digest")
+    if not env["ssh_reachable"]():
+        raise ValueError("pinned Wi-Fi SSH unreachable; the control channel that "
+                         "survives USB going down must be up before publishing")
+    status = env["ask"]("status")
+    if status != IDLE_STATUS:
+        if "phase=absent" not in status:
+            raise ValueError("broker journal present (%s); it must be cleared first" % status)
+        raise ValueError("broker not idle (%s)" % status)
+    outcome = env["function_outcome"](options["function"])
+    if outcome != "absent-service":
+        raise ValueError("device already publishing the function (%s)" % outcome)
+    if env["staged_canary_digest"]() != options["canary_sha256"]:
+        raise ValueError("staged canary on the device differs from the Mac-built binary")
+    if env["restore_kit"]():
+        raise ValueError("no fresh restore kit; a trial may not start without one")
+
+    syslog = env["syslog"]()
+    try:
+        prepared = env["ask"]("prepare")
+        if prepared != "OK prepared":
+            raise ValueError("broker refused to journal the original (%s)" % prepared)
+
+        def body():
+            published = env["ask"]("publish-hid " + options["function"])
+            if published != "OK published-additive":
+                raise ValueError("broker refused the additive publication (%s)" % published)
+            return published, env["run_canary"](), env["capture"]("published")
+
+        (published, canary, capture), lifecycle = env["observe"](body)
+        env["evidence"]("lifecycle.ndjson", lifecycle[:16384])
+        env["evidence"]("canary.txt", canary[1][:8192])
+        env["evidence"]("enumeration.txt", capture[1].encode("ascii"))
+        back = env["usb_present"]()
+        waited = 0
+        while not back and waited < USB_RETURN_SECONDS:
+            env["sleep"](3)
+            waited += 3
+            back = env["usb_present"]()
+        # Asked before any verdict: on every failure path this is what gets reported.
+        heal = env["ask"]("heal-status")
+        env["evidence"]("heal-status.txt", heal.encode("ascii") + b"\n")
+        print("%s published=%s canary-exit=%d enumeration=%s usb=%s heal=%s" % (
+            PREFIX, published, canary[0], capture[0],
+            "returned" if back else "absent", heal), flush=True)
+        if not back:
+            raise ValueError("USB did not return in %ds; journal retained, heal %s"
+                             % (USB_RETURN_SECONDS, heal))
+        env["sleep"](5)
+        ok, post = env["strict"]("awaitingVerification")
+        env["evidence"]("postcheck.txt", post)
+        if not ok:
+            raise ValueError("strict external check failed; journal retained, heal %s" % heal)
+        # The check's own output is the proof. Nothing else may clear a journal.
+        reply = env["ask"]("confirm " + hashlib.sha256(post).hexdigest())
+        ok_after, after = env["strict"]("absent")
+        env["evidence"]("after-confirm.txt", reply.encode("ascii") + b"\n" + after)
+        if reply != "OK verified-and-cleared" or not ok_after:
+            raise ValueError("broker did not clear the journal (%s)" % reply)
+        print("%s confirm=%s strict-after=pass enumeration=%s" % (PREFIX, reply, capture[0]))
+        return {"confirmed": True, "enumeration": capture[0], "canary_exit": canary[0]}
+    finally:
+        env["stop_syslog"](syslog)
+
+
+def live_environment(options):
+    """The real command surface: pinned SSH, the broker socket and the host tools."""
+    ssh = SUPPORT["ssh"]()
+    trial = BUILD / "u2-trials" / ("hid-%s-%d-%s" % (options["broker"], time.time_ns(),
+                                                     secrets.token_hex(4)))
+    trial.mkdir(mode=0o700, parents=True)
+
+    def remote(command, timeout):
+        result = subprocess.run([*ssh, command], stdout=subprocess.PIPE,
+                                stderr=subprocess.DEVNULL, timeout=timeout)
+        return result.returncode, result.stdout
+
+    def python(source, argument, timeout):
+        return remote("/var/jb/usr/bin/python3 -I -S -B -c " + shlex.quote(source) +
+                      " " + shlex.quote(argument), timeout)
+
+    def local_digest(path):
+        return hashlib.sha256(path.read_bytes()).hexdigest() if path.is_file() else None
+
+    def ask(command):
+        return python(ASK, command, 200)[1].decode("ascii", "replace").strip()
+
+    def added_function(name):
+        result = subprocess.run(
+            [sys.executable, str(HOST / "read-u2-added-function-wifi.py"), name],
+            stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, timeout=60)
+        match = re.search(r"outcome=([a-z-]+)", result.stdout.decode("ascii", "replace"))
+        if result.returncode or not match:
+            raise ValueError("the device's function state could not be read")
+        return match.group(1)
+
+    def observe(callable_body):
+        profile = PROFILE["fetch"](ssh)
+        with tempfile.TemporaryDirectory(prefix="u2-hid-monitor-", dir=BUILD) as temporary:
+            binary = SUPPORT["monitor_binary"](temporary)
+            process, ready = SUPPORT["arm_monitor"](binary, profile["usbVendorID"],
+                                                    profile["usbProductID"])
+            try:
+                result = callable_body()
+            finally:
+                tail = process.communicate(timeout=SUPPORT["WINDOW_SECONDS"] + 10)[0]
+        return result, ready + tail
+
+    def run_canary():
+        return remote(shlex.quote(options["canary_path"]) + " --function " +
+                      shlex.quote(options["function"]) + " --controller " +
+                      str(options["controller"]), 90)
+
+    def capture(stage):
+        argv = [sys.executable, str(HOST / "capture-u2-hid-enumeration.py"),
+                "--configuration=%d" % options["configuration"],
+                "--stock-interfaces=%d" % options["stock_interfaces"],
+                "--out=%s" % (trial / ("enumeration-%s.txt" % stage))]
+        if options["reports"]:
+            argv.append("--reports=%s" % options["reports"])
+        result = subprocess.run(argv, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
+                                timeout=180)
+        text = result.stdout.decode("ascii", "replace")
+        match = re.search(r"outcome=([a-z-]+)", text)
+        return (match.group(1) if match else "rejected"), text
+
+    def strict(phase):
+        result = subprocess.run([sys.executable, str(HOST / "check-u2-trial-current.py"),
+                                 "--expect-journal=" + phase], stdout=subprocess.PIPE,
+                                stderr=subprocess.DEVNULL, timeout=300)
+        return (result.returncode == 0 and
+                result.stdout.startswith(b"U2_V7_CURRENT ")), result.stdout
+
+    return {
+        "local_digests": lambda: {
+            "canary": local_digest(BUILD / "u3-hid-canary-v1"),
+            "broker": local_digest(BUILD / ("u3-native-additive-function-" + options["broker"])),
+        },
+        "staged_canary_digest": lambda: python(DIGEST, options["canary_path"], 60)[1]
+            .decode("ascii", "replace").strip(),
+        "ssh_reachable": lambda: remote("echo reachable", 30)[1] == b"reachable\n",
+        "ask": ask,
+        "function_outcome": added_function,
+        "restore_kit": lambda: subprocess.run(
+            [sys.executable, str(HOST / "backup-u2-wifi-restore-kit.py")],
+            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=400).returncode,
+        "observe": observe,
+        "run_canary": run_canary,
+        "capture": capture,
+        "usb_present": SUPPORT["usb_present"],
+        "strict": strict,
+        "syslog": lambda: RECOVER["start_syslog"](trial / "syslog.txt"),
+        "stop_syslog": RECOVER["stop_syslog"],
+        "evidence": lambda name, data: SUPPORT["private_file"](trial / name, data),
+        "sleep": time.sleep,
+        "trial": trial,
+    }
+
+
+def parse(argv):
+    options = {"reports": None}
+    for item in argv:
+        name, _, value = item.partition("=")
+        if not name.startswith("--") or not value:
+            raise ValueError("usage: see the module docstring")
+        options[name[2:].replace("-", "_")] = value
+    required = ("broker", "function", "controller", "canary_path", "canary_sha256",
+                "broker_sha256", "configuration", "stock_interfaces")
+    if any(name not in options for name in required):
+        raise ValueError("usage: see the module docstring")
+    for name in ("controller", "configuration", "stock_interfaces"):
+        options[name] = int(options[name], 0)
+    if (not BROKER.fullmatch(options["broker"]) or not NAME.fullmatch(options["function"]) or
+            not DEVICE_PATH.fullmatch(options["canary_path"]) or options["controller"] <= 0 or
+            not HEX64.fullmatch(options["canary_sha256"]) or
+            not HEX64.fullmatch(options["broker_sha256"])):
+        raise ValueError("invalid argument")
+    return options
+
+
+if __name__ == "__main__":
+    try:
+        parsed = parse(sys.argv[1:])
+        environment = live_environment(parsed)
+        print("%s evidence=%s" % (PREFIX, environment["trial"].relative_to(ROOT)), flush=True)
+        summary = main(parsed, environment)
+        print("%s %s" % (PREFIX, json.dumps(summary, sort_keys=True)))
+        raise SystemExit(0 if summary["enumeration"] == "pass" else 2)
+    except (OSError, ValueError, KeyError, subprocess.SubprocessError) as error:
+        print("%s rejected (%s); journal left alone" % (PREFIX, error))
+        raise SystemExit(1)

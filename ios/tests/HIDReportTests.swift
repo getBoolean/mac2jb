@@ -195,6 +195,14 @@ enum HIDReportTests {
         try require(stride(from: 1, to: canary.count, by: 2)
                         .allSatisfy { canary[$0] == HIDKeyboard.neutralReport },
                     "every press must be followed by a release")
+        // The accepted string is upper case, so a shifted character is the only
+        // thing that exercises the modifier byte at all.
+        try require(HIDKeyboard.canaryText == HIDKeyboard.canaryText.uppercased(),
+                    "the canary string must be upper case: \(HIDKeyboard.canaryText)")
+        try require(zip(HIDKeyboard.canaryKeystrokes, stride(from: 0, to: canary.count, by: 2))
+                        .allSatisfy { canary[$0.1][0] == ($0.0.character.isLetter
+                                                          ? HIDKeyboard.leftShift : 0) },
+                    "a shifted character must carry left shift and a digit must not")
         // 12. The pipe transport: delivery needs both a successful call and a
         // transferred count equal to the report length.
         var submitted: [UInt32] = []
