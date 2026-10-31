@@ -8,7 +8,7 @@ Redacted gate decisions for the iPad port's hardware plan (`docs/plans/ipad-port
 |---|---|---|
 | U1 read-only target inventory | **Pass (2026-10-30)** | R1–R3 and U1-scoped R14, below. Read-only inventory, authorization and role/power only. |
 | U2 restoration journal and watchdog | **Pass (2026-10-31)** | Automatic same-boot recovery: v11 5/5 and v12 2/2 hardware no-op trials. Semantic external equivalence; the `AllowMultipleCreates` flag is an accepted deviation. Below. |
-| U3 additive HID canary | Not tested | No HID function, descriptor, endpoint or report test yet. |
+| U3 additive HID canary | In progress | A changed description recovers automatically on this device (first device trial, below). No HID interface has been configured yet, so no descriptor, endpoint or report evidence exists. |
 | U4 exclusive-HID fallback | Not tested | Conditional fallback only. |
 | U5 network topology | Not tested | No paired 20-attempt exploit comparison. |
 | U6 capability contract | Not tested | No signed final capability record. |
@@ -23,6 +23,30 @@ The client, platform and ordinary baseline/set-description authorization profile
 | R2 authorization boundaries | Ordinary in-process apps: controller opens unsupported (`-536870201`), function opens denied (`-536870174`); the set-description entitlement made no read-only difference. Publication needs `com.apple.private.usbdevice.setdescription` with `platform-application` in a root launchd job (plain apps are SIGKILLed before `main`). | Pass for classification |
 | R3 direct role/power | Configured/on-bus with external power on both Switch 2 orientations; peer identity is owner-reported. | Pass (device side) |
 | R14 evidence | Private reports, attestations, host-window bindings and stock-source snapshots retained in `build/ipad-hardware/`. | Pass |
+
+## U3 first device trial (2026-10-31): a changed description recovers
+
+The first publication on this device that was **not** a no-op. The broker
+published the stock description plus one appended function and nothing
+configured that function, which separates "does a changed description still
+recover" from HID itself: a difference here cannot be blamed on HID.
+
+- Mac USB dropped on publication and returned **with no owner action in 51 s**,
+  after three bounded re-publications and no owner restarts.
+- The strict external check passed afterwards, and the journal was confirmed
+  only with that check's own output as proof, then re-checked absent.
+- The restored description carries **no** appended function: the live function
+  census has no occurrence of the published name, and the learned profile is
+  unchanged at 16 functions.
+
+Against the no-op baseline the extra function did not measurably worsen the
+function-registration race: the earlier trials recovered in 29-72 s, and one of
+them used all five permitted re-publications where this used three. Owner
+restarts were needed in some earlier trials and in none here.
+
+What this does not establish: whether the kernel materializes the appended name
+as a gadget interface at all, which is the next gate and the plan's stop
+condition if it fails. Nothing was configured, opened or typed.
 
 ## U2 decision (2026-10-31): PASS, automatic recovery
 

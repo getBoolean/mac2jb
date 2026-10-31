@@ -2,7 +2,9 @@
 """Drive the auto-heal broker through one bounded no-op trial (job label substituted by the runner).
 
 This client never opens an IOKit controller or writes a system file. It sends
-prepare, watch, and publish-noop to the separately supervised native broker,
+prepare, watch, and one publication command to the separately supervised native
+broker (publish-noop by default; publish-hid <name> appends one function and
+configures nothing, which separates a changed description from HID itself),
 which alone journals and invokes SetDescription with the captured original
 description. `normal` closes the watched worker after three seconds;
 `worker-kill` exits the client abruptly after publication; `watchdog-kill`
@@ -12,6 +14,7 @@ after a private external baseline and host lifecycle monitor are armed.
 """
 
 import os
+import re
 import socket
 import subprocess
 import sys
@@ -49,10 +52,19 @@ def wait_for_verification():
 
 
 def main():
-    if os.geteuid() != 0 or len(sys.argv) != 2 or sys.argv[1] not in (
+    if os.geteuid() != 0 or not 2 <= len(sys.argv) <= 3 or sys.argv[1] not in (
             "status", "normal", "worker-kill", "watchdog-kill"):
         raise ValueError("unsafe client arguments")
     mode = sys.argv[1]
+    publication = sys.argv[2] if len(sys.argv) == 3 else "publish-noop"
+    # The reply differs per publication, so an unexpected one is a refusal
+    # rather than something this client guesses at.
+    if publication == "publish-noop":
+        expected = b"OK published\n"
+    elif re.fullmatch(r"publish-hid [A-Za-z0-9][A-Za-z0-9_.-]{0,31}", publication):
+        expected = b"OK published-additive\n"
+    else:
+        raise ValueError("unsafe publication command")
     if ask(b"status") != b"OK phase=absent publication=enabled\n":
         raise ValueError("trial service not ready")
     if mode == "status":
@@ -65,9 +77,9 @@ def main():
         if worker.recv(256) != b"OK watching\n":
             raise ValueError("worker lease unavailable")
         print("U2_NOOP_CLIENT armed", flush=True)
-        if ask(b"publish-noop") != b"OK published\n":
-            raise ValueError("no-op publication rejected")
-        print("U2_NOOP_CLIENT publication=success", flush=True)
+        if ask(publication.encode("ascii")) != expected:
+            raise ValueError("publication rejected")
+        print("U2_NOOP_CLIENT publication=success command=%s" % publication.split()[0], flush=True)
         if mode == "normal":
             time.sleep(3)
             worker.close()

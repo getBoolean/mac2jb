@@ -58,15 +58,23 @@ def strict(phase):
     return code == 0 and out.startswith(b"U2_V7_CURRENT "), out
 
 
-def main(broker, mode):
+LABELS = {"v11": "dev.mac2jb.u2.nooptrialv11",
+          "v12": "dev.mac2jb.u2.nooptrialv12",
+          "v13": "dev.mac2jb.u2.additivev13"}
+
+
+def main(broker, mode, publication="publish-noop"):
     ssh = SUPPORT["ssh"]()
     def ask(command):
         return run([*ssh, "/var/jb/usr/bin/python3 -I -S -B -c " + shlex.quote(ASK) + " " +
                     shlex.quote(command)], 200)[1].decode().strip()
     template = CLIENT_TEMPLATE.read_bytes().decode("ascii")
-    if template.count("system/dev.mac2jb.u2.nooptrialv11") != 1 or not re.fullmatch(r"v[0-9]{1,3}", broker):
+    # The launchd label is not derivable from the broker name: the appending
+    # broker uses its own. A wrong label would only surface as a watchdog-kill
+    # that kills nothing, so resolve it explicitly and refuse an unknown broker.
+    if template.count("system/dev.mac2jb.u2.nooptrialv11") != 1 or broker not in LABELS:
         raise ValueError("client template or broker label invalid")
-    source = template.replace("system/dev.mac2jb.u2.nooptrialv11", "system/dev.mac2jb.u2.nooptrial" + broker)
+    source = template.replace("system/dev.mac2jb.u2.nooptrialv11", "system/" + LABELS[broker])
     client = "/var/jb/usr/bin/python3 -I -S -B -c " + shlex.quote(source)
     profile = PROFILE["fetch"](ssh)
     vendor, product = profile["usbVendorID"], profile["usbProductID"]
@@ -77,7 +85,8 @@ def main(broker, mode):
         raise ValueError("preflight strict external check failed")
     if run([sys.executable, str(HOST / "backup-u2-wifi-restore-kit.py")], 400)[0]:
         raise ValueError("pre-trial backup failed")
-    trial = BUILD / "u2-trials" / ("run-%s-%s-%d-%s" % (broker, mode, time.time_ns(), secrets.token_hex(4)))
+    trial = BUILD / "u2-trials" / ("run-%s-%s-%s-%d-%s" % (
+        broker, mode, publication.split()[0], time.time_ns(), secrets.token_hex(4)))
     trial.mkdir(mode=0o700)
     SUPPORT["private_file"](trial / "precheck.txt", pre)
     syslog = RECOVER["start_syslog"](trial / "syslog.txt")
@@ -87,7 +96,8 @@ def main(broker, mode):
         binary = SUPPORT["monitor_binary"](temporary)
         process, ready = SUPPORT["arm_monitor"](binary, vendor, product)
         try:
-            result = subprocess.run([*ssh, client + " " + mode], stdout=subprocess.PIPE,
+            result = subprocess.run([*ssh, client + " " + mode + " " + shlex.quote(publication)],
+                                    stdout=subprocess.PIPE,
                                     stderr=subprocess.DEVNULL, timeout=60)
             client_out = result.stdout
         except subprocess.TimeoutExpired:
@@ -125,10 +135,16 @@ def main(broker, mode):
 
 if __name__ == "__main__":
     try:
+        publication = "publish-noop"
+        argv = sys.argv[1:]
+        if len(argv) >= 2 and argv[-2] == "--publish":
+            publication = argv[-1]
+            argv = argv[:-2]
+        sys.argv = [sys.argv[0], *argv]
         if (len(sys.argv) != 4 or sys.argv[1] != "--broker" or
                 sys.argv[3] not in ("normal", "worker-kill", "watchdog-kill")):
             raise ValueError("usage: --broker vNN normal|worker-kill|watchdog-kill")
-        main(sys.argv[2], sys.argv[3])
+        main(sys.argv[2], sys.argv[3], publication)
     except (OSError, ValueError, KeyError, subprocess.SubprocessError) as error:
         print("U2_AUTOHEAL_TRIAL rejected (%s)" % error)
         raise SystemExit(1)

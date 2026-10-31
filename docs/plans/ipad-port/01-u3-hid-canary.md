@@ -81,7 +81,7 @@ Two phases, per KTD-K: everything offline first, then the device trials in order
 
 **Phase 2 — device (each ends restorable)**
 
-- [ ] **U3.6** Changed-description recovery trial, no HID configuration
+- [x] **U3.6** Changed-description recovery trial, no HID configuration
 - [ ] **U3.7** Function materializes and its user client opens *(R9 gate; stop here on failure)*
 - [ ] **U3.8** Walk the interface operation matrix
 - [ ] **U3.9** Generic-host enumeration and report capture *(the HID proof)*
@@ -190,11 +190,11 @@ Each unit ends with the device in a state the broker can restore, and the first 
 - **Approach:** publish the appended function name with **no** interface configuration at all, then let the broker restore. Compare the healing behaviour against U2's no-op baseline, since the extra function changes the registration race.
 - **Test scenarios:** the broker restores automatically; the strict external check passes; the restored function list contains no added function.
 - **Tasks:**
-  - [ ] Build and deploy a broker carrying U3.2's path; take a fresh restore kit first.
-  - [ ] Capture the healthy reference set, then publish the name with no configuration.
-  - [ ] Let the broker heal; record re-publication and owner-restart counts.
-  - [ ] Run the strict external check and confirm the journal only with its output as proof.
-  - [ ] Compare healing counts with U2's no-op trials and record the difference.
+  - [x] Build and deploy a broker carrying U3.2's path; take a fresh restore kit first.
+  - [x] Capture the healthy reference set, then publish the name with no configuration.
+  - [x] Let the broker heal; record re-publication and owner-restart counts.
+  - [x] Run the strict external check and confirm the journal only with its output as proof.
+  - [x] Compare healing counts with U2's no-op trials and record the difference.
 
 ### U3.7 Prove the function materializes and its user client opens
 
