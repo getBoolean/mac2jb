@@ -25,7 +25,7 @@ HOST = ROOT / "docs/plans/ipad-port/scripts/ipad-hardware/host"
 BUILD = ROOT / "build/ipad-hardware"
 STOCK = BUILD / "u2-v4-repeat-baseline"
 OUT = BUILD / "u2-v9-trial-baseline"
-AUDIT = runpy.run_path(str(HOST / "audit-u2-v4-repeat.py"))
+SUPPORT = runpy.run_path(str(HOST / "u2_trial_support.py"))
 
 
 def snapshot():
@@ -62,7 +62,7 @@ def snapshot():
 
 
 def capture_once(boot, stock_live, old):
-    checker = runpy.run_path(str(HOST / "check-u2-v7-current.py"))
+    checker = runpy.run_path(str(HOST / "check-u2-strict-external.py"))
     captured, network_count = snapshot()
     now = captured
     live = base64.b64decode(now["live_b64"], validate=True)
@@ -84,12 +84,12 @@ def capture_once(boot, stock_live, old):
         raise ValueError("NCM driver binding missing")
     packet = subprocess.run(["/usr/bin/python3", str(HOST / "probe-u2-ncm-packet-flow.py")],
                             stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, timeout=20)
-    if packet.returncode or packet.stdout != AUDIT["PACKET_OK"]:
+    if packet.returncode or packet.stdout != SUPPORT["PACKET_OK"]:
         raise ValueError("NCM packet flow missing")
     power = runpy.run_path(str(HOST / "check-u2-power-wifi.py"))["capture"]()
-    if power not in AUDIT["POWER_OK"]:
+    if power not in SUPPORT["POWER_OK"]:
         raise ValueError("external power missing")
-    AUDIT["journal_absent"]()
+    SUPPORT["journal_absent"]()
     return shape, {
         "snapshot.json": canonical(current), "raw-configs.bin": raw,
         "host-interfaces.json": canonical(interfaces), "host-usb-scalars.json": canonical(scalars),
@@ -101,7 +101,7 @@ def capture_once(boot, stock_live, old):
 def main():
     if OUT.exists():
         raise ValueError("baseline already exists")
-    AUDIT["journal_absent"]()
+    SUPPORT["journal_absent"]()
     old = {p.name: p.read_bytes() for p in STOCK.iterdir() if p.name != "manifest.json"}
     stock_live = base64.b64decode(json.loads(old["snapshot.json"])["snapshot"]["live_b64"], validate=True)
     boot = runpy.run_path(str(HOST / "diagnose-u2-recovery-stage.py"))["read_boot_token"]()

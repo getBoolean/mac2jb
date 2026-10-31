@@ -22,19 +22,8 @@ import tempfile
 
 ROOT = Path(__file__).resolve().parents[5]
 BUILD = ROOT / "build/ipad-hardware"
-OUTPUT = BUILD / "u2-native-noop-trial"
-OUTPUT_V2 = BUILD / "u2-native-noop-trial-v2"
-OUTPUT_V3 = BUILD / "u2-native-noop-trial-v3-buscycle"
-OUTPUT_V4 = BUILD / "u2-native-noop-trial-v4-clone"
-OUTPUT_V5 = BUILD / "u2-native-noop-trial-v5-postclone"
-OUTPUT_V6 = BUILD / "u2-native-noop-trial-v6-settled"
-OUTPUT_V7 = BUILD / "u2-native-noop-trial-v7-ready-gated"
-OUTPUT_V8 = BUILD / "u2-native-noop-trial-v8-wifi-restore"
-OUTPUT_V9 = BUILD / "u2-native-noop-trial-v9-auto-heal"
-OUTPUT_V10 = BUILD / "u2-native-noop-trial-v10-auto-heal-5"
-OUTPUT_V11 = BUILD / "u2-native-noop-trial-v11-auto-heal-restart"
-OUTPUT_V12 = BUILD / "u2-native-noop-trial-v12-learned-profile"
-OUTPUT_NO_INITIAL_CYCLE = BUILD / "u2-native-noop-trial-clone-no-initial-cycle"
+# Current broker build. Old variants (v2-v11) are in git history.
+OUTPUT = BUILD / "u2-native-noop-trial-v12-learned-profile"
 # Resolve the installed iPhoneOS SDK instead of pinning an Xcode point release.
 SDK = subprocess.run(["/usr/bin/xcrun", "--sdk", "iphoneos", "--show-sdk-path"],
                      stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True).stdout.strip()
@@ -66,80 +55,16 @@ def run(command, env=None, timeout=60):
 
 
 def main():
-    global OUTPUT
-    explicit_cycle = False
-    controller_clone = False
-    post_clone = False
+    # Flags of the current auto-heal broker: explicit bus cycle, controller
+    # clone, post-clone journal normalization, readiness gate (always on).
+    if len(sys.argv) != 2 or sys.argv[1] != "--v12-learned-profile":
+        raise ValueError("usage: --v12-learned-profile")
+    explicit_cycle = True
+    controller_clone = True
+    post_clone = True
     settled_recovery = False
-    ready_gated = False
+    ready_gated = True
     no_initial_cycle = False
-    if len(sys.argv) == 2 and sys.argv[1] == "--v2":
-        OUTPUT = OUTPUT_V2
-    elif len(sys.argv) == 2 and sys.argv[1] == "--v3-buscycle":
-        OUTPUT = OUTPUT_V3
-        explicit_cycle = True
-    elif len(sys.argv) == 2 and sys.argv[1] == "--v4-clone":
-        OUTPUT = OUTPUT_V4
-        explicit_cycle = True
-        controller_clone = True
-    elif len(sys.argv) == 2 and sys.argv[1] == "--v5-postclone":
-        OUTPUT = OUTPUT_V5
-        explicit_cycle = True
-        controller_clone = True
-        post_clone = True
-    elif len(sys.argv) == 2 and sys.argv[1] == "--v6-settled":
-        OUTPUT = OUTPUT_V6
-        explicit_cycle = True
-        controller_clone = True
-        post_clone = True
-        settled_recovery = True
-    elif len(sys.argv) == 2 and sys.argv[1] == "--v7-ready-gated":
-        OUTPUT = OUTPUT_V7
-        explicit_cycle = True
-        controller_clone = True
-        post_clone = True
-        ready_gated = True
-    elif len(sys.argv) == 2 and sys.argv[1] == "--v8-wifi-restore":
-        # v7 flags unchanged; the source adds `restore-after-failure`.
-        OUTPUT = OUTPUT_V8
-        explicit_cycle = True
-        controller_clone = True
-        post_clone = True
-        ready_gated = True
-    elif len(sys.argv) == 2 and sys.argv[1] == "--v9-auto-heal":
-        # v8 flags; the source adds automatic function-registration healing.
-        OUTPUT = OUTPUT_V9
-        explicit_cycle = True
-        controller_clone = True
-        post_clone = True
-        ready_gated = True
-    elif len(sys.argv) == 2 and sys.argv[1] == "--v10-auto-heal":
-        # v9 flags; the healer now allows 5 republications.
-        OUTPUT = OUTPUT_V10
-        explicit_cycle = True
-        controller_clone = True
-        post_clone = True
-        ready_gated = True
-    elif len(sys.argv) == 2 and sys.argv[1] == "--v11-auto-heal":
-        # v10 plus healing on watchdog restart and lease expiry.
-        OUTPUT = OUTPUT_V11
-        explicit_cycle = True
-        controller_clone = True
-        post_clone = True
-        ready_gated = True
-    elif len(sys.argv) == 2 and sys.argv[1] == "--v12-learned-profile":
-        # v11 plus an on-device learned device profile (no compiled-in device data).
-        OUTPUT = OUTPUT_V12
-        explicit_cycle = True
-        controller_clone = True
-        post_clone = True
-        ready_gated = True
-    elif len(sys.argv) == 2 and sys.argv[1] == "--clone-no-initial-cycle":
-        OUTPUT = OUTPUT_NO_INITIAL_CYCLE
-        controller_clone = True
-        no_initial_cycle = True
-    elif len(sys.argv) != 1:
-        raise ValueError("invalid build revision")
     if OUTPUT.exists() or not BUILD.is_dir() or not Path(SDK).is_dir():
         raise ValueError("unsafe output or missing SDK")
     if plistlib.loads(ENTITLEMENTS.read_bytes()) != EXPECTED_ENTITLEMENTS:

@@ -8,7 +8,7 @@ import runpy
 ROOT = Path(__file__).resolve().parents[6]
 HOST = ROOT / "docs/plans/ipad-port/scripts/ipad-hardware/host"
 BASELINE = runpy.run_path(str(HOST / "capture-u2-private-baseline.py"))
-CHECKER = runpy.run_path(str(HOST / "check-u2-v7-current.py"))
+CHECKER = runpy.run_path(str(HOST / "check-u2-strict-external.py"))
 USB = b"0123456789abcdef0123456789abcdef01234567"
 OTHER = b"fedcba9876543210fedcba9876543210fedcba98"
 ID = "/opt/homebrew/bin/idevice_id"

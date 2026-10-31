@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Full read-only external USB check against the v9 trial baseline.
 
-Effect: runs the strict codex checker (check-u2-v7-current.py main) pinned to
+Effect: runs the strict codex checker (check-u2-strict-external.py main) pinned to
 build/ipad-hardware/u2-v9-trial-baseline/ (manifest SHA-256 below): live
 description original or original plus AllowMultipleCreates, all five raw USB
 configurations with semantically equal resolved strings, host interfaces,
@@ -23,7 +23,7 @@ MANIFEST_SHA256 = "30693c83d986987a364fcdc1c2256c4771ccf4853c2dc070b3833ff2616b1
 
 
 def check(phase):
-    checker = runpy.run_path(str(HOST / "check-u2-v7-current.py"))
+    checker = runpy.run_path(str(HOST / "check-u2-strict-external.py"))
     checker["main"].__globals__["BASE"] = BASE
     checker["main"].__globals__["MANIFEST_SHA256"] = MANIFEST_SHA256
     output = io.StringIO()

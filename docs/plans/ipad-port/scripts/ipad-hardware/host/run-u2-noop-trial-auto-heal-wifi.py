@@ -11,7 +11,7 @@ syslog recording; the passive Mac lifecycle monitor; one v11 client run in
 the given mode (the broker journals, publishes the original description and
 recovers; the fault modes kill the worker or the broker). Then waits up to
 120 s with no host action for USB to return, runs the strict external check
-(check-u2-v9-current.py --expect-journal=awaitingVerification), and only if it
+(check-u2-trial-current.py --expect-journal=awaitingVerification), and only if it
 passes sends `confirm <sha256(check output)>` and re-checks with no journal.
 If USB does not return it records the broker heal status and stops; it never
 issues another controller request.
@@ -32,11 +32,11 @@ ROOT = Path(__file__).resolve().parents[6]
 HOST = ROOT / "docs/plans/ipad-port/scripts/ipad-hardware/host"
 DEVICE = ROOT / "docs/plans/ipad-port/scripts/ipad-hardware/device"
 BUILD = ROOT / "build/ipad-hardware"
-LEGACY = runpy.run_path(str(HOST / "run-u2-native-noop-trial-v4-wifi.py"))
+SUPPORT = runpy.run_path(str(HOST / "u2_trial_support.py"))
 RECOVER = runpy.run_path(str(HOST / "recover-u2-over-wifi.py"))
-CLIENT_TEMPLATE = DEVICE / "u2-native-noop-trial-client-v11.py"
+CLIENT_TEMPLATE = DEVICE / "u2-noop-trial-client.py"
 PROFILE = runpy.run_path(str(HOST / "u2_broker_profile.py"))
-CHECK = HOST / "check-u2-v9-current.py"
+CHECK = HOST / "check-u2-trial-current.py"
 ASK = ('import socket,sys;s=socket.socket(socket.AF_UNIX);s.settimeout(150);'
        's.connect("/var/jb/var/lib/mac2jb-u2-native/broker.sock");'
        's.sendall(sys.argv[1].encode()+b"\\n");print(s.recv(512).decode().strip())')
@@ -59,7 +59,7 @@ def strict(phase):
 
 
 def main(broker, mode):
-    ssh = LEGACY["ssh"]()
+    ssh = SUPPORT["ssh"]()
     def ask(command):
         return run([*ssh, "/var/jb/usr/bin/python3 -I -S -B -c " + shlex.quote(ASK) + " " +
                     shlex.quote(command)], 200)[1].decode().strip()
@@ -79,22 +79,22 @@ def main(broker, mode):
         raise ValueError("pre-trial backup failed")
     trial = BUILD / "u2-trials" / ("run-%s-%s-%d-%s" % (broker, mode, time.time_ns(), secrets.token_hex(4)))
     trial.mkdir(mode=0o700)
-    LEGACY["private_file"](trial / "precheck.txt", pre)
+    SUPPORT["private_file"](trial / "precheck.txt", pre)
     syslog = RECOVER["start_syslog"](trial / "syslog.txt")
     time.sleep(2)
     started = time.monotonic()
     with tempfile.TemporaryDirectory(prefix="u2-autoheal-monitor-", dir=BUILD) as temporary:
-        binary = LEGACY["monitor_binary"](temporary)
-        process, ready = LEGACY["arm_monitor"](binary, vendor, product)
+        binary = SUPPORT["monitor_binary"](temporary)
+        process, ready = SUPPORT["arm_monitor"](binary, vendor, product)
         try:
             result = subprocess.run([*ssh, client + " " + mode], stdout=subprocess.PIPE,
                                     stderr=subprocess.DEVNULL, timeout=60)
             client_out = result.stdout
         except subprocess.TimeoutExpired:
             client_out = b"U2_NOOP_CLIENT timeout\n"
-        tail, _ = process.communicate(timeout=LEGACY["WINDOW_SECONDS"] + 10)
-    LEGACY["private_file"](trial / "lifecycle.ndjson", (ready + tail)[:16384])
-    LEGACY["private_file"](trial / "client.txt", client_out[:4096])
+        tail, _ = process.communicate(timeout=SUPPORT["WINDOW_SECONDS"] + 10)
+    SUPPORT["private_file"](trial / "lifecycle.ndjson", (ready + tail)[:16384])
+    SUPPORT["private_file"](trial / "client.txt", client_out[:4096])
     back = usb_present()
     while not back and time.monotonic() - started < 120:
         time.sleep(3)
@@ -102,7 +102,7 @@ def main(broker, mode):
     elapsed = time.monotonic() - started
     heal = ask("heal-status")
     RECOVER["stop_syslog"](syslog)
-    LEGACY["private_file"](trial / "heal-status.txt", heal.encode() + b"\n")
+    SUPPORT["private_file"](trial / "heal-status.txt", heal.encode() + b"\n")
     print("U2_AUTOHEAL_TRIAL mode=%s usb=%s after=%.0fs %s evidence=%s" % (
         mode, "returned" if back else "absent", elapsed, heal, trial.relative_to(ROOT)), flush=True)
     if not back:
@@ -110,13 +110,13 @@ def main(broker, mode):
         raise SystemExit(2)
     time.sleep(5)
     ok, post = strict("awaitingVerification")
-    LEGACY["private_file"](trial / "postcheck.txt", post)
+    SUPPORT["private_file"](trial / "postcheck.txt", post)
     if not ok:
         print("U2_AUTOHEAL_TRIAL FAIL strict external check: %s" % post.decode().strip())
         raise SystemExit(3)
     reply = ask("confirm " + hashlib.sha256(post).hexdigest())
     ok_after, after = strict("absent")
-    LEGACY["private_file"](trial / "after-confirm.txt", reply.encode() + b"\n" + after)
+    SUPPORT["private_file"](trial / "after-confirm.txt", reply.encode() + b"\n" + after)
     print("U2_AUTOHEAL_TRIAL PASS mode=%s confirm=%s strict-after=%s" % (
         mode, reply, "pass" if ok_after else "fail"))
     if reply != "OK verified-and-cleared" or not ok_after:

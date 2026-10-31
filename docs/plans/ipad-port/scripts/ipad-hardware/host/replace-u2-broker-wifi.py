@@ -17,11 +17,9 @@ import sys
 ROOT = Path(__file__).resolve().parents[6]
 HOST = ROOT / "docs/plans/ipad-port/scripts/ipad-hardware/host"
 PAYLOAD = ROOT / "docs/plans/ipad-port/scripts/ipad-hardware/device/u2-replace-broker.py"
-BINARIES = {"v9": ("u2-native-noop-trial-v9-auto-heal", "507b5889012f5f3177cab9443bc1b0c92f50cc79b39aff4012887eedca1733cc"),
-            "v10": ("u2-native-noop-trial-v10-auto-heal-5", "1acbd2495497b0f0b6cb996e1397f2b18bd5b85151536cdc932bd0cd4eefc8e1"),
-            "v12": ("u2-native-noop-trial-v12-learned-profile", "9629611372c6f570db18064a2cfcd077601f59a1b5a2a4644dbc3bdbefe37a3e"),
+BINARIES = {"v12": ("u2-native-noop-trial-v12-learned-profile", "9629611372c6f570db18064a2cfcd077601f59a1b5a2a4644dbc3bdbefe37a3e"),
             "v11": ("u2-native-noop-trial-v11-auto-heal-restart", "8fdb044ff8840084e27e896432de060deecd6cdc9d27913b9ae3f379077b3736")}
-TRIAL = runpy.run_path(str(HOST / "run-u2-native-noop-trial-v8-wifi.py"))
+SUPPORT = runpy.run_path(str(HOST / "u2_trial_support.py"))
 
 
 def main(mode, old, new):
@@ -29,7 +27,7 @@ def main(mode, old, new):
     binary = (ROOT / "build/ipad-hardware" / name).read_bytes()
     if hashlib.sha256(binary).hexdigest() != digest:
         raise ValueError("new binary changed")
-    if not TRIAL["usb_present"]():
+    if not SUPPORT["usb_present"]():
         raise ValueError("Mac USB not healthy")
     backup = subprocess.run([sys.executable, str(HOST / "backup-u2-wifi-restore-kit.py")],
                             stdout=subprocess.PIPE, timeout=400)
@@ -46,7 +44,7 @@ def main(mode, old, new):
         print(result.stdout.decode("ascii", "replace"), end="")
         if result.returncode:
             raise ValueError("device step failed")
-    if not TRIAL["usb_present"]():
+    if not SUPPORT["usb_present"]():
         raise ValueError("Mac USB not healthy afterwards")
 
 

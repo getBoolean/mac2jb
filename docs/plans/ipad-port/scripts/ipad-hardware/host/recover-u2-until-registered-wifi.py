@@ -23,7 +23,7 @@ ROOT = Path(__file__).resolve().parents[6]
 HOST = ROOT / "docs/plans/ipad-port/scripts/ipad-hardware/host"
 DEVICE = ROOT / "docs/plans/ipad-port/scripts/ipad-hardware/device"
 RECOVER = runpy.run_path(str(HOST / "recover-u2-over-wifi.py"))
-TRIAL = runpy.run_path(str(HOST / "run-u2-native-noop-trial-v8-wifi.py"))
+SUPPORT = runpy.run_path(str(HOST / "u2_trial_support.py"))
 FUNCTIONS = {"PTP", "USBAudioControl", "USBAudioStreaming", "IapOverUsbHid", "AppleUSBMux",
              "AppleUSBEthernet", "AppleUSBNCMControl", "AppleUSBNCMData", "AppleUSBNCMControlAux",
              "AppleUSBNCMDataAux", "Valeria", "USBAudio2Control", "USBAudio2StreamIN",
@@ -32,7 +32,7 @@ MAX = 4
 
 
 def main():
-    if TRIAL["usb_present"]():
+    if SUPPORT["usb_present"]():
         raise ValueError("Mac USB present; nothing to restore")
     out = ROOT / ("build/ipad-hardware/u2-trials/register-loop-%d" % time.time_ns())
     out.mkdir(mode=0o700)
@@ -56,7 +56,7 @@ def main():
         RECOVER["stop_syslog"](syslog)
         registered = set(re.findall(r"register function ([A-Za-z0-9]+)",
                                     log.read_text("utf-8", "replace"))) & FUNCTIONS
-        present = TRIAL["usb_present"]()
+        present = SUPPORT["usb_present"]()
         line = "U2_REGISTER_LOOP attempt=%d request=%s registered=%d/16 missing=%s usb=%s" % (
             attempt, reply.decode().strip().split()[-1] if reply else "none", len(registered),
             ",".join(sorted(FUNCTIONS - registered)) or "none", "present" if present else "absent")

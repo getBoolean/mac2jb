@@ -18,14 +18,14 @@ import time
 ROOT = Path(__file__).resolve().parents[6]
 HOST = ROOT / "docs/plans/ipad-port/scripts/ipad-hardware/host"
 RECOVER = runpy.run_path(str(HOST / "recover-u2-over-wifi.py"))
-TRIAL = runpy.run_path(str(HOST / "run-u2-native-noop-trial-v8-wifi.py"))
+SUPPORT = runpy.run_path(str(HOST / "u2_trial_support.py"))
 ALLOWED = {"com.apple.audiomxd", "com.apple.accessoryd", "com.apple.ptpd"}
 
 
 def main(label):
     if label not in ALLOWED:
         raise ValueError("job not allowlisted")
-    if TRIAL["usb_present"]():
+    if SUPPORT["usb_present"]():
         raise ValueError("Mac USB present; nothing to restore")
     out = ROOT / ("build/ipad-hardware/u2-trials/owner-restart-%s-%d" % (label.split(".")[-1], time.time_ns()))
     out.mkdir(mode=0o700)
@@ -41,7 +41,7 @@ def main(label):
     registered = sorted(set(re.findall(r"register function ([A-Za-z0-9]+)", text)))
     _, census = RECOVER["run"]([sys.executable, str(HOST / "read-u2-xdci-child-census-wifi.py")], 60)
     state = [l for l in census.decode().splitlines() if l.startswith("U2_XDCI_STATE")]
-    present = TRIAL["usb_present"]()
+    present = SUPPORT["usb_present"]()
     print("U2_OWNER_RESTART job=%s kickstart-exit=%d newly-registered=%s %s usb=%s evidence=%s" % (
         label, code, ",".join(registered) or "none", state[0] if state else "state=unknown",
         "present" if present else "absent", out.relative_to(ROOT)))
