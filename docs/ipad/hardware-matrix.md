@@ -8,7 +8,7 @@ Redacted gate decisions for the iPad port's hardware plan (`docs/plans/ipad-port
 |---|---|---|
 | U1 read-only target inventory | **Pass (2026-10-30)** | R1–R3 and U1-scoped R14, below. Read-only inventory, authorization and role/power only. |
 | U2 restoration journal and watchdog | **Pass (2026-10-31)** | Automatic same-boot recovery: v11 5/5 and v12 2/2 hardware no-op trials. Semantic external equivalence; the `AllowMultipleCreates` flag is an accepted deviation. Below. |
-| U3 additive HID canary | In progress | A changed description recovers automatically on this device (first device trial, below). No HID interface has been configured yet, so no descriptor, endpoint or report evidence exists. |
+| U3 additive HID canary | In progress | A changed description recovers automatically, and an appended function **materializes as a gadget interface whose user client opens** with the interface-class entitlement alone (both below). No configuration operation has been attempted, so no descriptor, endpoint or report evidence exists. |
 | U4 exclusive-HID fallback | Not tested | Conditional fallback only. |
 | U5 network topology | Not tested | No paired 20-attempt exploit comparison. |
 | U6 capability contract | Not tested | No signed final capability record. |
@@ -23,6 +23,45 @@ The client, platform and ordinary baseline/set-description authorization profile
 | R2 authorization boundaries | Ordinary in-process apps: controller opens unsupported (`-536870201`), function opens denied (`-536870174`); the set-description entitlement made no read-only difference. Publication needs `com.apple.private.usbdevice.setdescription` with `platform-application` in a root launchd job (plain apps are SIGKILLed before `main`). | Pass for classification |
 | R3 direct role/power | Configured/on-bus with external power on both Switch 2 orientations; peer identity is owner-reported. | Pass (device side) |
 | R14 evidence | Private reports, attestations, host-window bindings and stock-source snapshots retained in `build/ipad-hardware/`. | Pass |
+
+## U3 interface gate (2026-10-31): the appended function appears and opens
+
+The plan's stop gate, and the largest unknown in the effort: whether this
+controller materializes an **arbitrary** appended function name as an
+`IOUSBDeviceInterface`, and whether userspace may open its user client. Both
+answers are yes on this device.
+
+The broker published the stock description plus one appended function; the
+least-privileged process took the broker's lease, polled for the interface, and
+made exactly one open attempt, configuring nothing.
+
+```
+lease=held function=Mac2jbCanary
+open result=0 match=0x00000000 open=0x00000000 waits=6
+open-gate outcome=opened exit=0
+```
+
+- The interface appeared after six polls, so it is created by the publication
+  rather than pre-existing.
+- The match and the open both returned success, with the open using only the
+  interface user-client exception and `platform-application` - no
+  set-description entitlement. That matches what the read-only survey measured
+  for the stock interfaces and extends it to a name this port invented.
+- Mac USB returned by itself after three bounded re-publications and no owner
+  restarts; the strict external check passed and the journal was confirmed only
+  on that check's own output.
+
+A defect had to be fixed first, and it is worth recording because it presented
+as a platform limit. The matcher reported a *successful* match that yielded
+nothing as an unavailable controller rather than an absent service. The waiting
+caller polls only on absent, so it gave up immediately (`waits=0`), released the
+lease, and the publication was then refused for having no lease holder - three
+steps downstream of the real cause. A review had already observed the same wrong
+result from the Mac and it was mis-filed as weak test coverage; the assertion
+that accepted either answer is what let it hide.
+
+What this does not establish: which configuration operations the build
+authorizes. Nothing was configured and nothing was typed.
 
 ## U3 first device trial (2026-10-31): a changed description recovers
 

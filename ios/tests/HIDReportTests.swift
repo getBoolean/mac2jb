@@ -254,6 +254,93 @@ enum HIDReportTests {
                     "a host that is not enumerated reads as a disconnect")
         try require(transport(0, 8, staged: false).write(valid) == .failed,
                     "a payload that cannot be staged is never submitted")
-        print("PASS HID canary report, plan and exit-path tests (13 scenarios)")
+
+        // 13. The staged gates. Each mode answers one question, so the modes
+        // are selected by an argument and an absent argument is still the full
+        // run: existing callers must be unchanged.
+        try require(HIDCanaryMode(argument: nil) == .full,
+                    "no mode argument must still mean the full run")
+        try require(HIDCanaryMode(argument: "full") == .full, "full mode spelling")
+        try require(HIDCanaryMode(argument: "open-only") == .openOnly,
+                    "stop-after-open mode spelling")
+        try require(HIDCanaryMode(argument: "configure-only") == .configureOnly,
+                    "configure-and-stop mode spelling")
+        for unknown in ["", "openonly", "open", "configure", "Full", "configure-only "] {
+            try require(HIDCanaryMode(argument: unknown) == nil,
+                        "an unknown mode must be refused rather than guessed: \(unknown)")
+        }
+
+        // The three answers of the stop-after-open gate are three different
+        // facts - the open succeeded, the interface never appeared, the
+        // interface appeared and the open was denied - and a shared exit code
+        // would destroy the gate. The usage refusal already owns 2.
+        let openOutcomes: [HIDCanaryOpenOutcome] = [.opened, .interfaceAbsent,
+                                                    .openDenied, .failed]
+        try require(Set(openOutcomes.map(\.exitCode)).count == openOutcomes.count,
+                    "each open outcome needs its own exit code: " +
+                    "\(openOutcomes.map(\.exitCode))")
+        try require(Set(openOutcomes.map(\.label)).count == openOutcomes.count,
+                    "each open outcome needs its own label: \(openOutcomes.map(\.label))")
+        try require(HIDCanaryOpenOutcome.opened.exitCode == 0,
+                    "an opened interface is the only success")
+        try require(openOutcomes.dropFirst().allSatisfy { $0.exitCode != 0 },
+                    "no refusal may exit zero: \(openOutcomes.map(\.exitCode))")
+        try require(openOutcomes.allSatisfy { $0.exitCode != 2 },
+                    "2 is the usage refusal, so no gate answer may reuse it")
+        try require(HIDCanaryOpenOutcome(resultRawValue: 0) == .opened,
+                    "the shim's success must read as an opened interface")
+        try require(HIDCanaryOpenOutcome(
+            resultRawValue: HIDCanaryOpenOutcome.serviceAbsentResult) == .interfaceAbsent,
+                    "the shim's service-absent must read as an absent interface")
+        try require(HIDCanaryOpenOutcome(
+            resultRawValue: HIDCanaryOpenOutcome.openDeniedResult) == .openDenied,
+                    "the shim's open-denied must read as a denied open")
+        try require(HIDCanaryOpenOutcome.serviceAbsentResult !=
+                    HIDCanaryOpenOutcome.openDeniedResult,
+                    "an absent interface and a denied open are different answers")
+        for other: Int32 in [1, 2, 3, 4, 7, 8, 9] {
+            try require(HIDCanaryOpenOutcome(resultRawValue: other) == .failed,
+                        "any other shim result is neither answer: \(other)")
+        }
+
+        // The stop-after-open gate configures nothing at all: a refusal has to
+        // be attributable to the open and not to some later selector.
+        try require(!HIDCanaryMode.openOnly.configuresInterface,
+                    "the stop-after-open gate must configure nothing")
+        try require(HIDCanaryMode.configureOnly.configuresInterface &&
+                    HIDCanaryMode.full.configuresInterface,
+                    "both other modes walk the configuration sequence")
+        // Typing is a separate question from configuring, and a host is not
+        // necessarily watching, so only the full run writes the canary string.
+        try require(HIDCanaryMode.full.reportsToWrite == HIDKeyboard.canaryReports(),
+                    "the full run types the canary string")
+        try require(HIDCanaryMode.configureOnly.reportsToWrite.isEmpty,
+                    "the configure-and-stop gate writes no reports")
+        try require(HIDCanaryMode.openOnly.reportsToWrite.isEmpty,
+                    "the stop-after-open gate writes no reports")
+
+        // 14. The configure-and-stop gate's exit: no reports, and the lease
+        // rules unchanged - one neutral report on a controlled exit and the
+        // lease handed back.
+        sink = RecordingSink()
+        lease = FakeLease(heldChecks: .max)
+        summary = HIDCanaryRun(sink: sink, lease: lease,
+                               reports: HIDCanaryMode.configureOnly.reportsToWrite).run()
+        try require(summary.reportsWritten == 0 && summary.stop == .completed,
+                    "a reportless gate writes nothing and still completes: \(summary)")
+        try require(summary.neutralAttempts == 1 && summary.neutralDelivered,
+                    "a controlled exit still writes exactly one neutral report: \(summary)")
+        try require(sink.written == [HIDKeyboard.neutralReport],
+                    "the neutral report is the only write: \(sink.written)")
+        try require(lease.released && lease.releasedNeutral == true,
+                    "the lease must be handed back: \(summary)")
+        // Without the lease not even the neutral report is allowed.
+        sink = RecordingSink()
+        lease = FakeLease(heldChecks: 0)
+        summary = HIDCanaryRun(sink: sink, lease: lease,
+                               reports: HIDCanaryMode.configureOnly.reportsToWrite).run()
+        try require(sink.written.isEmpty && summary.neutralAttempts == 0 && lease.released,
+                    "a reportless gate writes nothing once the lease is gone: \(summary)")
+        print("PASS HID canary report, plan, gate-mode and exit-path tests (14 scenarios)")
     }
 }

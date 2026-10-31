@@ -418,7 +418,8 @@ def options(**overrides):
     values = {"broker": "v13", "function": "hidcanary", "controller": 4294967297,
               "canary_path": "/var/jb/usr/local/bin/hid-canary",
               "canary_sha256": "a" * 64, "broker_sha256": "b" * 64,
-              "reports": None, "configuration": 5, "stock_interfaces": 3}
+              "reports": None, "configuration": 5, "stock_interfaces": 3,
+              "mode": "full"}
     values.update(overrides)
     return values
 
@@ -592,6 +593,78 @@ def runner():
     print("PASS HID trial runner refusals and proof-gated confirm")
 
 
+FULL_STEPS = ["start-canary", "await-lease", "start-reports", "publish-hid",
+              "collect-reports", "start-capture", "collect-canary", "collect-capture"]
+
+
+def gate_modes():
+    """The staged gates: the runner selects the canary's mode and judges it right.
+
+    Two of the modes write no reports by design, so a missing observed sequence
+    is their expected outcome and not a capture gap - but neither is it a HID
+    result, so neither may confirm the journal. The reader is still armed before
+    the publication and still collected on every path: one left running holds a
+    device seized on this Mac.
+    """
+    assert RUNNER["MODES"] == ("full", "open-only", "configure-only"), RUNNER["MODES"]
+    assert RUNNER["mode_writes_reports"]("full") is True
+    for mode in ("open-only", "configure-only"):
+        assert RUNNER["mode_writes_reports"](mode) is False, mode
+
+    # A descriptor comparison can still pass in a gate, and reading that as a
+    # keyboard proof is the conflation the gates exist to prevent.
+    assert RUNNER["mode_hid_proof"]("full", "pass") == "pass"
+    for mode in ("open-only", "configure-only"):
+        for outcome in ("pass", "reports-unobserved", "reports-mismatch"):
+            assert RUNNER["mode_hid_proof"](mode, outcome) == "not-attempted", (mode, outcome)
+
+    # The mode reaches the canary as its own argument, and the full run's
+    # command line is byte-for-byte what it was before there were modes.
+    assert RUNNER["canary_arguments"](options()) == (
+        "--function hidcanary --controller 4294967297")
+    for mode in ("open-only", "configure-only"):
+        assert RUNNER["canary_arguments"](options(mode=mode)) == (
+            "--function hidcanary --controller 4294967297 --mode " + mode), mode
+
+    # Defaulted, so an existing invocation selects the full run by saying nothing.
+    argv = ["--broker=v13", "--function=hidcanary", "--controller=4294967297",
+            "--canary-path=/var/jb/usr/local/bin/hid-canary",
+            "--canary-sha256=" + "a" * 64, "--broker-sha256=" + "b" * 64,
+            "--configuration=5", "--stock-interfaces=3"]
+    assert RUNNER["parse"](argv)["mode"] == "full", "no mode means the full run"
+    for mode in ("open-only", "configure-only"):
+        assert RUNNER["parse"](argv + ["--mode=" + mode])["mode"] == mode, mode
+    rejected(lambda: RUNNER["parse"](argv + ["--mode=openonly"]), "mode")
+
+    for mode in ("open-only", "configure-only"):
+        # Whatever the reader saw - it held the device and nothing arrived, or
+        # it bound nothing at all - a mode that writes no reports is reported
+        # as that mode's own result, never as one of the report-gap labels.
+        for reports in ("no-reports", "no-matching-device", "reports-recorded"):
+            gate = Surface(reports=reports)
+            message = rejected(
+                lambda gate=gate: RUNNER["main"](options(mode=mode), gate.environment()),
+                "writes no reports")
+            assert mode in message, (mode, reports, message)
+            for label in RUNNER["REPORT_GAPS"].values():
+                assert label not in message, (mode, reports, label, message)
+            # Not a HID result, so the journal stays journalled and healable.
+            assert not [item for item in gate.asked if item.startswith("confirm ")], (
+                mode, reports, gate.asked)
+            assert "heal-status" in gate.asked, (mode, reports)
+            # The reader is still armed before the publication and still
+            # collected: the step order does not change with the mode.
+            assert gate.steps == FULL_STEPS, (mode, reports, gate.steps)
+            assert gate.steps.index("start-reports") < gate.steps.index("publish-hid"), (
+                mode, reports)
+
+    # The full run is unchanged: it still reaches the proof-gated confirm.
+    full = Surface()
+    assert RUNNER["main"](options(mode="full"), full.environment())["confirmed"] is True
+    assert full.steps == FULL_STEPS, full.steps
+    print("PASS HID trial runner gate modes, step order and reportless outcomes")
+
+
 def compiled(temporary):
     binary = Path(temporary) / "u2-hid-report-reader"
     build = subprocess.run(
@@ -728,6 +801,7 @@ if __name__ == "__main__":
         reader()
         report_capture()
         runner()
+        gate_modes()
     finally:
         for directory in TEMPORARIES:
             shutil.rmtree(directory, ignore_errors=True)

@@ -3,7 +3,20 @@
 
 Usage: --broker vNN --function NAME --controller REGISTRY_ID
        --canary-path /var/jb/... --canary-sha256 HEX --broker-sha256 HEX
-       --configuration N --stock-interfaces N
+       --configuration N --stock-interfaces N [--mode MODE]
+
+`--mode` picks which of the canary's staged gates to attempt, defaulting to the
+full run so an existing invocation is unchanged. `open-only` stops after the
+single attempt to open the appended interface's user client and configures
+nothing; `configure-only` walks the configuration sequence, records every raw
+return and writes no reports. The gates write no reports by design, so an
+absent observed sequence is their expected outcome and not one of the
+report-gap labels - but it is not a HID result either, so a gate never
+confirms the journal: the original stays journalled and healable and the gate's
+answer is the canary's own exit code and raw returns in the evidence directory.
+The report reader is armed before the publication in every mode, because an
+interface that appears unseized is real keyboard input to this Mac whatever the
+canary was asked to do, and it is collected on every path.
 
 The expected binary digests are arguments rather than pins, because the canary
 is still changing; the trial refuses unless the Mac-built binaries and the copy
@@ -94,6 +107,13 @@ CAPTURE_SECONDS = 180
 # so a healthy run does not spend this; it is a bound, not a pause.
 REPORT_SECONDS = 90
 REPORTS_FILE = "reports.txt"
+FULL_MODE = "full"
+# The canary's staged gates, in the order they are meant to be attempted. The
+# first asks whether the appended name materializes as an interface whose user
+# client opens; the second asks which configuration operations this build
+# authorizes; the full run also types. Defaulted to the full run, so an
+# invocation from before the gates existed is unchanged.
+MODES = (FULL_MODE, "open-only", "configure-only")
 # The canary says this as soon as the broker has made it the worker.
 LEASE_MARKER = b"U3_HID_CANARY lease=held"
 PREFIX = "U2_HID_TRIAL"
@@ -141,6 +161,39 @@ def reports_gap(outcome):
     if outcome == RECORDED:
         return None
     return REPORT_GAPS.get(outcome, "reports-capture-rejected")
+
+
+def mode_writes_reports(mode):
+    """Whether this canary mode types at all.
+
+    Only the full run does. For the gates, an absent observed sequence is the
+    expected outcome rather than a capture gap, so it is reported as that
+    mode's own result - and it is still not a HID result, so it still cannot
+    confirm the journal.
+    """
+    return mode == FULL_MODE
+
+
+def mode_hid_proof(mode, outcome):
+    """The HID verdict for this mode; a mode that types nothing has none.
+
+    The descriptor comparison can still pass in a gate, and reading that as a
+    keyboard proof would be exactly the conflation the gates exist to prevent.
+    """
+    return hid_proof(outcome) if mode_writes_reports(mode) else "not-attempted"
+
+
+def canary_arguments(options):
+    """The canary's own arguments.
+
+    The mode is passed only when it is not the full run, so the command line of
+    an invocation from before the gates existed is byte-for-byte unchanged.
+    """
+    text = ("--function " + shlex.quote(options["function"]) +
+            " --controller " + str(options["controller"]))
+    if options["mode"] != FULL_MODE:
+        text += " --mode " + shlex.quote(options["mode"])
+    return text
 
 
 def checked_reports_path(value, trial):
@@ -263,11 +316,15 @@ def main(options, env):
         # Asked before any verdict: on every failure path this is what gets reported.
         heal = env["ask"]("heal-status")
         env["evidence"]("heal-status.txt", heal.encode("ascii") + b"\n")
-        proof = hid_proof(capture[0])
-        gap = reports_gap(reports[0])
-        print("%s published=%s canary-exit=%d reports=%s enumeration=%s hid-proof=%s "
-              "usb=%s heal=%s" % (PREFIX, published, canary[0], reports[0], capture[0],
-                                  proof, "returned" if back else "absent", heal), flush=True)
+        typing = mode_writes_reports(options["mode"])
+        proof = mode_hid_proof(options["mode"], capture[0])
+        # A mode that writes no reports cannot have a capture gap: there was
+        # never a sequence to miss. Its result is its own, reported below.
+        gap = reports_gap(reports[0]) if typing else None
+        print("%s mode=%s published=%s canary-exit=%d reports=%s enumeration=%s "
+              "hid-proof=%s usb=%s heal=%s"
+              % (PREFIX, options["mode"], published, canary[0], reports[0], capture[0],
+                 proof, "returned" if back else "absent", heal), flush=True)
         if not back:
             raise ValueError("USB did not return in %ds; journal retained, heal %s"
                              % (USB_RETURN_SECONDS, heal))
@@ -276,6 +333,19 @@ def main(options, env):
         env["evidence"]("postcheck.txt", post)
         if not ok:
             raise ValueError("strict external check failed; journal retained, heal %s" % heal)
+        if not typing:
+            # This gate writes no reports, so the absent sequence is expected
+            # and none of the report-gap labels applies. The gate's answer is
+            # the canary's own exit code and its printed raw returns, which are
+            # in the evidence directory; nothing here is a HID result, so the
+            # confirm is never sent and the original stays journalled and
+            # healable.
+            print("%s mode=%s gate=canary-exit-%d reports=not-expected "
+                  "journal=retained heal=%s"
+                  % (PREFIX, options["mode"], canary[0], heal), flush=True)
+            raise ValueError("canary mode %s writes no reports; its result is "
+                             "canary-exit=%d in the evidence directory; journal "
+                             "retained, heal %s" % (options["mode"], canary[0], heal))
         if gap:
             # No observed sequence, so there is no HID result to report and no
             # completed trial to clear a journal for. Said with its own label
@@ -357,9 +427,8 @@ def live_environment(options):
     def start_canary():
         """The lease holder, left running: it is the broker's worker."""
         process = subprocess.Popen(
-            [*ssh, shlex.quote(options["canary_path"]) + " --function " +
-             shlex.quote(options["function"]) + " --controller " +
-             str(options["controller"])],
+            [*ssh, shlex.quote(options["canary_path"]) + " " +
+             canary_arguments(options)],
             stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
         return {"process": process, "output": b""}
 
@@ -472,7 +541,7 @@ def live_environment(options):
 
 
 def parse(argv):
-    options = {"reports": None}
+    options = {"reports": None, "mode": FULL_MODE}
     for item in argv:
         name, _, value = item.partition("=")
         if not name.startswith("--") or not value:
@@ -484,6 +553,9 @@ def parse(argv):
         raise ValueError("usage: see the module docstring")
     for name in ("controller", "configuration", "stock_interfaces"):
         options[name] = int(options[name], 0)
+    if options["mode"] not in MODES:
+        raise ValueError("unknown canary mode %r; one of %s" %
+                         (options["mode"], ", ".join(MODES)))
     if (not BROKER.fullmatch(options["broker"]) or not NAME.fullmatch(options["function"]) or
             not DEVICE_PATH.fullmatch(options["canary_path"]) or options["controller"] <= 0 or
             not HEX64.fullmatch(options["canary_sha256"]) or

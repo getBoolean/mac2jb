@@ -60,10 +60,13 @@ private struct Arguments {
     let controllerRegistryID: UInt64
     let socketPath: String
     let leaseSeconds: Double
+    let mode: HIDCanaryMode
 
     // --function <name> --controller <registry entry id> [--socket <path>]
-    // [--lease-seconds <n>]. The controller id is a parameter so that nothing
-    // device-specific is compiled in.
+    // [--lease-seconds <n>] [--mode full|open-only|configure-only]. The
+    // controller id is a parameter so that nothing device-specific is compiled
+    // in, and the mode defaults to the full run so a caller from before the
+    // gates existed is unchanged.
     init?(_ arguments: [String]) {
         var values: [String: String] = [:]
         var index = 0
@@ -74,9 +77,11 @@ private struct Arguments {
         guard index == arguments.count,
               let function = values["--function"],
               let controller = values["--controller"],
-              let registryID = UInt64(controller), registryID > 0 else { return nil }
+              let registryID = UInt64(controller), registryID > 0,
+              let mode = HIDCanaryMode(argument: values["--mode"]) else { return nil }
         self.function = function
         controllerRegistryID = registryID
+        self.mode = mode
         socketPath = values["--socket"] ?? BrokerSocketLease.defaultSocketPath
         leaseSeconds = Double(values["--lease-seconds"] ?? "")
             ?? BrokerSocketLease.maximumLeaseSeconds
@@ -133,6 +138,9 @@ enum HIDCanaryMain {
         // exactly this before it asks the broker to publish: the broker
         // refuses to publish with no worker registered.
         line("lease=held function=\(arguments.function)")
+        // Only a gate says which gate it is: the full run's output stays
+        // exactly what it was before the modes existed.
+        if arguments.mode != .full { line("mode=\(arguments.mode.rawValue)") }
         var session: OpaquePointer?
         var matchReturn: Int32 = 0
         var openReturn: Int32 = 0
@@ -155,6 +163,20 @@ enum HIDCanaryMain {
              "match=" + hex(matchReturn) +
              " open=" + hex(openReturn) +
              " waits=\(waits)")
+        // The stop gate for the whole approach: does the kernel materialize the
+        // appended name as an interface, and does its user client open? The
+        // wait loop above has made the single open attempt, so the answer is
+        // already in hand. Nothing is configured here, so a refusal is
+        // attributable to the open and not to a later selector, and the three
+        // answers keep three exit codes.
+        guard arguments.mode.configuresInterface else {
+            let outcome = HIDCanaryOpenOutcome(resultRawValue: Int32(bitPattern: opened.rawValue))
+            line("open-gate outcome=\(outcome.label) exit=\(outcome.exitCode)")
+            // Teardown only: the Mach connection, not a USB operation.
+            if let session { MAC2JBUSBFunctionClose(session) }
+            lease.release(neutralDelivered: false)
+            exit(outcome.exitCode)
+        }
         guard opened == MAC2JBUSBFunctionSuccess, let session else {
             lease.release(neutralDelivered: false)
             exit(1)
@@ -167,13 +189,24 @@ enum HIDCanaryMain {
         _ = MAC2JBUSBFunctionCopyLedger(session, &ledger)
         line("operations " + describe(ledger) +
              " aborted-by=\(ledger.abortedBy)")
+        // The second gate's own answer: which configuration operations this
+        // build authorized, with the whole ledger above it. Said before the
+        // refusal path below, so the gate reports a refusal as its result too.
+        if arguments.mode == .configureOnly {
+            line("configure-gate outcome=" + (configured ? "configured" : "refused") +
+                 " reports=none")
+        }
         guard configured else {
             MAC2JBUSBFunctionClose(session)
             lease.release(neutralDelivered: false)
             exit(1)
         }
+        // The report list is the mode's: empty for the configure-and-stop gate,
+        // which writes no reports at all. The exit path is the full run's
+        // either way, because the lease rules do not change with the mode - one
+        // neutral report on a controlled exit, and the lease handed back.
         let summary = HIDCanaryRun(sink: transport(session, handles: handles),
-                                   lease: lease, reports: HIDKeyboard.canaryReports(),
+                                   lease: lease, reports: arguments.mode.reportsToWrite,
                                    shouldStop: { interrupted != 0 }).run()
         // Counts only: the keys themselves never reach the log.
         line("reports written=\(summary.reportsWritten) stop=\(summary.stop) " +

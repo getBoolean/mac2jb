@@ -82,7 +82,7 @@ Two phases, per KTD-K: everything offline first, then the device trials in order
 **Phase 2 — device (each ends restorable)**
 
 - [x] **U3.6** Changed-description recovery trial, no HID configuration
-- [ ] **U3.7** Function materializes and its user client opens *(R9 gate; stop here on failure)*
+- [x] **U3.7** Function materializes and its user client opens *(R9 gate; stop here on failure)*
 - [ ] **U3.8** Walk the interface operation matrix
 - [ ] **U3.9** Generic-host enumeration and report capture *(the HID proof)*
 - [ ] **U3.10** Restoration after HID, verified externally
@@ -202,10 +202,10 @@ Each unit ends with the device in a state the broker can restore, and the first 
 - **Approach:** after a U3.6-style publication, run the matcher from U3.3 and open the interface's user client with the interface-class entitlement only. Record the raw `IOReturn` at each step.
 - **Stop condition:** if no matching service appears, or the open is denied, record the boundary and stop. That is an R9 failure, and the parent plan's U4 exclusive-HID fallback becomes the question.
 - **Tasks:**
-  - [ ] **Device:** publish, then match the interface by `USBDeviceFunction` in the same controller subtree.
-  - [ ] Open its user client with the interface-class entitlement; record the raw result.
-  - [ ] Store the outcome in the learned profile and restore the description.
-  - [ ] **Stop and report** if the service never appears or the open is denied.
+  - [x] **Device:** publish, then match the interface by `USBDeviceFunction` in the same controller subtree.
+  - [x] Open its user client with the interface-class entitlement; record the raw result.
+  - [x] Store the outcome in the learned profile and restore the description.
+  - [x] **Stop and report** if the service never appears or the open is denied.
 
 ### U3.8 Walk the interface operation matrix
 

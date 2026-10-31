@@ -228,8 +228,18 @@ MAC2JBUSBFunctionResult MAC2JBUSBFunctionOpen(
     IOReturn matchStatus = IOServiceGetMatchingServices(kIOMainPortDefault, matching,
                                                         &iterator);
     if (matchReturn) *matchReturn = matchStatus;
-    if (matchStatus != kIOReturnSuccess || iterator == IO_OBJECT_NULL) {
+    if (matchStatus != kIOReturnSuccess) {
         result = MAC2JBUSBFunctionControllerUnavailable;
+        goto close_handle;
+    }
+    // A successful match that yields nothing is the name not being there, not
+    // the controller being unavailable. This platform reports an empty match as
+    // success with a null iterator, and the two must stay distinct: a caller
+    // waiting for a function it just asked a broker to publish polls on absent,
+    // so reporting unavailable here makes it give up before the publication can
+    // land, and the real answer looks like a missing controller.
+    if (iterator == IO_OBJECT_NULL) {
+        result = MAC2JBUSBFunctionServiceAbsent;
         goto close_handle;
     }
 

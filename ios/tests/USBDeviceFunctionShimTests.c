@@ -117,12 +117,14 @@ static void open_reports_absent_service(void) {
         1, "mac2jbnosuchfunction", 123, &session, &matchReturn, &openReturn);
     require(result != MAC2JBUSBFunctionSuccess);
     require(session == NULL);
-    require(result == MAC2JBUSBFunctionServiceAbsent ||
-            result == MAC2JBUSBFunctionMissingAPI ||
-            result == MAC2JBUSBFunctionControllerUnavailable);
-    if (result == MAC2JBUSBFunctionServiceAbsent) {
-        require(openReturn == MAC2JBUSBFunctionCallNotAttempted);
-    }
+    // Absent, specifically. A match that succeeds and yields nothing means the
+    // name is not published; reporting it as an unavailable controller made a
+    // caller waiting for a function it had just asked a broker to publish give
+    // up before the publication could land. Accepting either answer here is
+    // what let that through, so this asserts the exact one.
+    require(matchReturn == 0);
+    require(result == MAC2JBUSBFunctionServiceAbsent);
+    require(openReturn == MAC2JBUSBFunctionCallNotAttempted);
 }
 
 static void ledger_accepts_each_operation_once(void) {
