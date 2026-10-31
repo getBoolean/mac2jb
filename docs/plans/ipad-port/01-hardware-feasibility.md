@@ -231,17 +231,8 @@ docs/ipad/
 - **Goal:** Enumerate a direct USB boot keyboard and send bounded reports without losing original functions.
 - **Requirements:** R4–R10
 - **Dependencies:** U1, U2
-- **Files:** `ios/usb/`, `ios/entitlements/usb-helper.plist`, `ios/tests/HIDDescriptorTests.*`, `docs/plans/ipad-port/scripts/ipad-hardware/run-hid-canary.sh`
-- **Approach:** Create an iPad-specific broker backend rather than compiling the macOS `libusbd` transport unchanged. Reuse the corrected HID/report descriptors and bounded raw-report semantics as golden fixtures. After the U2 no-op round trip, append a unique generic function name and require the matching `IOUSBDeviceInterface` plus a successful least-privileged open. Exercise class, subclass, protocol, descriptor append, interrupt-IN pipe creation, buffer creation, callback registration, and commit individually while recording every `IOReturn`; stop at the first unsupported or denied operation. Only then capture enumeration on a generic host, send explicit raw press-neutral fixtures without replay, and ask the broker to restore. Keep SmileBASIC text encoding out of this generic-host stage.
-- **Test scenarios:**
-  - Reject publication when `SetDescription` returns success but no matching function service appears, the service appears under another controller, or its user client cannot open.
-  - Golden-test the 9-byte HID descriptor, 65-byte report descriptor, class/subclass/protocol, 8-byte interrupt-IN endpoint, power attributes, and VID/PID policy; do not inherit the Mac backend's missing VID or `0xA0/255` values.
-  - Capture enumeration and the host's GET_DESCRIPTOR, SET_IDLE, and SET_PROTOCOL behavior before declaring standards compliance.
-  - Covers AE2. Type the canary string into a generic host capture and compare every HID report.
-  - Time out enumeration without sending a non-neutral report and restore cleanly.
-  - Disconnect during key press and make three bounded neutral attempts before restoration.
-  - Kill the worker during configuring, enumerated, and active states and verify AE3.
-- **Verification:** Thirty generic-host cycles and thirty direct Switch keyboard-screen cycles pass with exact descriptor/report capture and externally verified restoration. A neutral endpoint write without host-side enumeration evidence does not count.
+- **Plan:** broken into ordered tasks in [`01a-hid-canary.md`](01a-hid-canary.md), which inherits R4–R10, AE2, AE3 and KTD1–KTD9 unchanged. It extends the U2 broker with an additive publication path, proves function materialization and each interface operation separately, captures enumeration on a generic host before the Switch, and reuses the repository's corrected HID fixtures.
+- **Verification:** unchanged — thirty generic-host cycles and thirty direct Switch keyboard-screen cycles pass with exact descriptor/report capture and externally verified restoration. A neutral endpoint write without host-side enumeration evidence does not count.
 
 ### U4. Characterize exclusive-HID fallback only if needed
 
