@@ -116,8 +116,6 @@ struct USBRestoreCoordinator {
               clock.uptimeNanoseconds < prepared.leaseDeadlineUptime else {
             throw USBRestoreCoordinatorError.leaseExpired
         }
-        // The durable phase change precedes the controller call. A crash at
-        // either side of that call therefore leads the watchdog to restore.
         try journal.transition(from: prepared, to: changed(prepared, .published))
         do {
             try controller.publishAppending(prepared.recipe.originalDescription,

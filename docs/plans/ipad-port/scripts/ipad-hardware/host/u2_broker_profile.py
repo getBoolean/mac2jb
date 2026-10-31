@@ -11,6 +11,9 @@ import shlex
 import subprocess
 
 HOST = Path(__file__).resolve().parent
+# A stock-only profile, and one that also carries appended functions. Host
+# tools read the same fields from either.
+ACCEPTED_SCHEMA_VERSIONS = (2, 3)
 ASK = ('import socket,sys;s=socket.socket(socket.AF_UNIX);s.settimeout(30);'
        's.connect("/var/jb/var/lib/mac2jb-u2-native/broker.sock");'
        's.sendall(b"profile\\n");print(s.recv(65536).decode().strip())')
@@ -25,8 +28,6 @@ def fetch(ssh=None):
     if result.returncode or not text.startswith("OK profile {"):
         raise ValueError("broker has no learned device profile")
     profile = json.loads(text[len("OK profile "):])
-    # 2 is a stock-only profile; 3 adds the appended-function section. Both
-    # carry the fields host tools read, so accept either.
-    if profile.get("schemaVersion") not in (2, 3) or not profile.get("functions"):
+    if profile.get("schemaVersion") not in ACCEPTED_SCHEMA_VERSIONS or not profile.get("functions"):
         raise ValueError("unsupported device profile")
     return profile

@@ -1,4 +1,5 @@
 #include "USBRestoreControllerShim.h"
+#include "USBFunctionName.h"
 
 #include <CoreFoundation/CoreFoundation.h>
 #include <IOKit/IOKitLib.h>
@@ -26,23 +27,6 @@ static bool contains_equal_values(CFDictionaryRef source, CFDictionaryRef expect
     for (CFIndex index = 0; index < count; index++) {
         const void *other = CFDictionaryGetValue(expected, keys[index]);
         if (!other || !CFEqual(values[index], other)) return false;
-    }
-    return true;
-}
-
-// ^[A-Za-z0-9][A-Za-z0-9_.-]{0,31}$ . A function name becomes a registry
-// property and an interface string, so keep it to that shape in C as well as
-// at the Swift command boundary.
-static bool valid_function_name(const char *name) {
-    if (!name) return false;
-    size_t length = strlen(name);
-    if (length < 1 || length > 32) return false;
-    for (size_t index = 0; index < length; index++) {
-        char c = name[index];
-        if ((c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z') ||
-            (c >= '0' && c <= '9')) continue;
-        if (index > 0 && (c == '_' || c == '.' || c == '-')) continue;
-        return false;
     }
     return true;
 }
@@ -107,7 +91,7 @@ MAC2JBUSBResult MAC2JBUSBAppendFunctionToDescriptionData(
     *out = NULL;
     *outLength = 0;
     if (!plist || plistLength < 8 || plistLength > 1024 * 1024) return MAC2JBUSBInvalidInput;
-    if (!valid_function_name(functionName)) return MAC2JBUSBFunctionRejected;
+    if (!mac2jb_usb_function_name_is_legal(functionName)) return MAC2JBUSBFunctionRejected;
     MAC2JBUSBResult result = MAC2JBUSBInvalidInput;
     CFDataRef input = CFDataCreate(kCFAllocatorDefault, plist, (CFIndex)plistLength);
     if (!input) return result;
@@ -253,14 +237,15 @@ MAC2JBUSBResult MAC2JBUSBCopySelectedConfiguration(
         result = MAC2JBUSBWrongController;
         goto release_service;
     }
-    CFMutableDictionaryRef properties = NULL;
-    if (IORegistryEntryCreateCFProperties(service, &properties,
-                                          kCFAllocatorDefault, 0) != kIOReturnSuccess ||
-        !properties) goto release_service;
-    CFTypeRef current = CFDictionaryGetValue(properties, CFSTR("CurrentState"));
-    if (!current || CFGetTypeID(current) != CFDictionaryGetTypeID()) {
+    // Copy only CurrentState: the whole property dictionary carries the
+    // description and every configuration descriptor, and this runs inside the
+    // broker, which launchd holds to a jetsam memory limit.
+    CFTypeRef current = IORegistryEntryCreateCFProperty(
+        service, CFSTR("CurrentState"), kCFAllocatorDefault, 0);
+    if (!current) goto release_service;
+    if (CFGetTypeID(current) != CFDictionaryGetTypeID()) {
         result = MAC2JBUSBDescriptionMismatch;
-        goto release_properties;
+        goto release_current;
     }
     CFTypeRef configuration = CFDictionaryGetValue((CFDictionaryRef)current,
                                                    CFSTR("SelectedConfiguration"));
@@ -269,12 +254,12 @@ MAC2JBUSBResult MAC2JBUSBCopySelectedConfiguration(
         !CFNumberGetValue((CFNumberRef)configuration, kCFNumberSInt32Type, &selected) ||
         selected < 1 || selected > 255) {
         result = MAC2JBUSBDescriptionMismatch;
-        goto release_properties;
+        goto release_current;
     }
     *configurationNumber = selected;
     result = MAC2JBUSBSuccess;
-release_properties:
-    CFRelease(properties);
+release_current:
+    CFRelease(current);
 release_service:
     IOObjectRelease(service);
 done:
@@ -520,7 +505,7 @@ static MAC2JBUSBResult reconstruct_or_clone(
         return MAC2JBUSBInvalidInput;
     }
     // Refuse a malformed added name before any controller user client opens.
-    if (functionName && !valid_function_name(functionName)) return MAC2JBUSBFunctionRejected;
+    if (functionName && !mac2jb_usb_function_name_is_legal(functionName)) return MAC2JBUSBFunctionRejected;
 
     MAC2JBUSBResult result = MAC2JBUSBInvalidInput;
     CFDataRef input = CFDataCreate(kCFAllocatorDefault, livePlist, (CFIndex)livePlistLength);

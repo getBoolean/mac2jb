@@ -25,9 +25,10 @@ ROOT = Path(__file__).resolve().parents[6]
 HOST = ROOT / "docs/plans/ipad-port/scripts/ipad-hardware/host"
 SOURCE = ROOT / "docs/plans/ipad-port/scripts/ipad-hardware/device/u3-readonly-added-function.py"
 SOURCE_SHA256 = "efaf197a34bdce85535a1faa4cb79deafd82d8d1a97ffcd9a09608d4b33ca194"
-NAME = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.-]{0,31}\Z")
+NAME_PATTERN = r"[A-Za-z0-9][A-Za-z0-9_.-]{0,31}"
+NAME = re.compile(NAME_PATTERN + r"\Z")
 LINE = re.compile(
-    r"U2_ADDED_FUNCTION name=([A-Za-z0-9][A-Za-z0-9_.-]{0,31}) "
+    r"U2_ADDED_FUNCTION name=(" + NAME_PATTERN + r") "
     r"state=(absent|present) controller=(same|other|unknown) "
     r"clients=([0-9]) open=(not-attempted|granted|denied)\n")
 DONE = "U2_ADDED_FUNCTION done\n"
@@ -62,10 +63,10 @@ def summarize(output):
     lines = output.decode("ascii").splitlines(keepends=True)
     if len(lines) != 2 or lines[1] != DONE:
         raise ValueError("incomplete answer")
-    name = LINE.fullmatch(lines[0])
-    if not name:
+    match = LINE.fullmatch(lines[0])
+    if not match:
         raise ValueError("invalid answer line")
-    return "U2_ADDED_FUNCTION name=%s outcome=%s" % (name[1], classify(lines[0]))
+    return "U2_ADDED_FUNCTION name=%s outcome=%s" % (match[1], classify(lines[0]))
 
 
 def main():

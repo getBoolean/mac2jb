@@ -58,7 +58,8 @@ def main():
         raise ValueError("entitlements changed")
     if not SWIFT:
         raise ValueError("no canary sources")
-    sources = [C, ROOT / "ios/usb/USBDeviceFunctionShim.h", *SWIFT]
+    sources = [C, ROOT / "ios/usb/USBDeviceFunctionShim.h",
+               ROOT / "ios/usb/USBFunctionName.h", *SWIFT]
     if any(not stat.S_ISREG(path.lstat().st_mode) or path.stat().st_size > 128 * 1024
            for path in sources):
         raise ValueError("unsafe source")

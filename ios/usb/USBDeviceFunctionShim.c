@@ -1,4 +1,5 @@
 #include "USBDeviceFunctionShim.h"
+#include "USBFunctionName.h"
 
 #include <CoreFoundation/CoreFoundation.h>
 #include <IOKit/IOKitLib.h>
@@ -7,7 +8,6 @@
 #include <stdlib.h>
 #include <string.h>
 
-#define MAX_NAME 32          /* the validation regex bound */
 #define MAX_ANCESTORS 16     /* a gadget interface sits a few levels under its controller */
 #define MAX_DESCRIPTOR 4096  /* a HID report descriptor is far smaller than this */
 
@@ -34,20 +34,9 @@ struct MAC2JBUSBFunctionSession {
     MAC2JBUSBFunctionLedger ledger;
 };
 
-static bool name_character(char c, bool first) {
-    if ((c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z') || (c >= '0' && c <= '9'))
-        return true;
-    return !first && (c == '_' || c == '.' || c == '-');
-}
-
 MAC2JBUSBFunctionResult MAC2JBUSBFunctionValidateName(const char *name) {
-    if (!name || !name[0]) return MAC2JBUSBFunctionInvalidInput;
-    size_t length = strnlen(name, MAX_NAME + 1);
-    if (length > MAX_NAME) return MAC2JBUSBFunctionInvalidInput;
-    for (size_t index = 0; index < length; index++)
-        if (!name_character(name[index], index == 0))
-            return MAC2JBUSBFunctionInvalidInput;
-    return MAC2JBUSBFunctionSuccess;
+    return mac2jb_usb_function_name_is_legal(name)
+        ? MAC2JBUSBFunctionSuccess : MAC2JBUSBFunctionInvalidInput;
 }
 
 bool MAC2JBUSBFunctionNameMatches(const char *property, const char *wanted) {
@@ -57,8 +46,8 @@ bool MAC2JBUSBFunctionNameMatches(const char *property, const char *wanted) {
     // the published name is a different function.
     if (MAC2JBUSBFunctionValidateName(property) != MAC2JBUSBFunctionSuccess) return false;
     if (MAC2JBUSBFunctionValidateName(wanted) != MAC2JBUSBFunctionSuccess) return false;
-    size_t length = strnlen(wanted, MAX_NAME + 1);
-    if (strnlen(property, MAX_NAME + 1) != length) return false;
+    size_t length = strnlen(wanted, MAC2JB_USB_FUNCTION_NAME_MAX + 1);
+    if (strnlen(property, MAC2JB_USB_FUNCTION_NAME_MAX + 1) != length) return false;
     return memcmp(property, wanted, length) == 0;
 }
 
@@ -248,7 +237,7 @@ MAC2JBUSBFunctionResult MAC2JBUSBFunctionOpen(
     bool sawName = false;
     io_service_t candidate;
     while ((candidate = IOIteratorNext(iterator))) {
-        char name[MAX_NAME + 2];
+        char name[MAC2JB_USB_FUNCTION_NAME_MAX + 2];
         if (function_name_of(candidate, name, sizeof(name)) &&
             MAC2JBUSBFunctionNameMatches(name, functionName)) {
             sawName = true;

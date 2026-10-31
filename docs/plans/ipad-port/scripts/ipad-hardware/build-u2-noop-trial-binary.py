@@ -76,7 +76,8 @@ def main():
         raise ValueError("unsafe output or missing SDK")
     if plistlib.loads(ENTITLEMENTS.read_bytes()) != EXPECTED_ENTITLEMENTS:
         raise ValueError("entitlements changed")
-    sources = [C, *SWIFT, ROOT / "ios/usb/USBRestoreControllerShim.h"]
+    sources = [C, *SWIFT, ROOT / "ios/usb/USBRestoreControllerShim.h",
+               ROOT / "ios/usb/USBFunctionName.h"]
     if any(not stat.S_ISREG(path.lstat().st_mode) or path.stat().st_size > 128 * 1024
            for path in sources):
         raise ValueError("unsafe source")
