@@ -47,6 +47,93 @@ def capture(directory, label):
         (directory / ("%s-%s.txt" % (name, label))).chmod(0o600)
 
 
+# The marker every connect attempt writes. A gap between two of these is a gap
+# in the device's log; a gap with no marker in it is a gap in the capture, and
+# telling them apart is the whole reason the markers exist.
+CONNECT_MARKER = "--- syslog capture connect"
+DISCONNECT_MARKER = "--- syslog capture lost"
+# How long the relay may deliver nothing before it is treated as dead. The
+# observed failure is not an exit: the relay stops delivering and the process
+# stays alive, so a loop that waits for its child to exit never reconnects and
+# the log simply stops - which is how a whole bus cycle, every heal
+# re-publication and the restore went unrecorded. Silence is therefore the
+# trigger. 20 s is longer than any quiet period a device under trial has, and
+# shorter than the 29-72 s the device spends off bus, so a stall is noticed
+# while it still matters.
+SYSLOG_STALL_SECONDS = 20
+# Run as its own process so stopping the capture is one killpg, as before. Self
+# contained: it is handed the command to supervise, so the loop can be driven
+# offline against a stand-in that stalls the way the real relay does.
+SUPERVISOR_SOURCE = r'''
+import os, select, subprocess, sys, time
+
+def mark(handle, marker, text):
+    handle.write(("%s %s at=%s ---\n" % (marker, text,
+                  time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()))).encode("ascii"))
+
+def pump(handle, child, stall):
+    """Copy the relay's output through until it stops; return why it stopped."""
+    while True:
+        ready = select.select([child.stdout], [], [], stall)[0]
+        if not ready:
+            child.kill()
+            child.wait()
+            return "stalled-after-%ds-of-silence" % int(stall)
+        chunk = os.read(child.stdout.fileno(), 65536)
+        if not chunk:
+            code = child.wait()
+            return "exited-code-%d" % code
+        handle.write(chunk)
+
+def main():
+    path, stall = sys.argv[1], float(sys.argv[2])
+    connect, lost = sys.argv[3], sys.argv[4]
+    attempt = 0
+    with open(path, "ab", buffering=0) as handle:
+        while True:
+            attempt += 1
+            mark(handle, connect, "attempt=%d" % attempt)
+            try:
+                child = subprocess.Popen(sys.argv[5:], stdout=subprocess.PIPE,
+                                         stderr=subprocess.DEVNULL)
+            except OSError as error:
+                mark(handle, lost, "attempt=%d reason=unstartable-%s" % (attempt, error.errno))
+                time.sleep(1)
+                continue
+            try:
+                reason = pump(handle, child, stall)
+            finally:
+                if child.poll() is None:
+                    child.kill()
+                    child.wait()
+                child.stdout.close()
+            mark(handle, lost, "attempt=%d reason=%s" % (attempt, reason))
+            # A backoff, so a relay that cannot start at all cannot spin.
+            time.sleep(1)
+
+main()
+'''
+
+
+def start_supervisor(command, path, stall=SYSLOG_STALL_SECONDS):
+    """Run `command` under the reconnecting supervisor, appending to `path`.
+
+    Its own session, so stop_syslog's killpg takes the supervisor and whatever
+    relay it currently has; the relay is deliberately not given a session of
+    its own, so it cannot outlive that.
+    """
+    handle = open(path, "ab")
+    try:
+        os.chmod(path, 0o600)
+        return subprocess.Popen(
+            [sys.executable, "-I", "-S", "-B", "-c", SUPERVISOR_SOURCE,
+             str(path), str(stall), CONNECT_MARKER, DISCONNECT_MARKER, *command],
+            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+            start_new_session=True)
+    finally:
+        handle.close()
+
+
 def start_syslog(path):
     """Stream the iPad's live syslog over the network (works with USB down) into a private file."""
     ids = subprocess.run(["/opt/homebrew/bin/idevice_id", "-n"], stdout=subprocess.PIPE,
@@ -55,13 +142,11 @@ def start_syslog(path):
     ids = sorted({value for value in ids if value.startswith(b"00008112-")})
     if len(ids) != 1:
         return None
-    handle = open(path, "wb")
-    path.chmod(0o600)
-    # The network relay drops when the USB link changes; reconnect until stopped.
-    loop = ('while :; do /opt/homebrew/bin/idevicesyslog -n -u "$1" --no-colors; '
-            'echo "--- syslog stream reconnect ---"; sleep 1; done')
-    return subprocess.Popen(["/bin/sh", "-c", loop, "sh", ids[0].decode()], stdout=handle,
-                            stderr=subprocess.DEVNULL, start_new_session=True)
+    # The relay drops, and worse, goes silent without dropping, when the USB
+    # link changes - which is exactly when this capture is the only record
+    # there is. The supervisor reconnects on either and marks every attempt.
+    return start_supervisor(["/opt/homebrew/bin/idevicesyslog", "-n", "-u",
+                             ids[0].decode(), "--no-colors"], path)
 
 
 def stop_syslog(process):

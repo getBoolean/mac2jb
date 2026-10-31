@@ -15,7 +15,19 @@ import sys
 
 HOST = Path(__file__).resolve().parent
 MONITOR = HOST / "u2-usb-lifecycle-monitor.swift"
+# The short window, for a probe batch that does not take the device off bus.
 WINDOW_SECONDS = 20
+# The window a description-changing trial needs. The device is measured at
+# 29-72 s to come back on bus after a description change, so a 20 s window
+# always closed before the earliest return and reported `terminated` then
+# `missing-at-window-end` - the absence, never the reattach. A trial can cycle
+# the bus twice (the publication's own cycle and the explicit re-enumeration
+# cycle), so the window has to outlast 2 x 72 s of reattach plus the 30 s lease
+# ceiling, the report deadline and the registry read: about 264 s. 300 s covers
+# that with margin and stays inside the monitor's own 1...600 s limit. The
+# monitor buffers its events and emits them when the window ends, so it is left
+# to run the window out rather than being cut short.
+TRIAL_WINDOW_SECONDS = 300
 PACKET_OK = (b"U2_NCM_PACKET peer=one-linklocal echo=reply "
              b"link=active usbmux=one ssh=healthy\n")
 POWER_OK = {
@@ -66,15 +78,23 @@ def monitor_binary(temporary):
     return binary
 
 
-def arm_monitor(binary, vendor, product):
+def arm_monitor(binary, vendor, product, window=WINDOW_SECONDS):
+    """Arm the passive monitor for `window` seconds and check the ready record.
+
+    The window is a parameter because a trial that changes the description has
+    to outlast the device's reattach, while a probe batch that never leaves the
+    bus does not; the ready record is checked against the window that was
+    asked for, so a monitor armed for the wrong one is refused rather than
+    silently measuring a shorter period than the caller believes.
+    """
     process = subprocess.Popen(
-        [str(binary), f"0x{vendor:04x}", f"0x{product:04x}", str(WINDOW_SECONDS)],
+        [str(binary), f"0x{vendor:04x}", f"0x{product:04x}", str(window)],
         stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
     try:
         available, _, _ = select.select([process.stdout], [], [], 8)
         ready = process.stdout.readline() if available else b""
         record = json.loads(ready)
-        if (record.get("type") != "ready" or record.get("windowSeconds") != WINDOW_SECONDS or
+        if (record.get("type") != "ready" or record.get("windowSeconds") != window or
                 record.get("target", {}).get("vendorID") != f"0x{vendor:04x}" or
                 record.get("target", {}).get("productID") != f"0x{product:04x}"):
             raise ValueError("monitor target not ready")

@@ -74,12 +74,47 @@ An owner is a function whose direct client is an `IOUSBDeviceInterfaceUserClient
 `NativeUSBWatchdogService` runs the healer automatically:
 - after its readiness gate times out on a first publication (worker-death and normal recovery paths);
 - after a watchdog restart or lease expiry, at most 3 start-up heals per journal so a crashing broker cannot re-publish forever;
-- after `restore-after-failure`, whose reply ends with the heal summary.
+- after `restore-after-failure`, whose reply ends with the heal summary;
+- on an explicit `heal` during a live publication, which the additive build
+  accepts while a worker is registered and the lease has not expired. There is
+  no automatic trigger for this one: a live publication is something a host is
+  watching, so the broker only heals it when asked.
 
-Socket commands: `heal`, `heal-status`, `profile`. Re-publications go through `USBRestoreCoordinator.recoverAfterExternalFailure`, which journals them and refuses while configured. If healing succeeds without a re-publication, `acceptConfiguredOriginal` records `awaitingVerification`, because the no-op already published the journaled original. **Healing never confirms or clears the journal**; that needs the host's external proof.
+Socket commands: `heal`, `heal-status`, `profile`, and in the additive build
+`renew-lease`.
 
-Build: `docs/plans/ipad-port/scripts/ipad-hardware/build-u2-noop-trial-binary.py --v12-learned-profile`,
-or `--v13-additive-function` for the build that can also append a function.
+**Two kinds of re-publication, and the distinction is the whole point.**
+*Restoring* - an expired lease, a dead worker, a watchdog restart, an explicit
+`restore` or `restore-after-failure` - publishes the bare journaled original
+through `recoverAfterExternalFailure`, because the bus coming back matters more
+than anything appended surviving. *Continuing* - a `heal` while the lease is
+live - publishes the original **plus** the recorded appended function in one
+write, through `republishIntended`. Before this existed, the only mechanism that
+brought the bus back was also the one that deleted the function under test, so
+no appending trial could ever be observed; see `hardware-matrix.md`.
+
+`republishIntended` makes no journal write: the phase stays `published`, the
+recipe stays the restore target, and because the record already names the
+function a crash either side of the call still restores correctly. If healing
+succeeds without a re-publication, `acceptConfiguredOriginal` records
+`awaitingVerification`. **Healing never confirms or clears the journal**; that
+needs the host's external proof.
+
+**The renewable lease.** A publication's lease is granted in quanta of 30 s and
+`renew-lease` moves the deadline forward, never past a total cap of 180 s per
+publication. The cap is enforced in the coordinator, not the journal, because
+the journal would need a new schema field for the grant time and host tools
+parse that record; the anchor lives in broker memory only, so a restarted broker
+cannot renew and the journaled deadline is what applies. Renewal is refused once
+a lease has expired - a dead lease is not revivable, because the watchdog may
+already be restoring it. The host drives it every 10 s, giving three attempts
+per quantum, and renews immediately before `heal` because the broker is
+single-threaded and cannot answer while it heals.
+
+Build: `docs/plans/ipad-port/scripts/ipad-hardware/build-u2-noop-trial-binary.py --v12-learned-profile`
+for the conservative rollback artifact, which has neither `publish-hid` nor
+`renew-lease` compiled in, or `--v17-renewable-lease` for the current additive
+build.
 
 ## Restoring a description that is not a no-op
 
@@ -108,6 +143,16 @@ Two rules keep the strip from becoming a way to lose an interface:
   carries that original. That is what recovers a publication whose controller
   call failed with nothing written, and it cannot remove a foreign interface,
   because a bus carrying one fails both the strip and the retry.
+
+The continuing re-publication reuses the same two mechanisms in one call. It
+asks the shim to strip the appended name and then append it again, so the
+clone it publishes is the journaled original plus that one function; and because
+an earlier heal round may already have restored the stock description, it
+accepts both live shapes — name still present and stripped, or already absent
+and simply appended. Any other difference from the original is still refused.
+Trying the stripping form first is safe because every refusal it can raise is
+decided while comparing the in-process clone, before `SetDescription` is
+reached, so a rejected first attempt has written neither controller nor bus.
 
 `acceptConfiguredOriginal` also refuses while the record still names an appended
 function: healing can bring the controller on bus with no re-publication, but

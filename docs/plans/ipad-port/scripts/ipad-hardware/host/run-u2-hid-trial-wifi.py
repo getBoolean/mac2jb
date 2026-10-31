@@ -62,13 +62,27 @@ therefore covers the publication and the canary's interface wait as well as the
 typing. A reader armed this early that still binds nothing means the interface
 never appeared at all, and is labelled as that rather than as an empty capture.
 
-The enumeration capture is then started while the lease is still held and the
-function is live, since releasing the lease tears the interface down again, and
-after the reports are collected, because the comparator reads the observed
-sequence when it starts.
+Cycling the bus takes the device off bus for a measured 29 to 72 seconds, so
+the runner then waits, with no host action, for USB to come back - before
+anything tries to measure it, not after. A capture that reads while the device
+is away, or after the canary has handed the lease back and the healer has
+re-published the journalled original, is measuring a different description; the
+reports are collected and the enumeration capture is started only once the
+device is back, and the capture is collected before the canary is, because the
+canary's exit tears the appended interface down.
 
-It then waits up to 120 s with no host action for USB to return, runs the
-strict external check, and sends `confirm <sha256(check output)>` only when
+Measuring a live publication is not something this runner can take on trust,
+so it does not: it asks the broker for its status immediately before the
+capture and hands that answer, the time it was given and the lease that bounds
+it to the capture as a witness. The capture stamps its own read time and
+refuses to emit a pass or any descriptor verdict unless the read falls inside
+that window - `publication-liveness-unestablished`. The runner asks again after
+the read, and a publication that had gone by then is
+`publication-not-live-after-read`. Both are void observations rather than
+negative results: `hid-proof=void`, never `fail`, because an observation that
+was not positioned says nothing about the device.
+
+It then runs the strict external check, and sends `confirm <sha256(check output)>` only when
 that check's own output is the proof - never on a successful canary write, a
 passing descriptor comparison or anything else. On any failure the journal is
 left alone and the broker's heal-status is reported.
@@ -102,6 +116,7 @@ import shlex
 import subprocess
 import sys
 import tempfile
+import threading
 import time
 
 ROOT = Path(__file__).resolve().parents[6]
@@ -111,16 +126,35 @@ SUPPORT = runpy.run_path(str(HOST / "u2_trial_support.py"))
 RECOVER = runpy.run_path(str(HOST / "recover-u2-over-wifi.py"))
 PROFILE = runpy.run_path(str(HOST / "u2_broker_profile.py"))
 IDLE_STATUS = "OK phase=absent publication=enabled"
+# The fragment of the broker's status line that says the additive publication
+# is live. Nothing else is accepted as a witness that a read was positioned.
+LIVE_STATUS_FRAGMENT = "phase=published"
+# The broker's lease ceiling. It is the only thing that keeps a publication
+# from being healed back to the journalled original, so it - not a deadline
+# picked by this file - is what bounds everything that has to happen while the
+# publication is live.
+BROKER_LEASE_CEILING_SECONDS = 30
+# The broker's total life cap for one publication: renewal moves the deadline
+# forward in quanta of the ceiling above, but never past this. It is what makes
+# the 29-72 s bus return observable at all, and it still bounds an unrestored
+# publication behind a hung worker at three minutes rather than indefinitely.
+BROKER_LEASE_CAP_SECONDS = 180
+# Three attempts inside one quantum, so a single lost or heal-blocked reply
+# cannot end the publication. The broker is single-threaded and cannot answer a
+# renewal while it is healing, so a slow or failed tick is expected and is not
+# treated as the lease being gone; only an explicit refusal is.
+RENEW_INTERVAL_SECONDS = 10
+# Bounded by the device's own measurement rather than by the lease: the device
+# takes 29-72 s to come back on bus after a description change, which the lease
+# cannot cover. 120 s is the slowest measured return with margin.
 USB_RETURN_SECONDS = 120
 LEASE_WAIT_SECONDS = 20
 CANARY_SECONDS = 90
+# A process bound on a read-only registry read, not a liveness bound: whether
+# the read was positioned is settled by the witness the capture is given and
+# its own stamped read time, never by how long this runner was prepared to
+# wait.
 CAPTURE_SECONDS = 180
-# Larger than the typing alone, because the reader is armed before the
-# publication: its deadline has to cover the broker's publish reply, the
-# canary's own bounded wait for the appended interface to appear, and only then
-# the twelve reports. It still returns the moment the expected count arrives,
-# so a healthy run does not spend this; it is a bound, not a pause.
-REPORT_SECONDS = 90
 REPORTS_FILE = "reports.txt"
 FULL_MODE = "full"
 # The canary's staged gates, in the order they are meant to be attempted. The
@@ -156,14 +190,56 @@ DEVICE_PATH = re.compile(r"/var/jb/[A-Za-z0-9._/-]{1,128}\Z")
 HEX64 = re.compile(r"[0-9a-f]{64}\Z")
 
 
+def lease_budget_seconds():
+    """How long the publication can be relied on to stay live, in seconds.
+
+    Everything that has to happen while the publication is live is bounded by
+    this and not by a deadline of its own: a wait that can outlive the lease
+    measures a device the healer has already restored, which is how a 90 s
+    report deadline came to produce confident descriptor failures about a stock
+    description.
+
+    --- LEASE RENEWAL SEAM ---
+    Wired: this trial drives the broker's `renew-lease` on RENEW_INTERVAL_SECONDS
+    for as long as it needs the publication, so the horizon is the renewed
+    lease's total cap rather than one quantum. Without this the window was empty
+    by construction - the lease ended at 30 s and the bus came back at 29-72 s -
+    which is why every earlier trial measured a stock device and reported a
+    confident falsehood about it.
+    """
+    return BROKER_LEASE_CAP_SECONDS
+
+
+# The reader's deadline. Bounded by the lease rather than by a fixed 90 s,
+# because the reader must have returned while the publication is still live:
+# past the lease it is no longer waiting on the published keyboard at all. It
+# still returns the moment the expected report count arrives, so a healthy run
+# does not spend this; it is a bound, not a pause.
+REPORT_DEADLINE_SECONDS = BROKER_LEASE_CEILING_SECONDS
+# A read this trial cannot place inside a live publication, said by the capture
+# itself, and a publication that had gone by the time the read finished, which
+# only this runner can see. Two different failures to be positioned, so two
+# labels; neither is a result about the device.
+PUBLICATION_UNESTABLISHED = "publication-liveness-unestablished"
+NOT_LIVE_AFTER_READ = "publication-not-live-after-read"
+VOID_OBSERVATIONS = (PUBLICATION_UNESTABLISHED, NOT_LIVE_AFTER_READ)
+
+
 def hid_proof(outcome):
     """The HID verdict, kept apart from the restore verdict. Only `pass` passes.
 
     An absent report sequence is `inconclusive`, never a pass: it says the
     descriptors matched and nothing at all about reports reaching a host.
+
+    A void observation is `void`, which is neither: a capture that cannot be
+    placed inside a live publication has not failed to find a keyboard, it has
+    failed to look at one, and `fail` would report the rig's own blindness as
+    the device's answer.
     """
     if outcome == "pass":
         return "pass"
+    if outcome in VOID_OBSERVATIONS:
+        return "void"
     return "inconclusive" if outcome == "reports-unobserved" else "fail"
 
 
@@ -288,12 +364,29 @@ def main(options, env):
             # only a held `watch` connection registers one. The canary is that
             # worker: it takes the lease first and keeps the connection open
             # across the publication, so its death restores the original.
+            # Stopped exactly once, on every path, and never before the read it
+            # exists to cover: a renewer still running after the trial would
+            # hold a publication alive with nothing watching it, and one
+            # stopped too early hands the window back mid-capture.
+            renewal = {"state": None, "log": ""}
+
+            def finish_renewal():
+                if renewal["state"] is not None:
+                    state, renewal["state"] = renewal["state"], None
+                    renewal["log"] = env["stop_renewal"](state)
+
             canary = env["start_canary"]()
             try:
                 if not env["await_lease"](canary):
                     raise ValueError("the canary never reported the broker lease held "
                                      "within %ds; nothing was published"
                                      % LEASE_WAIT_SECONDS)
+                # Started before the publication and kept running through the
+                # bus cycle, the reattach and the capture. The canary holds the
+                # lease; this keeps it from expiring underneath it while the
+                # device is off bus, which is the whole reason earlier trials
+                # could not observe anything.
+                renewal["state"] = env["start_renewal"]()
                 # Armed before the publication, and this ordering is the whole
                 # safety argument: the device publishes itself as a real USB
                 # keyboard, so from the moment the interface appears until
@@ -329,48 +422,81 @@ def main(options, env):
                             raise ValueError("broker refused the bus cycle (%s); the "
                                              "host cannot re-read the configuration "
                                              "descriptor without it" % cycled)
+                    # Waited for before anything measures, not after: the cycle
+                    # takes the device off bus for a measured 29-72 s, and a
+                    # capture that reads while it is away reads nothing that
+                    # belongs to this publication. Bounded by that measurement
+                    # rather than by the lease, which cannot stretch that far -
+                    # the gap between the two is what the renewal seam closes.
+                    back = env["await_usb"]()
                 finally:
                     # Collected on every path, including a refused publication:
                     # a reader left running holds a device seized. Bounded by
-                    # its own deadline, so this cannot wait indefinitely.
+                    # the lease, so it cannot still be waiting on a keyboard
+                    # the healer has already taken away.
                     reports = env["collect_reports"](reader)
             except BaseException:
+                finish_renewal()
                 env["collect_canary"](canary)
                 raise
-            # The descriptor capture also has to run while the lease is held
-            # and the function is live - the canary's release tears the
-            # appended interface down again - and it has to start after the
-            # reports are collected, because the comparator reads the observed
-            # sequence when it starts. The reader returns as soon as the
-            # expected report count arrives, so both still fall inside the
-            # lease the canary has not yet given back.
-            capture = env["start_capture"]("published", reports[2])
-            return (published, cycled, env["collect_canary"](canary),
-                    env["collect_capture"](capture), reports)
+            # The witness the capture's verdict depends on: the broker's own
+            # word that the publication is live, the moment it was given, and
+            # the lease that bounds how long that word can be relied on. Asked
+            # here, immediately before the read, because a witness taken any
+            # earlier covers less of it.
+            witness = {"state": env["ask"]("status"), "observed_at": env["now"](),
+                       "max_age": lease_budget_seconds()}
+            # Started after the reports are collected, because the comparator
+            # reads the observed sequence when it starts, and collected before
+            # the canary is: the canary's exit hands the lease back and tears
+            # the appended interface down, so a capture still reading then is
+            # reading the restored original.
+            capture = env["collect_capture"](
+                env["start_capture"]("published", reports[2], witness))
+            # Asked again after the read: a publication that was live when the
+            # witness was taken and gone by now may not have covered the read,
+            # and this is the only place that can see it.
+            after = env["ask"]("status")
+            # Only now: everything that had to happen inside the publication
+            # has happened, and the broker restores on its own within a quantum.
+            finish_renewal()
+            return (published, cycled, env["collect_canary"](canary), capture, reports,
+                    back, witness, after, renewal["log"])
 
-        (published, cycled, canary, capture, reports), lifecycle = env["observe"](body)
+        ((published, cycled, canary, capture, reports, back, witness, after,
+          renewal_log), lifecycle) = env["observe"](body)
         env["evidence"]("lifecycle.ndjson", lifecycle[:16384])
+        env["evidence"]("lease-renewal.txt", renewal_log.encode("ascii", "replace")[:8192])
         env["evidence"]("canary.txt", canary[1][:8192])
         env["evidence"]("report-capture.txt", reports[1].encode("ascii")[:8192])
         env["evidence"]("enumeration.txt", capture[1].encode("ascii"))
-        back = env["usb_present"]()
-        waited = 0
-        while not back and waited < USB_RETURN_SECONDS:
-            env["sleep"](3)
-            waited += 3
-            back = env["usb_present"]()
+        live_after = LIVE_STATUS_FRAGMENT in after
+        env["evidence"]("publication-liveness.txt",
+                        ("witness-state=%s\nwitness-observed-at-epoch=%d\n"
+                         "lease-seconds=%d\nstate-after-read=%s\nlive-after-read=%s\n"
+                         % (witness["state"], int(witness["observed_at"]),
+                            witness["max_age"], after, "yes" if live_after else "no")
+                         ).encode("ascii", "replace"))
         # Asked before any verdict: on every failure path this is what gets reported.
         heal = env["ask"]("heal-status")
         env["evidence"]("heal-status.txt", heal.encode("ascii") + b"\n")
         typing = mode_writes_reports(options["mode"])
-        proof = mode_hid_proof(options["mode"], capture[0])
+        # The capture refuses its own verdict when it cannot place its read
+        # inside the publication; this is the other half of the same rule and
+        # keeps its own label. A capture that already voided itself keeps the
+        # label it gave, because that cause is the more specific one.
+        enumeration = capture[0]
+        if enumeration not in VOID_OBSERVATIONS and not live_after:
+            enumeration = NOT_LIVE_AFTER_READ
+        proof = mode_hid_proof(options["mode"], enumeration)
         # A mode that writes no reports cannot have a capture gap: there was
         # never a sequence to miss. Its result is its own, reported below.
         gap = reports_gap(reports[0]) if typing else None
         print("%s mode=%s published=%s cycle=%s canary-exit=%d reports=%s "
-              "enumeration=%s hid-proof=%s usb=%s heal=%s"
+              "enumeration=%s hid-proof=%s usb=%s publication-after-read=%s heal=%s"
               % (PREFIX, options["mode"], published, cycled, canary[0], reports[0],
-                 capture[0], proof, "returned" if back else "absent", heal), flush=True)
+                 enumeration, proof, "returned" if back else "absent",
+                 "live" if live_after else "gone", heal), flush=True)
         if not back:
             raise ValueError("USB did not return in %ds; journal retained, heal %s"
                              % (USB_RETURN_SECONDS, heal))
@@ -401,20 +527,24 @@ def main(options, env):
                              "journal retained, heal %s" % (gap, heal))
         # The check's own output is the proof. Nothing else may clear a journal.
         reply = env["ask"]("confirm " + hashlib.sha256(post).hexdigest())
-        ok_after, after = env["strict"]("absent")
-        env["evidence"]("after-confirm.txt", reply.encode("ascii") + b"\n" + after)
+        ok_after, after_strict = env["strict"]("absent")
+        env["evidence"]("after-confirm.txt", reply.encode("ascii") + b"\n" + after_strict)
         if reply != "OK verified-and-cleared" or not ok_after:
             raise ValueError("broker did not clear the journal (%s)" % reply)
         print("%s confirm=%s strict-after=pass enumeration=%s hid-proof=%s"
-              % (PREFIX, reply, capture[0], proof))
+              % (PREFIX, reply, enumeration, proof))
         if proof != "pass":
             # The restore is proven; the keyboard is not. Said in its own line
-            # so no reader can take a cleared journal for a HID proof.
-            print("%s hid-proof=%s reason=%s note=%s" % (
-                PREFIX, proof, capture[0],
-                "no-report-sequence-was-recorded-on-this-Mac"
-                if capture[0] == "reports-unobserved" else "see-the-enumeration-evidence"))
-        return {"confirmed": True, "enumeration": capture[0], "hid_proof": proof,
+            # so no reader can take a cleared journal for a HID proof - and a
+            # void observation says so in those words, because "we were not
+            # looking at it" is not a statement about the device.
+            note = "see-the-enumeration-evidence"
+            if enumeration == "reports-unobserved":
+                note = "no-report-sequence-was-recorded-on-this-Mac"
+            elif enumeration in VOID_OBSERVATIONS:
+                note = "the-observation-was-not-positioned-nothing-was-measured"
+            print("%s hid-proof=%s reason=%s note=%s" % (PREFIX, proof, enumeration, note))
+        return {"confirmed": True, "enumeration": enumeration, "hid_proof": proof,
                 "reports": reports[0], "canary_exit": canary[0], "cycle": cycled}
     finally:
         env["stop_syslog"](syslog)
@@ -455,12 +585,19 @@ def live_environment(options):
         profile = PROFILE["fetch"](ssh)
         with tempfile.TemporaryDirectory(prefix="u2-hid-monitor-", dir=BUILD) as temporary:
             binary = SUPPORT["monitor_binary"](temporary)
+            # The long window, because this trial changes the description: the
+            # device is measured at 29-72 s to come back on bus, so a window
+            # that ends sooner records the absence and never the reattach.
+            window = SUPPORT["TRIAL_WINDOW_SECONDS"]
             process, ready = SUPPORT["arm_monitor"](binary, profile["usbVendorID"],
-                                                    profile["usbProductID"])
+                                                    profile["usbProductID"], window)
             try:
                 result = callable_body()
             finally:
-                tail = process.communicate(timeout=SUPPORT["WINDOW_SECONDS"] + 10)[0]
+                # The monitor buffers its events and emits them when the window
+                # ends, so it is waited out rather than cut short: ending it
+                # early would discard the reattach it was armed to record.
+                tail = process.communicate(timeout=window + 10)[0]
         return result, ready + tail
 
     # The capture step is the only producer of an observed sequence; an
@@ -498,6 +635,55 @@ def live_environment(options):
             if text.startswith(marker) and (required is None or required in text):
                 return True
 
+    def start_renewal():
+        """Drive `renew-lease` in the background for the life of the window.
+
+        The publication only lasts one 30 s quantum unless something keeps
+        asking, and the device needs 29-72 s to come back on bus, so without
+        this the observation window is empty by construction and every
+        measurement lands on a device the healer has already restored.
+
+        A tick that fails is not the lease being gone: the broker is
+        single-threaded and cannot answer while it is healing, so a reply can
+        be late or lost. Only an explicit refusal stops the renewer, and it
+        records that moment, because after it the broker will restore on its
+        own within one quantum and nothing read later is positioned.
+        """
+        state = {"stop": threading.Event(), "replies": [], "refused_at": None}
+
+        def loop():
+            while not state["stop"].wait(RENEW_INTERVAL_SECONDS):
+                stamp = time.time()
+                try:
+                    reply = ask("renew-lease")
+                except (OSError, ValueError, subprocess.SubprocessError) as error:
+                    state["replies"].append((stamp, "unreachable %s" % type(error).__name__))
+                    continue
+                state["replies"].append((stamp, reply))
+                if not reply.startswith("OK lease-renewed"):
+                    state["refused_at"] = stamp
+                    return
+
+        state["thread"] = threading.Thread(target=loop, daemon=True)
+        state["thread"].start()
+        return state
+
+    def stop_renewal(state):
+        """Stop renewing and hand back what the broker said, for the evidence.
+
+        Called on every path, including failures: a renewer left running would
+        hold a publication alive past the trial that was watching it.
+        """
+        state["stop"].set()
+        state["thread"].join(timeout=RENEW_INTERVAL_SECONDS + 30)
+        lines = ["renew-at-epoch=%d reply=%s" % (int(stamp), reply)
+                 for stamp, reply in state["replies"]]
+        lines.append("renewals=%d refused-at-epoch=%s"
+                     % (len(state["replies"]),
+                        "none" if state["refused_at"] is None
+                        else int(state["refused_at"])))
+        return "\n".join(lines) + "\n"
+
     def await_lease(handle):
         """Bounded wait for the canary's own report that the lease is held."""
         return await_line(handle, LEASE_MARKER, LEASE_WAIT_SECONDS)
@@ -532,12 +718,14 @@ def live_environment(options):
         return subprocess.Popen(
             [sys.executable, str(HOST / "capture-u2-hid-reports.py"),
              "--out-dir=%s" % trial, "--name=%s-%s" % (stage, REPORTS_FILE),
-             "--deadline=%d" % REPORT_SECONDS],
+             "--deadline=%d" % REPORT_DEADLINE_SECONDS],
             stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
 
     def collect_reports(process):
         try:
-            out = process.communicate(timeout=REPORT_SECONDS + 90)[0]
+            # A short grace over the reader's own deadline, so collecting it
+            # cannot become a second, longer wait than the lease allows.
+            out = process.communicate(timeout=REPORT_DEADLINE_SECONDS + 15)[0]
         except subprocess.TimeoutExpired:
             process.kill()
             out = process.communicate(timeout=10)[0]
@@ -549,10 +737,15 @@ def live_environment(options):
         return outcome, text, captured_reports_path(outcome, trial,
                                                     "published-" + REPORTS_FILE)
 
-    def start_capture(stage, observed):
+    def start_capture(stage, observed, live):
         argv = [sys.executable, str(HOST / "capture-u2-hid-enumeration.py"),
                 "--configuration=%d" % options["configuration"],
                 "--stock-interfaces=%d" % options["stock_interfaces"],
+                # The witness, without which the capture emits no verdict at
+                # all: what the broker said, when, and the lease it is good for.
+                "--publication-state=%s" % live["state"],
+                "--publication-observed-at=%.3f" % live["observed_at"],
+                "--publication-max-age=%d" % live["max_age"],
                 "--out=%s" % (trial / ("enumeration-%s.txt" % stage))]
         if observed:
             argv.append("--reports=%s" % observed)
@@ -567,6 +760,22 @@ def live_environment(options):
         text = (out or b"").decode("ascii", "replace")
         match = re.search(r"outcome=([a-z-]+)", text)
         return (match.group(1) if match else "rejected"), text
+
+    def await_usb():
+        """Bounded wait for the device to come back on bus, with no host action.
+
+        Measuring before this has returned true measures a device that is not
+        there. Bounded by the measured 29-72 s reattach rather than by the
+        lease, which cannot cover it.
+        """
+        waited = 0
+        while True:
+            if SUPPORT["usb_present"]():
+                return True
+            if waited >= USB_RETURN_SECONDS:
+                return False
+            time.sleep(3)
+            waited += 3
 
     def strict(phase):
         result = subprocess.run([sys.executable, str(HOST / "check-u2-trial-current.py"),
@@ -591,13 +800,16 @@ def live_environment(options):
         "observe": observe,
         "start_canary": start_canary,
         "await_lease": await_lease,
+        "start_renewal": start_renewal,
+        "stop_renewal": stop_renewal,
         "await_configured": await_configured,
         "collect_canary": collect_canary,
         "start_reports": start_reports,
         "collect_reports": collect_reports,
         "start_capture": start_capture,
         "collect_capture": collect_capture,
-        "usb_present": SUPPORT["usb_present"],
+        "await_usb": await_usb,
+        "now": time.time,
         "strict": strict,
         "syslog": lambda: RECOVER["start_syslog"](trial / "syslog.txt"),
         "stop_syslog": RECOVER["stop_syslog"],

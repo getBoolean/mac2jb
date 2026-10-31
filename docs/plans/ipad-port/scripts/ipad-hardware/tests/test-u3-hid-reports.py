@@ -166,6 +166,43 @@ def open_gate_attempts_one_open_and_configures_nothing():
     print("PASS stop-after-open gate places one open and no configuration call")
 
 
+def enumeration_wait_cannot_type():
+    """The wait for host enumeration must not share its mechanism with typing.
+
+    It used to poll by writing the neutral report, which made every wait a
+    write: a wait on a host that is watching types into whatever has focus
+    there. The pipe's current maximum packet size answers the same question -
+    zero until a host has selected a configuration containing the interface,
+    the endpoint's size once it has - and puts nothing on the bus, so the
+    structural rule is that the wait reaches the sink nowhere at all.
+    """
+    source = (CANARY / "HIDCanaryRun.swift").read_text()
+    start = source.index("private func waitForHostEnumeration")
+    wait = source[start:source.index("private static func stop(", start)]
+    for forbidden in ("sink.write", "neutralReport", "HIDReportWrite"):
+        if forbidden in wait:
+            raise AssertionError("the enumeration wait still reaches the report "
+                                 "path: " + forbidden)
+    if "visibility.currentMaxPacketSize()" not in wait:
+        raise AssertionError("the enumeration wait must poll the pipe's current "
+                             "maximum packet size")
+    # No default probe, so there is no quiet fallback to the sink to rediscover.
+    if re.search(r"visibility\s*:\s*HIDPipeVisibility\s*=", source):
+        raise AssertionError("the visibility probe must be injected, not defaulted")
+    # The production probe goes through the shim's own entry and selector, and
+    # the one pre-existing as-asked query beside create-pipe stays.
+    main_source = (CANARY / "HIDCanaryMain.swift").read_text()
+    calls = main_source.count("MAC2JBUSBFunctionPipeMaxPacketSize(")
+    if calls != 2:
+        raise AssertionError("expected the as-asked query and the wait's probe, "
+                             "found %d calls" % calls)
+    if "MAC2JBUSBFunctionSelectorPipeMaxPacketSize" not in main_source:
+        raise AssertionError("the probe must use the shim's own selector")
+    if "MAC2JBUSBFunctionPipeMaxPacketSize" not in HEADER.read_text():
+        raise AssertionError("the shim header no longer exposes the pipe size entry")
+    print("PASS enumeration wait polls the pipe's size and writes no report")
+
+
 def main():
     with tempfile.TemporaryDirectory(prefix="mac2jb-u3-hid-reports-") as temporary:
         directory = Path(temporary)
@@ -174,6 +211,7 @@ def main():
     canary_publishes_nothing()
     open_outcome_codes_match_the_shim()
     enumeration_wait_returns_match_the_reference()
+    enumeration_wait_cannot_type()
     open_gate_attempts_one_open_and_configures_nothing()
 
 

@@ -36,6 +36,14 @@ VARIANTS = {
     # interface is configured and the host enumerates a configuration that
     # already carries it. Two cycles destabilized function re-registration.
     "--v16-additive-single-cycle": "u3-native-additive-function-v16",
+    # v16 plus the two changes that make a publication observable at all: a
+    # heartbeat-renewable lease (30 s quantum, 180 s total cap) that can outlive
+    # the measured 29-72 s bus return, and a heal that re-publishes the
+    # journaled original *plus* the appended function while the lease is live,
+    # so the mechanism restoring the bus stops deleting the function under test.
+    # Restoring - expired lease, dead worker, restart, explicit restore - still
+    # publishes the bare original.
+    "--v17-renewable-lease": "u3-native-additive-function-v17",
 }
 # Resolve the installed iPhoneOS SDK instead of pinning an Xcode point release.
 SDK = subprocess.run(["/usr/bin/xcrun", "--sdk", "iphoneos", "--show-sdk-path"],
@@ -74,13 +82,14 @@ def main():
         raise ValueError("usage: " + " | ".join(sorted(VARIANTS)))
     output = BUILD / VARIANTS[sys.argv[1]]
     additive_function = sys.argv[1] in ("--v13-additive-function", "--v14-additive-lease",
-                                        "--v15-additive-cycle", "--v16-additive-single-cycle")
+                                        "--v15-additive-cycle", "--v16-additive-single-cycle",
+                                        "--v17-renewable-lease")
     explicit_cycle = True
     controller_clone = True
     post_clone = True
     settled_recovery = False
     ready_gated = True
-    no_initial_cycle = sys.argv[1] == "--v16-additive-single-cycle"
+    no_initial_cycle = sys.argv[1] in ("--v16-additive-single-cycle", "--v17-renewable-lease")
     if output.exists() or not BUILD.is_dir() or not Path(SDK).is_dir():
         raise ValueError("unsafe output or missing SDK")
     if plistlib.loads(ENTITLEMENTS.read_bytes()) != EXPECTED_ENTITLEMENTS:

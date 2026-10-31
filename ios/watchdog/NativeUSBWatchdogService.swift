@@ -88,6 +88,10 @@ final class NativeUSBWatchdogService {
     private let healPolicy: USBFunctionHealPolicy
     private let deviceProfile: USBDeviceProfile?
     private var lastHeal = "none"
+    // When this publication's first lease was granted, held in memory only.
+    // A restarted broker has no anchor and no registered worker, so it cannot
+    // renew at all and the journaled deadline is the one that applies.
+    private var leaseGrantedUptime: UInt64?
     private var worker: Int32 = -1
     private var singleton: Int32 = -1
     private var listener: Int32 = -1
@@ -169,7 +173,9 @@ final class NativeUSBWatchdogService {
          restartOwner: ((String) throws -> Void)? = nil,
          healPolicy: USBFunctionHealPolicy = USBFunctionHealPolicy(),
          deviceProfile: USBDeviceProfile? = nil,
-         leaseNanoseconds: UInt64) throws {
+         leaseNanoseconds: UInt64,
+         publicationLifeNanoseconds: UInt64 =
+             USBRestoreCoordinator.maxPublicationLifeNanoseconds) throws {
         guard geteuid() == expectedOwner else {
             throw NativeUSBWatchdogError.unsafeState
         }
@@ -190,6 +196,7 @@ final class NativeUSBWatchdogService {
             journal: journal, currentIdentity: currentIdentity,
             controller: controller, recoveryController: recoveryController,
             externalVerifier: verifier, clock: clock,
+            publicationLifeNanoseconds: publicationLifeNanoseconds,
             beforeRecovery: beforeRecovery)
         self.publicationEnabled = publicationEnabled
         guard leaseNanoseconds > 0,
@@ -301,6 +308,11 @@ final class NativeUSBWatchdogService {
         String(format: "0x%08x", UInt32(bitPattern: value))
     }
 
+    // Whole seconds left until an uptime deadline, never negative.
+    private static func seconds(_ deadline: UInt64, from now: UInt64) -> UInt64 {
+        deadline > now ? (deadline - now) / 1_000_000_000 : 0
+    }
+
     private func handle(_ command: String) throws -> String {
         if command == "status" {
             return "phase=\(try phase()) publication=" +
@@ -331,10 +343,38 @@ final class NativeUSBWatchdogService {
                 originalDescription: snapshot.liveDescription,
                 plannedDescriptionSHA256: digest)
             try validateInMemory(snapshot.liveDescription)
-            let deadline = clock.uptimeNanoseconds + leaseNanoseconds
-            try coordinator.prepare(recipe, leaseDeadlineUptime: deadline)
+            let granted = clock.uptimeNanoseconds
+            try coordinator.prepare(recipe,
+                                    leaseDeadlineUptime: granted + leaseNanoseconds)
+            // The anchor for the total cap on this publication's life.
+            leaseGrantedUptime = granted
             return "prepared"
         }
+        #if MAC2JB_U3_ADDITIVE_FUNCTION
+        // Heartbeat renewal. The worker calls this from an ordinary connection,
+        // as it does every other command: its lease socket carries only its
+        // exit, so a renewal there would read as worker death.
+        //
+        // The lease bounds how long a publication may sit unrestored with a
+        // hung or dead worker. Renewing it is the worker proving it is alive,
+        // which is the thing that bound is actually about: a worker that stops
+        // renewing is restored within one quantum exactly as before, and the
+        // total life of one publication is capped whatever arrives here.
+        //
+        // The reply states both remainders in whole seconds, so the caller can
+        // see the cap coming instead of discovering it as a refusal.
+        if command == "renew-lease" {
+            guard publicationEnabled, worker >= 0,
+                  let granted = leaseGrantedUptime else {
+                throw NativeUSBWatchdogError.disabled
+            }
+            let deadline = try coordinator.renewLease(grantedUptime: granted,
+                                                      quantum: leaseNanoseconds)
+            let now = clock.uptimeNanoseconds
+            return "lease-renewed remaining=\(Self.seconds(deadline, from: now))" +
+                " cap-remaining=\(Self.seconds(granted + coordinator.publicationLifeNanoseconds, from: now))"
+        }
+        #endif
         if command == "publish-noop" {
             guard publicationEnabled, worker >= 0 else {
                 throw NativeUSBWatchdogError.disabled
@@ -412,11 +452,24 @@ final class NativeUSBWatchdogService {
         // Host-requested heal without an initial publication: restart owners
         // and/or re-publish (bounded) until every function registers.
         if command == "heal" {
-            guard publicationEnabled, let record = try currentRecord(),
-                  record.phase == .awaitingVerification || record.phase == .recoveryRequired else {
+            guard publicationEnabled, let record = try currentRecord() else {
                 throw NativeUSBWatchdogError.invalidRequest
             }
-            return autoHeal()
+            if record.phase == .awaitingVerification || record.phase == .recoveryRequired {
+                return autoHeal()
+            }
+            #if MAC2JB_U3_ADDITIVE_FUNCTION
+            // Healing a publication that is still live, so the host can see
+            // the result instead of only the recovery. It re-publishes the
+            // intended description rather than restoring, so it requires what
+            // a live publication requires: a registered worker and a lease
+            // that has not run out.
+            if record.phase == .published, worker >= 0,
+               clock.uptimeNanoseconds < record.leaseDeadlineUptime {
+                return autoHeal()
+            }
+            #endif
+            throw NativeUSBWatchdogError.invalidRequest
         }
         // The learned device profile (no private identifiers) for host tools.
         if command == "profile" {
@@ -437,13 +490,15 @@ final class NativeUSBWatchdogService {
             defer { verifier.suppliedProof = nil }
             try coordinator.confirmExternalRestore()
             clearStartHealCount()
+            leaseGrantedUptime = nil
             return "verified-and-cleared"
         }
         throw NativeUSBWatchdogError.invalidRequest
     }
 
     private func workerClosed(neutral: Bool) {
-        defer { worker = -1 }
+        // No worker, nothing to prove liveness, so no lease to renew.
+        defer { worker = -1; leaseGrantedUptime = nil }
         guard let record = try? currentRecord(),
               record.phase == .prepared || record.phase == .published else {
             return
@@ -481,10 +536,34 @@ final class NativeUSBWatchdogService {
             func sleep(seconds: Double) { Thread.sleep(forTimeInterval: seconds) }
         }
         let coordinator = self.coordinator
+        // Two kinds of re-publication, and which one this is has to be
+        // explicit. While a publication is still live, the heal is recovering
+        // the intended description so the trial can continue, and the bare
+        // original would delete the appended function the trial exists to
+        // observe. Every other path - an expired lease, a watchdog restart, an
+        // explicit restore, external-failure recovery - is putting the
+        // original back and stopping, and publishes exactly it.
+        //
+        // A backend that cannot re-publish the intended description falls back
+        // to restoring: recovering USB outranks observing it. A controller
+        // call that genuinely failed is not caught here, so it still ends in
+        // recoveryRequired with the journal retained.
+        let republish: () throws -> Void = {
+            do {
+                try coordinator.republishIntended(
+                    controllerConfigured: controllerConfigured)
+                return
+            } catch USBRestoreCoordinatorError.recoveryRequired {
+                // Not a live publication: this heal is restoring.
+            } catch USBRestoreCoordinatorError.additivePublicationUnsupported {
+                NSLog("mac2jb-u2 heal: controller cannot re-publish the appended "
+                      + "description, restoring the original instead")
+            }
+            try coordinator.recoverAfterExternalFailure(
+                controllerConfigured: controllerConfigured)
+        }
         let probe = Probe(configured: controllerConfigured, unserved: unservedFunctions,
-                          publish: { try coordinator.recoverAfterExternalFailure(
-                              controllerConfigured: controllerConfigured) },
-                          restart: restartOwner)
+                          publish: republish, restart: restartOwner)
         do {
             let outcome = try USBFunctionRegistrationHealer(probe: probe, policy: healPolicy).heal()
             if case .configured = outcome, let record = try? currentRecord(),

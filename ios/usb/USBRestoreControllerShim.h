@@ -73,6 +73,31 @@ MAC2JBUSBResult MAC2JBUSBCloneAppendFunctionOrPublish(
     int32_t *busReturn
 );
 
+// Re-publish the intended additive description: the journaled original plus
+// the one named function, in a single SetDescription, whatever the live
+// description currently carries. It accepts both shapes the healer can meet -
+// a live description still carrying the appended name last in that
+// configuration (stripped before the equality check, then re-appended) and one
+// already restored to stock (compared as-is, then appended). Any other
+// difference from the journaled original is still refused, and the journaled
+// original remains the restore target and is never modified.
+//
+// This is the continuing kind of re-publication. Restoring - an expired lease,
+// a dead worker, a watchdog restart, an explicit restore - still publishes the
+// bare original through MAC2JBUSBCloneOrPublish, because the bus coming back
+// matters more than the function surviving.
+MAC2JBUSBResult MAC2JBUSBCloneRepublishAppendedFunctionOrPublish(
+    const uint8_t *livePlist,
+    size_t livePlistLength,
+    uint64_t expectedControllerRegistryID,
+    const char *functionName,
+    int32_t configurationNumber,
+    bool publish,
+    bool cycleBus,
+    int32_t *setReturn,
+    int32_t *busReturn
+);
+
 // Take the exact controller off and on the bus and do nothing else: no
 // description is created, compared, edited or written. Publishing a description
 // already cycles the bus, so the host reads the configuration descriptor at

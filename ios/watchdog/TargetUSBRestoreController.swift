@@ -54,18 +54,35 @@ struct TargetUSBRestoreController: USBRestoreController {
                       configuration: configuration, publish: false)
     }
 
+    // The continuing re-publication the healer uses while a lease is live: the
+    // journaled original plus the appended function in one write, so the
+    // mechanism that brings the bus back stops being the mechanism that
+    // deletes the function being observed. Restoring still publishes the bare
+    // original; only this path preserves what the trial is there to see.
+    func republishAppending(_ description: Data, function: String, configuration: Int) throws {
+        try appending(description, function: function,
+                      configuration: configuration, publish: true,
+                      republish: true)
+    }
+
     private func appending(_ description: Data, function: String,
-                           configuration: Int, publish: Bool) throws {
+                           configuration: Int, publish: Bool,
+                           republish: Bool = false) throws {
         guard let number = Int32(exactly: configuration), number > 0 else {
             throw TargetUSBRestoreError.operation(MAC2JBUSBFunctionRejected, 0, 0)
         }
         var setStatus: Int32 = 0
         var busStatus: Int32 = 0
         let result = description.withUnsafeBytes { bytes in
-            MAC2JBUSBCloneAppendFunctionOrPublish(
-                bytes.bindMemory(to: UInt8.self).baseAddress, description.count,
-                controllerRegistryID, function, number, publish,
-                publish && cycleBus, &setStatus, &busStatus)
+            let base = bytes.bindMemory(to: UInt8.self).baseAddress
+            if republish {
+                return MAC2JBUSBCloneRepublishAppendedFunctionOrPublish(
+                    base, description.count, controllerRegistryID, function,
+                    number, publish, publish && cycleBus, &setStatus, &busStatus)
+            }
+            return MAC2JBUSBCloneAppendFunctionOrPublish(
+                base, description.count, controllerRegistryID, function, number,
+                publish, publish && cycleBus, &setStatus, &busStatus)
         }
         guard result == MAC2JBUSBSuccess else {
             throw TargetUSBRestoreError.operation(result, setStatus, busStatus)

@@ -115,6 +115,33 @@ private struct FileBackedController: USBRestoreController {
         _ = try Self.appended(description, function: function, configuration: configuration)
     }
 
+    // Mac stand-in for the one-call re-publication of the intended
+    // description, which is what a heal during a live publication needs: the
+    // live description already carries the appended function, so that one name
+    // comes off the clone, what is left has to be the journaled original, and
+    // the function goes straight back on before the single write.
+    func republishAppending(_ description: Data, function: String,
+                            configuration: Int) throws {
+        guard let live = try currentlyPublished(),
+              var plist = Self.fields(live),
+              var configurations = plist["ConfigurationDescriptors"] as? [[String: Any]],
+              (1...configurations.count).contains(configuration),
+              var interfaces = configurations[configuration - 1]["Interfaces"] as? [String],
+              interfaces.last == function else {
+            throw USBRestoreCoordinatorError.appendedFunctionRejected
+        }
+        interfaces.removeLast()
+        configurations[configuration - 1]["Interfaces"] = interfaces
+        plist["ConfigurationDescriptors"] = configurations
+        guard let original = Self.fields(description),
+              NSDictionary(dictionary: plist).isEqual(to: original) else {
+            throw FixtureFailure()
+        }
+        try store(try Self.appended(description, function: function,
+                                    configuration: configuration))
+        try record()
+    }
+
     // Mac stand-in for the shim's additive publication: append the name last
     // in the selected configuration's Interfaces and write the resulting
     // description where the test can compare it with the journaled original.
@@ -267,7 +294,18 @@ enum NativeUSBWatchdogServiceFixture {
                 policy.settleSeconds = 1
                 policy.pollSeconds = 0.1
                 return policy
-            }(), leaseNanoseconds: 1_000_000_000)
+            }(),
+            // One second of lease and the real three-minute publication cap by
+            // default, so a test that says nothing sees a lease expire at once.
+            // A test that needs to renew, or to reach the cap in bounded time,
+            // sets these.
+            leaseNanoseconds: ProcessInfo.processInfo
+                .environment["MAC2JB_U2_FIXTURE_LEASE_NS"]
+                .flatMap(UInt64.init) ?? 1_000_000_000,
+            publicationLifeNanoseconds: ProcessInfo.processInfo
+                .environment["MAC2JB_U3_FIXTURE_PUBLICATION_LIFE_NS"]
+                .flatMap(UInt64.init)
+                ?? USBRestoreCoordinator.maxPublicationLifeNanoseconds)
         try service.run()
     }
 }

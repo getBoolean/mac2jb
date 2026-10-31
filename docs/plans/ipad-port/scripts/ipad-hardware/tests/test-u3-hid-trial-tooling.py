@@ -26,6 +26,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import time
 
 
 ROOT = Path(__file__).resolve().parents[6]
@@ -110,10 +111,25 @@ def ioreg(descriptor=None, vendor=VENDOR, product=PRODUCT, usage=(1, 6)):
     return "\n".join(nodes) + "\n"
 
 
-def evaluate(raw=None, text=None, reports=None, stock=3):
+# The broker's own status line while an additive publication is live, and a
+# read one second after the runner saw it: the ordinary case, where the
+# observation was positioned to see what it claims to have measured.
+LIVE_STATUS = "OK phase=published publication=enabled"
+READ_AT = 1700000000.0
+
+
+def witness(state=LIVE_STATUS, age=1.0, max_age=None, read_at=READ_AT):
+    """The runner's statement of what the broker said, and when, before a read."""
+    budget = RUNNER["lease_budget_seconds"]() if max_age is None else max_age
+    return CAPTURE["publication_liveness"](state, None if state is None else read_at - age,
+                                           None if state is None else budget, read_at)
+
+
+def evaluate(raw=None, text=None, reports=None, stock=3, liveness=None):
     if text is None:
         text = ioreg(CAPTURE["REPORT_DESCRIPTOR"])
-    return CAPTURE["evaluate"](raw, stock, text, reports, VENDOR, PRODUCT, 5)
+    return CAPTURE["evaluate"](raw, stock, text, reports, VENDOR, PRODUCT, 5,
+                               witness() if liveness is None else liveness)
 
 
 def observed(expected=None, mutate=None):
@@ -257,7 +273,12 @@ def descriptors():
             [sys.executable, str(HOST / "capture-u2-hid-enumeration.py"),
              "--configuration=5", "--stock-interfaces=3",
              "--vendor=0x%04x" % VENDOR, "--product=0x%04x" % PRODUCT,
-             "--raw-configs=%s" % raw, "--ioreg=%s" % registry],
+             "--raw-configs=%s" % raw, "--ioreg=%s" % registry,
+             # Positioned, so the refusal under test is the malformed
+             # descriptor and not the missing witness.
+             "--publication-state=%s" % LIVE_STATUS,
+             "--publication-observed-at=%.3f" % time.time(),
+             "--publication-max-age=%d" % RUNNER["lease_budget_seconds"]()],
             stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, timeout=60)
         text = result.stdout.decode("ascii", "replace")
         assert result.returncode == 1, (result.returncode, text)
@@ -274,6 +295,201 @@ def descriptors():
         assert result["outcome"] == "reports-mismatch", (name, result)
         assert "index=0 %s" % name in failure_text(result), (name, result)
     print("PASS HID descriptor length refusals and report divergence labels")
+
+
+def liveness():
+    """No verdict unless the observation can be shown to have been positioned.
+
+    A capture that cannot establish that the publication it measured was still
+    live when it read may emit neither a pass nor a descriptor failure: the
+    device went off bus for a documented 29-72 s while the lease ceiling is
+    30 s, so by the time an unpositioned capture reads, the healer has put the
+    stock description back and the capture is measuring a different device.
+    That is a void observation and it gets its own label, because reading it as
+    a descriptor failure is exactly how "we could not see" became "the device
+    failed".
+    """
+    void = CAPTURE["PUBLICATION_UNESTABLISHED"]
+    # Worst outcome first, so the void label beats every descriptor label.
+    assert CAPTURE["OUTCOMES"][0] == void, CAPTURE["OUTCOMES"]
+    assert void not in ("not-enumerated", "pass"), void
+
+    established = witness()
+    assert established["established"] is True, established
+    assert established["age"] == 1.0, established
+
+    # One reason per cause: a missing witness, a witness that does not say a
+    # publication was live, a witness from after the read and a witness older
+    # than the lease are four different failures to be positioned.
+    reasons = {}
+    for state, age, max_age, fragment in (
+            (None, 0.0, None, "no-publication-witness"),
+            ("OK phase=absent publication=enabled", 1.0, None, "not-a-live-publication"),
+            (LIVE_STATUS, -5.0, None, "observed-after-the-read"),
+            # Aged past whatever horizon the runner currently relies on, not a
+            # fixed 31 s: the renewed lease legitimately reaches much further
+            # than one quantum, and a case pinned to the old ceiling would
+            # silently stop testing staleness once renewal moved the horizon.
+            (LIVE_STATUS, RUNNER["lease_budget_seconds"]() + 1.0, None,
+             "older-than-the-lease")):
+        answer = witness(state=state, age=age, max_age=max_age)
+        assert answer["established"] is False, (fragment, answer)
+        assert fragment in answer["reason"], (fragment, answer)
+        reasons[fragment] = answer["reason"]
+    assert len(set(reasons.values())) == len(reasons), reasons
+    # The bound is the lease, not a fixed deadline: a read inside it is
+    # positioned and a read one second past it is not.
+    budget = RUNNER["lease_budget_seconds"]()
+    assert witness(age=budget)["established"] is True
+    assert witness(age=budget + 1)["established"] is False
+
+    # Neither a pass nor a descriptor failure survives a void observation.
+    sequence = CAPTURE["parse_reports"](observed())
+    unpositioned = witness(state=None)
+    passing = evaluate(published(), reports=sequence, liveness=unpositioned)
+    assert passing["outcome"] == void, passing
+    assert "pass" != passing["outcome"]
+    for raw, label in ((envelope([configuration(5, stock_bodies())]), "interface-absent"),
+                       (published(triple=(3, 1, 2)), "interface-mismatch"),
+                       (None, "not-enumerated")):
+        voided = evaluate(raw, reports=sequence, liveness=unpositioned)
+        assert voided["outcome"] == void, (label, voided)
+        assert label not in failure_text(voided), (label, voided)
+        # The same evidence with a positioned observation still reports the
+        # descriptor fault, so the void label is about the observation only.
+        seen = evaluate(raw, reports=sequence)
+        assert seen["outcome"] == label, (label, seen)
+
+    # The stamp: what was read, when it was read, and what the capture believes
+    # was live. A verdict that cannot say what it measured is not evidence.
+    for result, live in ((passing, "no"), (evaluate(published(), reports=sequence), "yes")):
+        text = CAPTURE["render"](result)
+        assert re.search(r"read-at=\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z", text), text
+        assert "read-at-epoch=%d" % READ_AT in text, text
+        assert "publication-witness live=%s" % live in text, text
+        assert "reason=" in text, text
+        CAPTURE["assert_identifier_free"](text)
+    assert "phase=published" in CAPTURE["render"](
+        evaluate(published(), reports=sequence)), "the stamp must name the state it believes"
+    assert "outcome=pass" not in CAPTURE["render"](passing)
+
+    # Through the tool itself: no witness, no verdict, and its own exit code.
+    with tempfile.TemporaryDirectory(prefix="u3-hid-void-") as temporary:
+        raw = Path(temporary) / "raw-configs.bin"
+        raw.write_bytes(published())
+        registry = Path(temporary) / "ioreg.txt"
+        registry.write_text(ioreg(CAPTURE["REPORT_DESCRIPTOR"]))
+        argv = [sys.executable, str(HOST / "capture-u2-hid-enumeration.py"),
+                "--configuration=5", "--stock-interfaces=3",
+                "--vendor=0x%04x" % VENDOR, "--product=0x%04x" % PRODUCT,
+                "--raw-configs=%s" % raw, "--ioreg=%s" % registry]
+        result = subprocess.run(argv, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
+                                timeout=60)
+        text = result.stdout.decode("ascii", "replace")
+        assert "outcome=%s" % void in text, text
+        assert "outcome=pass" not in text, text
+        assert result.returncode == CAPTURE["VOID_EXIT"], (result.returncode, text)
+        assert result.returncode not in (0, 2, 3), result.returncode
+        # The same evidence with the runner's witness passes, so the refusal is
+        # about the observation and nothing else.
+        witnessed = subprocess.run(
+            argv + ["--publication-state=%s" % LIVE_STATUS,
+                    "--publication-observed-at=%.3f" % time.time(),
+                    "--publication-max-age=%d" % RUNNER["lease_budget_seconds"]()],
+            stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, timeout=60)
+        witnessed_text = witnessed.stdout.decode("ascii", "replace")
+        assert "outcome=reports-unobserved" in witnessed_text, witnessed_text
+        assert witnessed.returncode == 2, (witnessed.returncode, witnessed_text)
+    print("PASS void observations refuse with their own label and carry their stamp")
+
+
+def lease_bounds():
+    """Nothing that has to finish inside the live window is bounded by a fixed 90 s."""
+    # The horizon is now the renewed lease's total cap, because the runner
+    # drives renewal itself. One quantum could never cover the bus return.
+    budget = RUNNER["lease_budget_seconds"]()
+    assert RUNNER["BROKER_LEASE_CEILING_SECONDS"] == 30, budget
+    assert budget == RUNNER["BROKER_LEASE_CAP_SECONDS"] == 180, budget
+    # Every wait the runner takes while the publication must still be live.
+    for name in ("REPORT_DEADLINE_SECONDS", "CONFIGURE_WAIT_SECONDS", "LEASE_WAIT_SECONDS"):
+        assert RUNNER[name] <= budget, (name, RUNNER[name])
+    assert "REPORT_SECONDS" not in RUNNER, "the fixed 90 s report deadline must be gone"
+    # The reattach the single quantum could not cover. The renewed lease now
+    # can: the cap must outlast the slowest measured return with room for the
+    # capture afterwards, or the window is empty again.
+    assert RUNNER["USB_RETURN_SECONDS"] >= 72, RUNNER["USB_RETURN_SECONDS"]
+    assert budget > RUNNER["USB_RETURN_SECONDS"], (budget, RUNNER["USB_RETURN_SECONDS"])
+    # Three attempts inside one quantum, so one lost reply cannot end it.
+    assert RUNNER["RENEW_INTERVAL_SECONDS"] * 3 <= RUNNER["BROKER_LEASE_CEILING_SECONDS"], (
+        RUNNER["RENEW_INTERVAL_SECONDS"])
+    source = (HOST / "run-u2-hid-trial-wifi.py").read_text()
+    assert "LEASE RENEWAL SEAM" in source, "the renewal seam must be findable"
+    # Wired to the broker's actual command, and stopped on every path - a
+    # renewer left running holds a publication alive with nothing watching it.
+    assert '"renew-lease"' in source, "the seam must drive the broker's renewal"
+    assert source.count("finish_renewal()") >= 3, "renewal must be stopped on every path"
+    print("PASS in-window waits are bounded by the renewed lease and renewal is driven")
+
+
+def monitor_window():
+    """The lifecycle window outlasts the device's documented reattach."""
+    support = runpy.run_path(str(HOST / "u2_trial_support.py"))
+    window = support["TRIAL_WINDOW_SECONDS"]
+    # 72 s is the slowest measured reattach and a trial can cycle the bus
+    # twice, so the window has to outlast 2 x 72 s plus the 30 s lease
+    # ceiling, the report deadline and the registry read.
+    assert window >= 2 * 72 + 30 + 30 + 60, window
+    assert window <= 600, "the monitor refuses a window above 600 s"
+    assert support["WINDOW_SECONDS"] < 29, (
+        "the short window is the one that ended before the earliest reattach")
+    assert "29-72" in (HOST / "u2_trial_support.py").read_text(), (
+        "the window has to be justified against the measurement")
+    source = (HOST / "run-u2-hid-trial-wifi.py").read_text()
+    assert "TRIAL_WINDOW_SECONDS" in source, "the trial must arm the long window"
+    print("PASS lifecycle window covers the documented 29-72 s reattach")
+
+
+def syslog_reconnect():
+    """The syslog capture survives a relay that stops delivering without exiting.
+
+    That is how the real one fails: the stream goes quiet and the process stays
+    alive, so a loop that only reconnects when its child exits never reconnects
+    at all. Every attempt writes a marker, so a gap in the device's log is
+    distinguishable from a gap in the capture.
+    """
+    recover = runpy.run_path(str(HOST / "recover-u2-over-wifi.py"))
+    with tempfile.TemporaryDirectory(prefix="u3-syslog-") as temporary:
+        directory = Path(temporary)
+        stalling = directory / "stalls.sh"
+        stalling.write_text("#!/bin/sh\necho device-line\nsleep 30\n")
+        stalling.chmod(0o700)
+        exiting = directory / "exits.sh"
+        exiting.write_text("#!/bin/sh\necho device-line\n")
+        exiting.chmod(0o700)
+        for name, command, reason in (("stalls.txt", stalling, "stalled"),
+                                      ("exits.txt", exiting, "exited")):
+            log = directory / name
+            process = recover["start_supervisor"](["/bin/sh", str(command)], log, 1)
+            try:
+                text = ""
+                for _ in range(60):
+                    time.sleep(0.5)
+                    text = log.read_text(errors="replace")
+                    if text.count(recover["CONNECT_MARKER"]) >= 2:
+                        break
+            finally:
+                recover["stop_syslog"](process)
+            assert text.count(recover["CONNECT_MARKER"]) >= 2, (name, text)
+            assert "reason=%s" % reason in text, (name, text)
+            # The device's own lines are kept, so the markers delimit the gaps
+            # rather than replacing the log.
+            assert "device-line" in text, (name, text)
+            # Each marker says which attempt it is, so a long run is readable.
+            assert "attempt=2" in text, (name, text)
+        # The production stream goes through the same supervisor, so the loop
+        # the tests exercise is the loop the trial runs.
+        assert "start_supervisor(" in (HOST / "recover-u2-over-wifi.py").read_text()
+    print("PASS syslog capture reconnects on a stalled relay and marks every attempt")
 
 
 def rejected(action, contains=None):
@@ -314,12 +530,21 @@ class Surface:
             function="absent-service", kit=0, canary=(0, b"reports written=12\n"),
             lease=True, capture=None, reports="reports-recorded", sequence=None,
             publish=None, usb=True, strict=(True, b"U2_V7_CURRENT ok\n"),
-            configured=True, cycle=None)
+            configured=True, cycle=None, after_status=LIVE_STATUS)
         self.state.update(overrides)
+        # The capture's witness: what the broker said before the read, and when.
+        self.witness = None
 
     def ask(self, command):
         self.asked.append(command)
         if command == "status":
+            # Before the publication this is the idle status the preconditions
+            # check; afterwards it is what the runner's liveness witness is
+            # taken from, and what it says after the read is what decides
+            # whether the observation was positioned at all.
+            if self.phase == "published":
+                return (LIVE_STATUS if "collect-capture" not in self.steps
+                        else self.state["after_status"])
             return self.state["status"]
         if command == "prepare":
             self.phase = "prepared"
@@ -395,23 +620,44 @@ class Surface:
         path = RUNNER["captured_reports_path"](outcome, self.trial, "reports.txt")
         return outcome, "%s outcome=%s\n" % (REPORTS["PREFIX"], outcome), path
 
-    def start_capture(self, stage, reports):
+    def await_usb(self):
+        """The device is off bus after the cycle; nothing may measure until it is back."""
+        self.steps.append("await-usb")
+        return self.state["usb"]
+
+    def start_capture(self, stage, reports, live):
         self.steps.append("start-capture")
-        return (stage, reports)
+        self.witness = live
+        return (stage, reports, live)
 
     def collect_capture(self, handle):
         self.steps.append("collect-capture")
         if self.state["capture"] is not None:
             return self.state["capture"]
         # The real comparator, on synthetic descriptors plus whatever the
-        # capture step actually wrote: a pass can only come through that file.
+        # capture step actually wrote, and through the real liveness check on
+        # the runner's own witness: a pass can only come through both.
         reports = (CAPTURE["parse_reports"](Path(handle[1]).read_text())
                    if handle[1] else None)
-        result = evaluate(published(), reports=reports)
+        live = CAPTURE["publication_liveness"](handle[2]["state"],
+                                              handle[2]["observed_at"],
+                                              handle[2]["max_age"], time.time())
+        result = evaluate(published(), reports=reports, liveness=live)
         return result["outcome"], CAPTURE["render"](result)
+
+    def start_renewal(self):
+        self.steps.append("start-renewal")
+        return {"renewer": True}
+
+    def stop_renewal(self, state):
+        assert state == {"renewer": True}, state
+        self.steps.append("stop-renewal")
+        return "renewals=3 refused-at-epoch=none\n"
 
     def environment(self):
         return {
+            "start_renewal": self.start_renewal,
+            "stop_renewal": self.stop_renewal,
             "local_digests": lambda: self.state["local"],
             "staged_canary_digest": lambda: self.state["staged"],
             "ssh_reachable": lambda: self.state["reachable"],
@@ -427,7 +673,8 @@ class Surface:
             "collect_reports": self.collect_reports,
             "start_capture": self.start_capture,
             "collect_capture": self.collect_capture,
-            "usb_present": lambda: self.state["usb"],
+            "await_usb": self.await_usb,
+            "now": time.time,
             "strict": lambda phase: self.state["strict"],
             "syslog": lambda: None,
             "stop_syslog": lambda handle: None,
@@ -467,8 +714,23 @@ def runner():
     assert surface.steps.index("start-reports") < surface.steps.index("publish-hid"), (
         "the reader must be waiting before the keyboard can appear")
     live = surface.steps.index("collect-canary")
-    for step in ("collect-reports", "start-capture"):
+    for step in ("collect-reports", "start-capture", "collect-capture"):
         assert surface.steps.index("publish-hid") < surface.steps.index(step) < live, step
+    # The capture happens inside the live window, and the device has to be back
+    # on bus before anything tries to measure it: a bus cycle takes it away for
+    # a documented 29-72 s, and a capture that reads while it is gone - or
+    # after the canary has handed the lease back - measures a different device.
+    assert surface.steps.index("cycle-bus") < surface.steps.index("await-usb"), surface.steps
+    assert surface.steps.index("await-usb") < surface.steps.index("start-capture"), surface.steps
+    assert surface.steps.index("collect-capture") < surface.steps.index("collect-canary"), (
+        surface.steps)
+    # The witness the capture was given is the broker's own word, taken before
+    # the read and bounded by the lease rather than by a fixed deadline.
+    assert surface.witness["state"] == LIVE_STATUS, surface.witness
+    assert surface.witness["max_age"] == RUNNER["lease_budget_seconds"](), surface.witness
+    assert surface.asked.index("status") < surface.asked.index("publish-hid hidcanary")
+    assert surface.asked.count("status") >= 3, (
+        "the publication's liveness is asked before and after the read")
     # Publishing cycles the bus, so the host read the configuration descriptor
     # while the appended interface still had no class, descriptors or
     # endpoints; configuring it afterwards changes only the device's own state.
@@ -528,9 +790,11 @@ def runner():
     stillborn = Surface(publish="ERR rejected")
     rejected(lambda: RUNNER["main"](options(), stillborn.environment()),
              "additive publication")
-    assert stillborn.steps == ["start-canary", "await-lease", "start-reports",
-                               "publish-hid", "collect-reports",
-                               "collect-canary"], stillborn.steps
+    # Renewal is stopped here too: a trial that gave up must not leave a
+    # renewer holding the publication alive with nothing watching it.
+    assert stillborn.steps == ["start-canary", "await-lease", "start-renewal",
+                               "start-reports", "publish-hid", "collect-reports",
+                               "stop-renewal", "collect-canary"], stillborn.steps
 
     # No lease, no publication: the broker would refuse it anyway, and the
     # canary that was started is collected rather than left running.
@@ -540,6 +804,32 @@ def runner():
         no_lease.asked)
     assert no_lease.steps == ["start-canary", "await-lease", "collect-canary"], (
         no_lease.steps)
+
+    # A void observation is never a negative result. The publication that was
+    # live when the runner asked but gone by the time the read finished, and a
+    # capture that could not establish liveness at all, are two different
+    # failures to be positioned, so each keeps its own label - and neither is a
+    # pass or a descriptor failure.
+    expired = Surface(after_status="OK phase=absent publication=enabled")
+    gone = RUNNER["main"](options(), expired.environment())
+    assert gone["enumeration"] == RUNNER["NOT_LIVE_AFTER_READ"], gone
+    assert gone["hid_proof"] == "void", gone
+    unestablished = Surface(capture=(RUNNER["PUBLICATION_UNESTABLISHED"],
+                                     "outcome=%s\n" % RUNNER["PUBLICATION_UNESTABLISHED"]))
+    nothing_seen = RUNNER["main"](options(), unestablished.environment())
+    assert nothing_seen["enumeration"] == RUNNER["PUBLICATION_UNESTABLISHED"], nothing_seen
+    assert nothing_seen["hid_proof"] == "void", nothing_seen
+    assert RUNNER["PUBLICATION_UNESTABLISHED"] == CAPTURE["PUBLICATION_UNESTABLISHED"]
+    assert RUNNER["NOT_LIVE_AFTER_READ"] != RUNNER["PUBLICATION_UNESTABLISHED"]
+    for label in RUNNER["VOID_OBSERVATIONS"]:
+        assert RUNNER["hid_proof"](label) == "void", label
+        assert RUNNER["mode_hid_proof"]("full", label) == "void", label
+    assert "void" not in ("pass", "fail", "inconclusive")
+    # A void observation keeps the restore verdict it is entitled to - the
+    # strict check's own output is the proof of that - and says plainly that it
+    # is not a keyboard result.
+    assert gone["confirmed"] is True, gone
+    assert RUNNER["PUBLICATION_UNESTABLISHED"] in RUNNER["__doc__"]
 
     # An absent report sequence is reported as inconclusive and never as a HID
     # proof; only an observed, matching sequence passes.
@@ -651,9 +941,15 @@ def runner():
     print("PASS HID trial runner refusals and proof-gated confirm")
 
 
-FULL_STEPS = ["start-canary", "await-lease", "start-reports", "publish-hid",
-              "await-configured", "cycle-bus", "collect-reports", "start-capture",
-              "collect-canary", "collect-capture"]
+# Renewal brackets everything that must happen while the publication is live:
+# started once the canary holds the lease and before anything is published, and
+# stopped only after the descriptor read, because the device is off bus for a
+# measured 29-72 s in the middle of this sequence and a lease that lapses there
+# lets the healer restore the stock description under the capture.
+FULL_STEPS = ["start-canary", "await-lease", "start-renewal", "start-reports",
+              "publish-hid", "await-configured", "cycle-bus", "await-usb",
+              "collect-reports", "start-capture", "collect-capture",
+              "stop-renewal", "collect-canary"]
 
 
 def gate_modes():
@@ -857,6 +1153,10 @@ if __name__ == "__main__":
     try:
         comparator()
         descriptors()
+        liveness()
+        lease_bounds()
+        monitor_window()
+        syslog_reconnect()
         reader()
         report_capture()
         runner()

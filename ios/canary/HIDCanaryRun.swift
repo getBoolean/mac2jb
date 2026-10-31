@@ -60,12 +60,48 @@ struct PipeReportTransport: HIDReportSink {
     }
 }
 
+// What the pipe says its current maximum packet size is. The reference exposes
+// this as a live property of the pipe, not as the value that was asked for: it
+// is zero until a host has selected a configuration containing the interface
+// and becomes the endpoint's size once it has. Reading it is therefore a
+// complete answer to "is my interface in the host's active configuration", and
+// it produces no host-visible traffic at all - which is why the wait polls it
+// instead of writing a report. The shim's own result and the raw IOReturn are
+// kept apart from the size, because a refused query and a query that answered
+// zero are different facts.
+struct HIDPipeSizeProbe: Equatable {
+    // The shim's success result. Named here because this file is built for the
+    // Mac tests too, where the shim header is not imported.
+    static let success: Int32 = 0
+
+    let result: Int32
+    let rawReturn: Int32
+    let maxPacketSize: UInt64
+}
+
+protocol HIDPipeVisibility {
+    func currentMaxPacketSize() -> HIDPipeSizeProbe
+}
+
+// The production probe, with the shim call injected so this file stays free of
+// the shim header and the Mac tests can exercise the wait without a device.
+struct PipeSizeVisibility: HIDPipeVisibility {
+    let probe: () -> HIDPipeSizeProbe
+
+    func currentMaxPacketSize() -> HIDPipeSizeProbe { probe() }
+}
+
 enum HIDCanaryStop: Equatable {
     case completed
     case invalidReport
     case writeFailed
     case disconnected
     case hostNeverEnumerated
+    case enumerationProbeUnavailable
+    // The visibility query answered with a raw return that is not one of the
+    // reference's "not yet" values. Not a write failure: the wait writes
+    // nothing, so calling it one would describe something that never happened.
+    case enumerationWaitFailed
     case leaseLost
     case interrupted
 
@@ -73,12 +109,16 @@ enum HIDCanaryStop: Equatable {
     // mid-typing point at completely different causes, so a trial has to be
     // able to tell them apart from the exit status alone. 1 is the generic
     // refusal, 2 the usage refusal and 3 to 5 the stop-after-open gate's
-    // answers, so the unenumerated host takes 6.
+    // answers, so the unenumerated host takes 6. A pipe that would not answer
+    // the visibility query at all is a third fact - the wait could not look,
+    // rather than looked and saw nothing - so it takes 7.
     var exitCode: Int32 {
         switch self {
         case .completed: return 0
         case .hostNeverEnumerated: return 6
-        case .invalidReport, .writeFailed, .disconnected, .leaseLost, .interrupted:
+        case .enumerationProbeUnavailable: return 7
+        case .invalidReport, .writeFailed, .disconnected, .leaseLost, .interrupted,
+             .enumerationWaitFailed:
             return 1
         }
     }
@@ -89,8 +129,9 @@ enum HIDCanaryStop: Equatable {
 // after a moment" from "never enumerated".
 enum HIDHostEnumeration: Equatable {
     case enumerated
-    case neverEnumerated  // the bound ran out: not a disconnect
-    case waitFailed       // a raw return that is not waited on
+    case neverEnumerated   // the bound ran out: not a disconnect
+    case waitFailed        // a raw return that is not waited on
+    case probeUnavailable  // the pipe would not answer at all: nothing was seen
     case leaseLost
     case interrupted
 
@@ -99,6 +140,7 @@ enum HIDHostEnumeration: Equatable {
         case .enumerated: return "enumerated"
         case .neverEnumerated: return "never-enumerated"
         case .waitFailed: return "wait-failed"
+        case .probeUnavailable: return "probe-unavailable"
         case .leaseLost: return "lease-lost"
         case .interrupted: return "interrupted"
         }
@@ -109,6 +151,10 @@ struct HIDEnumerationResult: Equatable {
     let state: HIDHostEnumeration
     let polls: Int
     let lastRawReturn: Int32
+    // The last size the pipe reported. Zero is the whole signal for "not in the
+    // host's active configuration yet", so it is kept beside the raw return
+    // rather than folded into it.
+    let lastMaxPacketSize: UInt64
 }
 
 struct HIDCanarySummary: Equatable {
@@ -137,6 +183,11 @@ struct HIDCanaryRun {
     let sink: HIDReportSink
     let lease: CanaryLease
     let reports: [[UInt8]]
+    // The wait's only instrument. Injected and required: the wait must have a
+    // way to ask about host visibility that is not the way it types, so there
+    // is no fallback to the report sink and no default that could reintroduce
+    // one.
+    let visibility: HIDPipeVisibility
     // A requested stop, asked before every write rather than only once the
     // list runs out: a signal must take effect during the writing, not after
     // it. Defaulted, so a caller that cannot be interrupted says nothing.
@@ -175,25 +226,36 @@ struct HIDCanaryRun {
         return finish(reportsWritten: written, stop: stop, enumeration: enumeration)
     }
 
-    // The bounded wait for host enumeration, as the reference does it: poll by
-    // writing the neutral report, which is all zeros, so a host that is
-    // already watching sees "no keys pressed" and repeating it is harmless.
-    // Not-enumerated and a write timeout mean the host has not finished
-    // enumerating; any other raw return is a real failure and stops the wait
-    // at once, recorded verbatim.
+    // The bounded wait for host enumeration. It polls the pipe's current
+    // maximum packet size, which is zero until a host has selected a
+    // configuration containing this interface and the endpoint's size once it
+    // has. That is a complete answer to the question the wait is asking, it
+    // puts nothing on the bus, and - the reason it replaced polling by writing
+    // the neutral report - it means the mechanism of the wait is not the
+    // mechanism of typing, so no amount of waiting can type into the
+    // operator's machine.
+    //
+    // The raw IOReturn is kept as the secondary signal it was: zero, or either
+    // of the reference's two "not yet" values, is a size of zero that means
+    // the host has not finished enumerating. Any other raw return is a real
+    // failure and stops the wait at once, recorded verbatim. A query the shim
+    // itself refuses is a third answer - the wait could not look at all - and
+    // never a report that nothing was seen.
     private func waitForHostEnumeration() -> HIDEnumerationResult {
         let budget = UInt64(Self.enumerationWaitSeconds * 1_000_000_000)
         let start = now()
         var polls = 0
         var last: Int32 = 0
+        var size: UInt64 = 0
         func result(_ state: HIDHostEnumeration) -> HIDEnumerationResult {
-            HIDEnumerationResult(state: state, polls: polls, lastRawReturn: last)
+            HIDEnumerationResult(state: state, polls: polls, lastRawReturn: last,
+                                 lastMaxPacketSize: size)
         }
         while true {
             guard !shouldStop() else { return result(.interrupted) }
-            // Checked before every poll, exactly as the report loop does: a
-            // write after the lease has gone is the one thing the broker
-            // cannot restore from.
+            // Checked before every poll, exactly as the report loop does. The
+            // poll writes nothing, but the lease is what authorizes touching
+            // the interface at all, so the rule does not relax.
             guard lease.isHeld() else { return result(.leaseLost) }
             // The deadline only ends a wait that has already asked once, so a
             // clock that is already past it cannot skip the single poll that
@@ -202,10 +264,16 @@ struct HIDCanaryRun {
                 return result(.neverEnumerated)
             }
             polls += 1
-            let answer = sink.write(HIDKeyboard.neutralReport)
+            let answer = visibility.currentMaxPacketSize()
             last = answer.rawReturn
-            if answer.outcome == .delivered { return result(.enumerated) }
-            guard PipeReportTransport.notYetEnumerated.contains(last) else {
+            size = answer.maxPacketSize
+            guard answer.result == HIDPipeSizeProbe.success else {
+                return result(.probeUnavailable)
+            }
+            // A size the host has selected a configuration for: the interface
+            // is in that configuration, which is the whole question.
+            if size > 0 { return result(.enumerated) }
+            guard last == 0 || PipeReportTransport.notYetEnumerated.contains(last) else {
                 return result(.waitFailed)
             }
             pause()
@@ -216,7 +284,8 @@ struct HIDCanaryRun {
         switch state {
         case .enumerated: return .completed
         case .neverEnumerated: return .hostNeverEnumerated
-        case .waitFailed: return .writeFailed
+        case .probeUnavailable: return .enumerationProbeUnavailable
+        case .waitFailed: return .enumerationWaitFailed
         case .leaseLost: return .leaseLost
         case .interrupted: return .interrupted
         }

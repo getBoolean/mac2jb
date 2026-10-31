@@ -58,6 +58,36 @@ private final class CycleRecordingController: USBRestoreController {
     }
 }
 
+// Records every controller call in order, so a test can tell the three
+// publication shapes apart: the bare original, the original plus one appended
+// function, and the one-call re-publication of that same intended description.
+private final class AppendingController: USBRestoreController {
+    var calls: [String] = []
+    var refuseIntended = false
+
+    func publish(_ description: Data) throws { calls.append("publish") }
+
+    func publish(_ description: Data, strippingFunction function: String,
+                 configuration: Int) throws {
+        calls.append("strip \(function)@\(configuration)")
+    }
+
+    func validateAppending(_ description: Data, function: String, configuration: Int) throws {
+        calls.append("validate \(function)@\(configuration)")
+    }
+
+    func publishAppending(_ description: Data, function: String, configuration: Int) throws {
+        calls.append("append \(function)@\(configuration)")
+    }
+
+    func republishAppending(_ description: Data, function: String, configuration: Int) throws {
+        guard !refuseIntended else {
+            throw USBRestoreCoordinatorError.additivePublicationUnsupported
+        }
+        calls.append("republish-append \(function)@\(configuration)")
+    }
+}
+
 private final class FakeVerifier: USBExternalRestoreVerifier {
     var fails = false
     func verifyRestored(_ recipe: USBRestoreRecipe) throws -> String {
@@ -107,6 +137,9 @@ enum USBRestoreJournalTests {
         try recoveryWaitsForReadiness()
         try noInitialCycleFailsClosedWithoutArrival()
         try leaseExpiryRestores()
+        try renewalIsItsOwnJournalOperation()
+        try renewalMovesForwardAndIsCapped()
+        try healingALivePublicationKeepsTheAppendedFunction()
         try coordinatorRestoresAndRetainsFailure()
         try rejectUnsafeFile()
         try rejectSymlinkFile()
@@ -344,6 +377,205 @@ enum USBRestoreJournalTests {
         try require(controller.descriptions.count == 2)
         try require(try journal.read().phase == .awaitingVerification)
         try coordinator.confirmExternalRestore()
+    }
+
+    // Renewal is the only change to a live record that is not a phase change,
+    // and it has to stay that way: transition() must keep refusing any change
+    // to the deadline, and the renewal operation must change nothing else.
+    private static func renewalIsItsOwnJournalOperation() throws {
+        let path = try temporaryDirectory()
+        defer {
+            _ = unlink(path + "/" + USBRestoreJournal.filename)
+            _ = unlink(path + "/.restore-journal.lock")
+            _ = rmdir(path)
+        }
+        let journal = USBRestoreJournal(directory: path, expectedOwner: getuid())
+        let prepared = record()
+        try journal.create(prepared)
+        // A phase change that also moves the deadline is still refused.
+        do {
+            try journal.transition(from: prepared, to: USBRestoreRecord(
+                recipe: prepared.recipe, phase: .published,
+                leaseDeadlineUptime: 200, externalVerificationSHA256: nil))
+            throw Failure()
+        } catch USBRestoreJournalError.invalidTransition {}
+        // Only forward.
+        for deadline in [UInt64(99), 100] {
+            do { try journal.extendLease(from: prepared, to: deadline); throw Failure() }
+            catch USBRestoreJournalError.invalidTransition {}
+        }
+        try journal.extendLease(from: prepared, to: 200)
+        let renewed = try journal.read()
+        try require(renewed.leaseDeadlineUptime == 200)
+        try require(renewed.recipe == prepared.recipe)
+        try require(renewed.phase == .prepared)
+        try require(renewed.externalVerificationSHA256 == nil)
+        try require(renewed.appendedFunctionName == nil)
+        // A stale expectation cannot renew: the record it read is gone.
+        do { try journal.extendLease(from: prepared, to: 300); throw Failure() }
+        catch USBRestoreJournalError.changed {}
+        // A published record renews too, and keeps the function it appended.
+        let published = USBRestoreRecord(
+            recipe: renewed.recipe, phase: .published,
+            leaseDeadlineUptime: renewed.leaseDeadlineUptime,
+            externalVerificationSHA256: nil,
+            appendedFunctionName: "Mac2jbCanary", appendedFunctionConfiguration: 5)
+        try journal.transition(from: renewed, to: published)
+        try journal.extendLease(from: published, to: 400)
+        let again = try journal.read()
+        try require(again.leaseDeadlineUptime == 400)
+        try require(again.appendedFunctionName == "Mac2jbCanary")
+        try require(again.appendedFunctionConfiguration == 5)
+        try require(again.phase == .published)
+        // No lease applies once the original is going back.
+        let restoring = USBRestoreRecord(
+            recipe: again.recipe, phase: .restoring,
+            leaseDeadlineUptime: again.leaseDeadlineUptime,
+            externalVerificationSHA256: nil,
+            appendedFunctionName: again.appendedFunctionName,
+            appendedFunctionConfiguration: again.appendedFunctionConfiguration)
+        try journal.transition(from: again, to: restoring)
+        do { try journal.extendLease(from: restoring, to: 500); throw Failure() }
+        catch USBRestoreJournalError.invalidTransition {}
+        try require(try journal.read().leaseDeadlineUptime == 400)
+    }
+
+    private static func renewalMovesForwardAndIsCapped() throws {
+        let path = try temporaryDirectory()
+        defer {
+            _ = unlink(path + "/" + USBRestoreJournal.filename)
+            _ = unlink(path + "/.restore-journal.lock")
+            _ = rmdir(path)
+        }
+        let second: UInt64 = 1_000_000_000
+        let journal = USBRestoreJournal(directory: path, expectedOwner: getuid())
+        let clock = FakeClock(uptimeNanoseconds: second)
+        let coordinator = USBRestoreCoordinator(
+            journal: journal, currentIdentity: identity(),
+            controller: FakeController(), externalVerifier: FakeVerifier(),
+            clock: clock, beforeRecovery: {})
+        let quantum = USBRestoreCoordinator.maxLeaseQuantumNanoseconds
+        let granted = clock.uptimeNanoseconds
+        let cap = granted + USBRestoreCoordinator.maxPublicationLifeNanoseconds
+        try coordinator.prepare(recipe(), leaseDeadlineUptime: granted + quantum)
+        // Nothing has elapsed, so the deadline cannot move: a renewal that
+        // would not extend anything is refused rather than rewritten.
+        do {
+            _ = try coordinator.renewLease(grantedUptime: granted, quantum: quantum)
+            throw Failure()
+        } catch USBRestoreCoordinatorError.leaseCapReached {}
+        // A quantum larger than one lease is refused however it is asked for.
+        clock.uptimeNanoseconds = 11 * second
+        do {
+            _ = try coordinator.renewLease(grantedUptime: granted, quantum: quantum + 1)
+            throw Failure()
+        } catch USBRestoreCoordinatorError.leaseExpired {}
+        do {
+            _ = try coordinator.renewLease(grantedUptime: granted, quantum: 0)
+            throw Failure()
+        } catch USBRestoreCoordinatorError.leaseExpired {}
+        try require(try journal.read().leaseDeadlineUptime == granted + quantum)
+        // A live worker moves the deadline out, one quantum at a time.
+        try require(try coordinator.renewLease(grantedUptime: granted,
+                                               quantum: quantum) == 11 * second + quantum)
+        try require(try journal.read().leaseDeadlineUptime == 11 * second + quantum)
+        try require(try !coordinator.recoverIfLeaseExpired())
+        // However many renewals arrive, the total life of one publication is
+        // capped, and the last renewal lands exactly on the cap.
+        var last = 11 * second + quantum
+        for step in stride(from: UInt64(36), through: 161, by: 25) {
+            clock.uptimeNanoseconds = step * second
+            try require(clock.uptimeNanoseconds < last)  // renewed before expiry
+            last = try coordinator.renewLease(grantedUptime: granted, quantum: quantum)
+            try require(last == min(step * second + quantum, cap))
+            try require(last <= cap)
+        }
+        try require(last == cap)
+        clock.uptimeNanoseconds = 170 * second
+        for _ in 0..<3 {
+            do {
+                _ = try coordinator.renewLease(grantedUptime: granted, quantum: quantum)
+                throw Failure()
+            } catch USBRestoreCoordinatorError.leaseCapReached {}
+        }
+        try require(try journal.read().leaseDeadlineUptime == cap)
+        // A lease that has run out is not renewable: the watchdog is entitled
+        // to be restoring it already.
+        clock.uptimeNanoseconds = cap
+        do {
+            _ = try coordinator.renewLease(grantedUptime: granted, quantum: quantum)
+            throw Failure()
+        } catch USBRestoreCoordinatorError.leaseExpired {}
+        try require(try coordinator.recoverIfLeaseExpired())
+        // And no lease applies once the original is going back.
+        do {
+            _ = try coordinator.renewLease(grantedUptime: granted, quantum: quantum)
+            throw Failure()
+        } catch USBRestoreCoordinatorError.leaseExpired {}
+        try coordinator.confirmExternalRestore()
+        // With no journal at all there is nothing to renew.
+        do {
+            _ = try coordinator.renewLease(grantedUptime: granted, quantum: quantum)
+            throw Failure()
+        } catch USBRestoreJournalError.io(ENOENT) {}
+    }
+
+    // A heal that is bringing the bus back during a live publication must put
+    // the intended description back, not the bare original: the appended
+    // function is the thing the publication exists to make observable. Every
+    // path that is genuinely restoring still strips it.
+    private static func healingALivePublicationKeepsTheAppendedFunction() throws {
+        let path = try temporaryDirectory()
+        defer {
+            _ = unlink(path + "/" + USBRestoreJournal.filename)
+            _ = unlink(path + "/.restore-journal.lock")
+            _ = rmdir(path)
+        }
+        let journal = USBRestoreJournal(directory: path, expectedOwner: getuid())
+        let controller = AppendingController()
+        let clock = FakeClock(uptimeNanoseconds: 10)
+        let deadline: UInt64 = 10 + USBRestoreCoordinator.maxLeaseQuantumNanoseconds
+        let coordinator = USBRestoreCoordinator(
+            journal: journal, currentIdentity: identity(), controller: controller,
+            externalVerifier: FakeVerifier(), clock: clock, beforeRecovery: {})
+        try coordinator.prepare(recipe(), leaseDeadlineUptime: deadline)
+        try coordinator.publishAdditive(function: "Mac2jbCanary", configuration: 5)
+        try require(controller.calls == ["validate Mac2jbCanary@5",
+                                         "append Mac2jbCanary@5"])
+        // Never over a working connection, the same rule every other
+        // re-publication applies.
+        do {
+            try coordinator.republishIntended(controllerConfigured: { true })
+            throw Failure()
+        } catch USBRestoreCoordinatorError.recoveryRequired {}
+        try coordinator.republishIntended(controllerConfigured: { false })
+        try require(controller.calls.last == "republish-append Mac2jbCanary@5")
+        // It is not a restore: the phase, the deadline and the recorded
+        // function are all untouched, so a crash here still restores.
+        let live = try journal.read()
+        try require(live.phase == .published)
+        try require(live.leaseDeadlineUptime == deadline)
+        try require(live.appendedFunctionName == "Mac2jbCanary")
+        // A backend that cannot re-publish the intended description says so
+        // and changes nothing, so the caller can fall back to restoring.
+        controller.refuseIntended = true
+        do {
+            try coordinator.republishIntended(controllerConfigured: { false })
+            throw Failure()
+        } catch USBRestoreCoordinatorError.additivePublicationUnsupported {}
+        try require(try journal.read() == live)
+        controller.refuseIntended = false
+        // Once the lease is gone the intended description is refused and the
+        // bare original goes back.
+        clock.uptimeNanoseconds = deadline
+        do {
+            try coordinator.republishIntended(controllerConfigured: { false })
+            throw Failure()
+        } catch USBRestoreCoordinatorError.recoveryRequired {}
+        try require(try coordinator.recoverIfLeaseExpired())
+        try require(controller.calls.last == "strip Mac2jbCanary@5")
+        try require(try journal.read().phase == .awaitingVerification)
+        try require(try journal.read().appendedFunctionName == nil)
     }
 
     private static func rejectUnsafeFile() throws {

@@ -17,6 +17,19 @@ descriptor failure, because reading it as either would turn "we could not see"
 into "HID works on this device", which is the one conclusion this tool exists
 to establish honestly.
 
+The same argument applies one step earlier, to whether this capture was
+positioned to see anything at all. Publishing a changed description takes the
+device off bus for a measured 29 to 72 seconds while the broker's lease ceiling
+is 30, and the healer's remedy re-publishes the journalled original - so a
+capture that reads late is reading a *stock* device and would report its
+missing interface as a descriptor failure. It therefore refuses to emit a pass
+or any descriptor verdict unless the caller hands it a witness that the
+publication was live: what the broker said, when it said it, and the lease that
+bounds how long that word can be relied on. The capture stamps its own read
+time and compares the two; a read it cannot place inside that window is
+`publication-liveness-unestablished`, its own outcome and its own exit code, so
+a void observation can never again be read as a negative result.
+
 macOS exposes no control-transfer log, so the recorded HID control requests are
 only those whose result survives in the registry; the rest are listed as
 expected and not exposed. A bus-level capture on another host is the complete
@@ -29,7 +42,10 @@ checked again before it is written.
 Usage:
   --configuration N --stock-interfaces N [--vendor 0xNNNN --product 0xNNNN]
   [--raw-configs FILE] [--ioreg FILE] [--reports FILE] [--out FILE]
-Exit: 0 pass, 2 a labelled failure, 3 not-enumerated, 1 refused.
+  [--publication-state TEXT --publication-observed-at EPOCH
+   --publication-max-age SECONDS]
+Exit: 0 pass, 2 a labelled failure, 3 not-enumerated,
+      4 publication liveness unestablished, 1 refused.
 """
 
 import hashlib
@@ -38,6 +54,7 @@ import re
 import runpy
 import subprocess
 import sys
+import time
 
 HOST = Path(__file__).resolve().parent
 RAW = runpy.run_path(str(HOST / "capture-u2-raw-configs.py"))
@@ -65,8 +82,21 @@ KEYSTROKES = (("M", 0x10, True), ("A", 0x04, True), ("C", 0x06, True),
 LEFT_SHIFT = 0x02
 REPORT_LENGTH = 8
 
-# Worst outcome first: the label printed is the first that applies.
-OUTCOMES = ("not-enumerated", "interface-absent", "interface-mismatch", "endpoint-mismatch",
+# A read this capture cannot place inside a live publication. Its own outcome,
+# distinct from every other, because it is a statement about the observation
+# and not about the device: the descriptors it read may belong to the stock
+# description the healer put back.
+PUBLICATION_UNESTABLISHED = "publication-liveness-unestablished"
+VOID_EXIT = 4
+# The fragment of the broker's status line that says an additive publication is
+# live. Nothing else is accepted as a witness.
+LIVE_PHASE = "phase=published"
+# Worst outcome first: the label printed is the first that applies. The void
+# observation is first because an unpositioned read cannot support any of the
+# others - not even `not-enumerated`, which would claim the host saw nothing
+# when in truth this capture does not know what it was looking at.
+OUTCOMES = (PUBLICATION_UNESTABLISHED,
+            "not-enumerated", "interface-absent", "interface-mismatch", "endpoint-mismatch",
             "hid-descriptor-mismatch", "report-descriptor-missing", "report-descriptor-mismatch",
             "reports-mismatch", "reports-unobserved", "pass")
 # Registry keys that carry a device identifier. Their lines never reach the
@@ -235,8 +265,54 @@ def compare_reports(observed, expected):
     return []
 
 
+def witness_token(state):
+    """The broker's status line as one printable token, with no identifier in it."""
+    return re.sub(r"[^A-Za-z0-9=._-]+", "_", state)[:96]
+
+
+def publication_liveness(state, observed_at, max_age, read_at):
+    """Whether this read can be placed inside a live publication.
+
+    The caller knows what the broker said and when; this capture knows when it
+    read. Liveness is established only when the broker's word says a
+    publication was live, was given before the read, and is no older than the
+    lease that bounds it - the lease, not a fixed deadline, because the lease
+    is the only thing that keeps the publication from being healed away. Each
+    way of failing to be positioned keeps its own reason, so an operator reads
+    why rather than guessing.
+    """
+    answer = {"established": False, "state": state, "observed_at": observed_at,
+              "max_age": max_age, "read_at": read_at, "age": None}
+    if state is None or observed_at is None or max_age is None:
+        answer["reason"] = "no-publication-witness-supplied"
+        return answer
+    age = read_at - observed_at
+    answer["age"] = age
+    if LIVE_PHASE not in state:
+        answer["reason"] = "witness-state-is-not-a-live-publication"
+        return answer
+    if age < 0:
+        answer["reason"] = "witness-observed-after-the-read"
+        return answer
+    if age > max_age:
+        answer["reason"] = ("witness-older-than-the-lease age=%.1fs lease=%.1fs"
+                            % (age, max_age))
+        return answer
+    answer["established"] = True
+    answer["reason"] = "witness-inside-the-lease"
+    return answer
+
+
 def control_requests(enumerated, descriptor_present):
-    """What the host must have asked, split into observed and not exposed."""
+    """What the host must have asked, split into observed and not exposed.
+
+    `enumerated is None` is the void observation: this capture cannot say what
+    the host asked of which description, so every entry says so. Reporting
+    "not-observed" there would be a claim about the device.
+    """
+    if enumerated is None:
+        return [(name, "not-established") for name, _ in
+                control_requests(False, False)]
     observed = "observed" if enumerated else "not-observed"
     return [("get-descriptor configuration", observed),
             ("set-configuration", observed),
@@ -247,12 +323,23 @@ def control_requests(enumerated, descriptor_present):
             ("get-report", "expected-not-exposed")]
 
 
-def evaluate(envelope, stock_interfaces, ioreg_text, observed, vendor, product, configuration):
+def evaluate(envelope, stock_interfaces, ioreg_text, observed, vendor, product,
+             configuration, liveness):
     """One labelled outcome plus every failure line, from host-side evidence only."""
+    if not liveness["established"]:
+        # Refused before anything is compared: these descriptors cannot be
+        # attributed to the publication, so neither a pass nor a descriptor
+        # failure may be claimed from them. Nothing below runs, so no
+        # descriptor label can leak into a void observation's report.
+        return {"outcome": PUBLICATION_UNESTABLISHED, "liveness": liveness,
+                "failures": ["the publication this capture measured could not be shown "
+                             "live when it read (%s)" % liveness["reason"]],
+                "control_requests": control_requests(None, None), "interfaces": None,
+                "reports": 0 if observed is None else len(observed), "evidence": "void"}
     if envelope is None:
         return {"outcome": "not-enumerated", "failures": ["host enumerates no device"],
                 "control_requests": control_requests(False, False), "interfaces": None,
-                "reports": 0, "evidence": "none"}
+                "reports": 0, "evidence": "none", "liveness": liveness}
     raw = configurations(envelope).get(configuration)
     if raw is None:
         raise ValueError("host-selected configuration absent from the capture")
@@ -294,15 +381,31 @@ def evaluate(envelope, stock_interfaces, ioreg_text, observed, vendor, product, 
             labels.append("reports-mismatch")
             failures.extend(lines)
     outcome = next((label for label in OUTCOMES if label in labels), "pass")
-    return {"outcome": outcome, "failures": failures,
+    return {"outcome": outcome, "failures": failures, "liveness": liveness,
             "control_requests": control_requests(True, descriptor is not None),
             "interfaces": len(groups), "reports": 0 if observed is None else len(observed),
             "evidence": hashlib.sha256(envelope).hexdigest()}
 
 
 def render(result):
+    # Stamped with the time of the read and the state this capture believes was
+    # live: a verdict that cannot say what it measured, or when, is not
+    # evidence - which is precisely how a capture of a healed stock device came
+    # to be filed as a descriptor failure.
+    live = result["liveness"]
     lines = ["%s outcome=%s interfaces=%s reports=%s" % (
         PREFIX, result["outcome"], result["interfaces"], result["reports"])]
+    lines.append("%s read-at=%s read-at-epoch=%d" % (
+        PREFIX, time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(live["read_at"])),
+        int(live["read_at"])))
+    lines.append("%s publication-witness live=%s state=%s observed-at-epoch=%s "
+                 "age-seconds=%s lease-seconds=%s reason=%s"
+                 % (PREFIX, "yes" if live["established"] else "no",
+                    "none" if live["state"] is None else witness_token(live["state"]),
+                    "none" if live["observed_at"] is None else int(live["observed_at"]),
+                    "none" if live["age"] is None else "%.1f" % live["age"],
+                    "none" if live["max_age"] is None else "%.1f" % live["max_age"],
+                    witness_token(live["reason"])))
     for name, status in result["control_requests"]:
         lines.append("%s control-request %s=%s" % (PREFIX, name, status))
     lines.append("%s control-request-evidence=registry-only "
@@ -330,7 +433,9 @@ def live_capture():
 
 
 def parse(argv):
-    options = {"reports": None, "out": None, "raw-configs": None, "ioreg": None}
+    options = {"reports": None, "out": None, "raw-configs": None, "ioreg": None,
+               "publication-state": None, "publication-observed-at": None,
+               "publication-max-age": None}
     for item in argv:
         name, _, value = item.partition("=")
         if not name.startswith("--") or not value:
@@ -342,6 +447,14 @@ def parse(argv):
         options[name] = int(options[name], 0)
     for name in ("vendor", "product"):
         options[name] = int(options[name], 0) if name in options else None
+    # The witness is optional on the command line and absent is a refusal, not
+    # a default pass: a caller that cannot say the publication was live gets
+    # the void outcome rather than a verdict.
+    for name in ("publication-observed-at", "publication-max-age"):
+        if options[name] is not None:
+            options[name] = float(options[name])
+            if options[name] <= 0:
+                raise ValueError("--%s must be positive" % name)
     return options
 
 
@@ -349,6 +462,9 @@ def main(argv):
     options = parse(argv)
     envelope = (Path(options["raw-configs"]).read_bytes() if options["raw-configs"]
                 else live_capture())
+    # Taken the moment the descriptors were read, not when the report is
+    # rendered: the read is the thing whose position has to be established.
+    read_at = time.time()
     text = (Path(options["ioreg"]).read_text(errors="replace") if options["ioreg"]
             else (host_registry() if envelope is not None else ""))
     vendor, product = options["vendor"], options["product"]
@@ -360,8 +476,11 @@ def main(argv):
         vendor, product = profile["usbVendorID"], profile["usbProductID"]
     observed = (parse_reports(Path(options["reports"]).read_text()) if options["reports"]
                 else None)
+    liveness = publication_liveness(options["publication-state"],
+                                    options["publication-observed-at"],
+                                    options["publication-max-age"], read_at)
     result = evaluate(envelope, options["stock-interfaces"], text, observed,
-                      vendor, product, options["configuration"])
+                      vendor, product, options["configuration"], liveness)
     report = render(result)
     assert_identifier_free(report)
     if options["out"]:
@@ -370,6 +489,8 @@ def main(argv):
     print(report, end="")
     if result["outcome"] == "pass":
         return 0
+    if result["outcome"] == PUBLICATION_UNESTABLISHED:
+        return VOID_EXIT
     return 3 if result["outcome"] == "not-enumerated" else 2
 
 

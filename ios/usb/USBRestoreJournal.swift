@@ -195,6 +195,32 @@ struct USBRestoreJournal {
               Self.allowed(expected.phase, next.phase) else {
             throw USBRestoreJournalError.invalidTransition
         }
+        try replace(expected, with: next)
+    }
+
+    // Renewal: move the lease deadline out and change nothing else. It is a
+    // dedicated operation because a live worker proving it is alive is the one
+    // legitimate reason the deadline ever moves, and keeping it here lets
+    // transition() go on refusing every other change to it. A phase change
+    // must not be able to rewrite the bound a restore depends on.
+    //
+    // Only forward, and only in a phase where a lease means anything: once the
+    // original is going back there is nothing left to hold.
+    func extendLease(from expected: USBRestoreRecord, to deadline: UInt64) throws {
+        guard expected.phase == .prepared || expected.phase == .published,
+              deadline > expected.leaseDeadlineUptime else {
+            throw USBRestoreJournalError.invalidTransition
+        }
+        try replace(expected, with: USBRestoreRecord(
+            recipe: expected.recipe, phase: expected.phase,
+            leaseDeadlineUptime: deadline,
+            externalVerificationSHA256: expected.externalVerificationSHA256,
+            appendedFunctionName: expected.appendedFunctionName,
+            appendedFunctionConfiguration: expected.appendedFunctionConfiguration))
+    }
+
+    private func replace(_ expected: USBRestoreRecord,
+                         with next: USBRestoreRecord) throws {
         let data = try Self.sealed(next)
         try withDirectory { dir in
             try withWriterLock(dir) {

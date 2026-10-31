@@ -835,3 +835,31 @@ MAC2JBUSBResult MAC2JBUSBCloneAppendFunctionOrPublish(
                                 true, functionName, configurationNumber,
                                 NULL, 0, setReturn, busReturn);
 }
+
+MAC2JBUSBResult MAC2JBUSBCloneRepublishAppendedFunctionOrPublish(
+    const uint8_t *livePlist, size_t livePlistLength,
+    uint64_t expectedControllerRegistryID,
+    const char *functionName, int32_t configurationNumber,
+    bool publish, bool cycleBus,
+    int32_t *setReturn, int32_t *busReturn
+) {
+    if (!functionName) return MAC2JBUSBInvalidInput;
+    // The healer meets two live shapes and must handle both, because an earlier
+    // round may already have restored the stock description: strip-then-append
+    // when the name is still there, plain append when it is not.
+    //
+    // Trying the stripping form first is safe because every refusal it can
+    // raise - including the name not being last in that configuration - is
+    // decided while comparing the in-process clone, before any SetDescription.
+    // So a rejected first attempt has written neither the controller nor the
+    // bus, and the retry is the only call that publishes.
+    MAC2JBUSBResult result = reconstruct_or_clone(
+        livePlist, livePlistLength, expectedControllerRegistryID, publish,
+        cycleBus, true, functionName, configurationNumber,
+        functionName, configurationNumber, setReturn, busReturn);
+    if (result != MAC2JBUSBFunctionRejected) return result;
+    return reconstruct_or_clone(livePlist, livePlistLength,
+                                expectedControllerRegistryID, publish, cycleBus,
+                                true, functionName, configurationNumber,
+                                NULL, 0, setReturn, busReturn);
+}

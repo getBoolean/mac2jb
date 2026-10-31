@@ -18,6 +18,14 @@ protocol USBRestoreController {
     // controller state inside the controller backend, so it never exists as
     // bytes here.
     func publishAppending(_ description: Data, function: String, configuration: Int) throws
+    // Re-publish the description a live additive publication is supposed to
+    // have: the journaled original with the one named function appended. This
+    // is not publishAppending: the live description already carries that
+    // function, so the backend has to take exactly that name off its clone,
+    // prove what is left is the journaled original, and put it back again,
+    // inside one controller write. One write means one function-registration
+    // race, the same cost as any other re-publication.
+    func republishAppending(_ description: Data, function: String, configuration: Int) throws
 }
 
 extension USBRestoreController {
@@ -35,6 +43,10 @@ extension USBRestoreController {
     func publishAppending(_ description: Data, function: String, configuration: Int) throws {
         throw USBRestoreCoordinatorError.additivePublicationUnsupported
     }
+
+    func republishAppending(_ description: Data, function: String, configuration: Int) throws {
+        throw USBRestoreCoordinatorError.additivePublicationUnsupported
+    }
 }
 
 protocol USBExternalRestoreVerifier {
@@ -50,6 +62,10 @@ protocol USBMonotonicClock {
 enum USBRestoreCoordinatorError: Error {
     case leaseExpired, plannedDescriptionMismatch, recoveryRequired
     case additivePublicationUnsupported
+    // The deadline cannot move any further out: the total life of one
+    // publication is already covered to the cap. Distinct from leaseExpired so
+    // a worker can tell "finish up, the cap is here" from "your lease is gone".
+    case leaseCapReached
     // The backend would not take the recorded appended function off the live
     // description: it is not the last interface of that configuration, or it
     // is not there at all because the publication never reached the bus.
@@ -57,6 +73,23 @@ enum USBRestoreCoordinatorError: Error {
 }
 
 struct USBRestoreCoordinator {
+    // One lease, and one renewal, may cover at most this much. It is the bound
+    // a hung or dead worker is restored within, and renewal does not change it.
+    static let maxLeaseQuantumNanoseconds: UInt64 = 30_000_000_000
+    // The total life of one publication, however many renewals arrive, so a
+    // live worker cannot extend without end.
+    //
+    // This device returns to the bus 29-72 s after a description change, worst
+    // case measured over seven qualifying trials including the ones that needed
+    // bounded re-publications. A lease that cannot outlive the 30 s quantum
+    // therefore always ends before the bus comes back, which is why no trial
+    // has ever been able to observe a publication at all. Three minutes is two
+    // and a half times the slowest observed return: it leaves about a hundred
+    // seconds of host-visible time to read descriptors and capture a result,
+    // and it still bounds an unrestored publication with a hung worker at
+    // three minutes rather than thirty seconds.
+    static let maxPublicationLifeNanoseconds: UInt64 = 180_000_000_000
+
     let journal: USBRestoreJournal
     let currentIdentity: USBRestoreIdentity
     let controller: USBRestoreController
@@ -64,10 +97,13 @@ struct USBRestoreCoordinator {
     let externalVerifier: USBExternalRestoreVerifier
     let clock: USBMonotonicClock
     let beforeRecovery: () throws -> Void
+    // Lowered only by a test fixture, and never above the cap above.
+    let publicationLifeNanoseconds: UInt64
 
     init(journal: USBRestoreJournal, currentIdentity: USBRestoreIdentity,
          controller: USBRestoreController, recoveryController: USBRestoreController? = nil,
          externalVerifier: USBExternalRestoreVerifier, clock: USBMonotonicClock,
+         publicationLifeNanoseconds: UInt64 = USBRestoreCoordinator.maxPublicationLifeNanoseconds,
          beforeRecovery: @escaping () throws -> Void) {
         self.journal = journal
         self.currentIdentity = currentIdentity
@@ -75,6 +111,8 @@ struct USBRestoreCoordinator {
         self.recoveryController = recoveryController ?? controller
         self.externalVerifier = externalVerifier
         self.clock = clock
+        self.publicationLifeNanoseconds = min(publicationLifeNanoseconds,
+                                              Self.maxPublicationLifeNanoseconds)
         self.beforeRecovery = beforeRecovery
     }
 
@@ -87,7 +125,7 @@ struct USBRestoreCoordinator {
         }
         let now = clock.uptimeNanoseconds
         guard now < leaseDeadlineUptime,
-              leaseDeadlineUptime - now <= 30_000_000_000 else {
+              leaseDeadlineUptime - now <= Self.maxLeaseQuantumNanoseconds else {
             throw USBRestoreCoordinatorError.leaseExpired
         }
         try journal.create(USBRestoreRecord(
@@ -161,6 +199,75 @@ struct USBRestoreCoordinator {
             try? recover()
             throw error
         }
+    }
+
+    // Extend the lease because the worker is demonstrably still alive.
+    //
+    // The lease bounds how long a publication may sit unrestored with a hung or
+    // dead worker, and renewal implements exactly that rather than weakening
+    // it: a worker that keeps proving liveness moves its own deadline out, and
+    // one that hangs stops renewing and is restored within the same quantum as
+    // before. The restore target, the recorded function and the phase are
+    // untouched.
+    //
+    // grantedUptime is when this publication's first lease was granted. The
+    // caller holds it in memory only, so a broker that restarted has nothing to
+    // renew from - and it also has no registered worker - which leaves the
+    // journaled deadline as the one that applies. That is the conservative
+    // fallback, and it is deliberate.
+    @discardableResult
+    func renewLease(grantedUptime: UInt64, quantum: UInt64) throws -> UInt64 {
+        let current = try journal.read()
+        try current.recipe.validateAgainst(currentIdentity)
+        let now = clock.uptimeNanoseconds
+        // A lease that has already run out is not renewable: the watchdog is
+        // entitled to be restoring that publication already, and reviving it
+        // would be a second publication's worth of risk under the first one's
+        // record.
+        guard current.phase == .prepared || current.phase == .published,
+              now < current.leaseDeadlineUptime,
+              quantum > 0, quantum <= Self.maxLeaseQuantumNanoseconds else {
+            throw USBRestoreCoordinatorError.leaseExpired
+        }
+        let deadline = min(now + quantum, grantedUptime + publicationLifeNanoseconds)
+        guard deadline > current.leaseDeadlineUptime else {
+            throw USBRestoreCoordinatorError.leaseCapReached
+        }
+        try journal.extendLease(from: current, to: deadline)
+        return deadline
+    }
+
+    // Re-publish the intended description during a live publication: the
+    // journaled original plus the function it appended.
+    //
+    // This is the one re-publication that is not a restore. The healer
+    // re-publishes to recreate every function nub when the controller is stuck
+    // off bus, and after an additive publication the bare original would take
+    // the appended function with it - the mechanism that recovers USB would
+    // destroy the thing the publication exists to make observable. So while the
+    // lease is live this puts the intended description back and leaves the
+    // journal in published: the journaled original stays the restore target,
+    // and because the record already names the function, a crash either side
+    // of the controller call still restores exactly as it did before.
+    //
+    // Refused once the lease is gone, over a working connection, and for a
+    // record with no appended function. Those are the restoring paths, and the
+    // bare original is what they publish.
+    func republishIntended(controllerConfigured: () throws -> Bool) throws {
+        let current = try journal.read()
+        try current.recipe.validateAgainst(currentIdentity)
+        guard current.phase == .published,
+              let function = current.appendedFunctionName,
+              let configuration = current.appendedFunctionConfiguration,
+              clock.uptimeNanoseconds < current.leaseDeadlineUptime else {
+            throw USBRestoreCoordinatorError.recoveryRequired
+        }
+        guard try !controllerConfigured() else {
+            throw USBRestoreCoordinatorError.recoveryRequired
+        }
+        try recoveryController.republishAppending(current.recipe.originalDescription,
+                                                  function: function,
+                                                  configuration: configuration)
     }
 
     // Restore the journaled original, stating the one appended function when

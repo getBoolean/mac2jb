@@ -119,10 +119,36 @@ def require_original_restored(service, published):
                 "an appended interface survived the restore")
 
 
-def journaled_original(service):
+def journaled_record(service):
     envelope = json.loads((service.state / "restore-journal.json").read_text())
-    payload = json.loads(base64.b64decode(envelope["payload"]))
-    return base64.b64decode(payload["recipe"]["originalDescription"])
+    return json.loads(base64.b64decode(envelope["payload"]))
+
+
+def journaled_original(service):
+    return base64.b64decode(journaled_record(service)["recipe"]["originalDescription"])
+
+
+def wait_phase(service, expected, timeout=30):
+    """Like Service.phase, but tolerant of a broker busy inside a heal or gate."""
+    deadline = time.monotonic() + timeout
+    status = ""
+    while time.monotonic() < deadline:
+        try:
+            status = service.command("status")
+        except (TimeoutError, OSError):
+            time.sleep(0.25)
+            continue
+        if status == f"OK phase={expected} publication=enabled":
+            return
+        time.sleep(0.05)
+    raise AssertionError(f"expected journal phase {expected}, saw {status}")
+
+
+def heal_now(service, timeout=90):
+    """Run the broker's heal synchronously; it blocks the single-threaded loop."""
+    with service.connect("heal") as peer:
+        peer.settimeout(timeout)
+        return peer.recv(256).decode("ascii").strip()
 
 
 def expected_appended(original):
@@ -408,6 +434,207 @@ def bus_cycle_only_while_a_publication_is_live(binary, parent):
         service.stop()
 
 
+def renewal_keeps_one_publication_alive_and_capped(binary, parent):
+    """A live worker renews its lease; the total life of one publication is capped.
+
+    The device takes far longer to come back on bus than one lease quantum, so
+    a publication that cannot outlive its first lease can never be observed.
+    Renewal is the worker proving it is alive, which is what the lease bounds:
+    a worker that stops renewing is still restored within one quantum, and no
+    number of renewals extends one publication past the cap.
+    """
+    service, published = service_with_added_function(
+        binary, parent, "renewal",
+        extra={"MAC2JB_U2_FIXTURE_LEASE_NS": str(2_000_000_000),
+               "MAC2JB_U3_FIXTURE_PUBLICATION_LIFE_NS": str(8_000_000_000)})
+    try:
+        # Nothing to renew: no journal, and then no registered worker.
+        require(service.command("renew-lease") == "ERR rejected",
+                "renewed with no journal")
+        require(service.command("prepare") == "OK prepared")
+        require(service.command("renew-lease") == "ERR rejected",
+                "renewed with no worker holding the lease")
+        worker = watch(service)
+        # A lease is meaningful before publication too.
+        reply = service.command("renew-lease")
+        require(reply.startswith("OK lease-renewed remaining="), reply)
+        require(service.command(f"publish-hid {ADDED}") == "OK published-additive")
+        require(service.count() == 1)
+        appended = published.read_bytes()
+
+        deadlines = [journaled_record(service)["leaseDeadlineUptime"]]
+        recipe = journaled_record(service)["recipe"]
+        refused = False
+        stop = time.monotonic() + 20
+        while time.monotonic() < stop:
+            reply = service.command("renew-lease")
+            if reply == "ERR rejected":
+                # The cap is reached, or the lease has run out. Either way the
+                # journal must never have been rewritten by a refusal.
+                refused = True
+                break
+            require(reply.startswith("OK lease-renewed remaining="), reply)
+            record = journaled_record(service)
+            require(record["phase"] == "published",
+                    "a renewal changed the phase: " + record["phase"])
+            require(record["recipe"] == recipe, "a renewal changed the recipe")
+            require(record["appendedFunctionName"] == ADDED,
+                    "a renewal forgot the appended function")
+            # An absent key is how the record encodes no external proof.
+            require("externalVerificationSHA256" not in record,
+                    "a renewal invented verification proof")
+            require(record["leaseDeadlineUptime"] > deadlines[-1],
+                    "a renewal did not move the deadline forward")
+            deadlines.append(record["leaseDeadlineUptime"])
+            # The publication is still on the bus, unrestored, because the
+            # worker is alive: this is the window no trial has ever had.
+            require(published.read_bytes() == appended,
+                    "the appended description was restored while the lease was live")
+            time.sleep(0.4)
+        require(refused, "renewals were never capped")
+        require(len(deadlines) > 2, "the lease was never actually extended")
+        capped = journaled_record(service)["leaseDeadlineUptime"]
+        require(capped == deadlines[-1], "a refused renewal still wrote the journal")
+
+        # Renewal stopped, so the bare original comes back on its own, within
+        # the same bound as a lease that was never renewed at all.
+        wait_phase(service, "awaitingVerification")
+        require(service.count() == 2, "the capped publication was not restored")
+        require_original_restored(service, published)
+        require(service.command("renew-lease") == "ERR rejected",
+                "renewed a lease in a phase where none applies")
+        worker.close()
+    finally:
+        service.stop()
+
+
+def renewal_state_is_lost_with_the_broker(binary, parent):
+    """A restarted broker cannot renew: the journaled deadline is what applies."""
+    service, published = service_with_added_function(
+        binary, parent, "renewal-restart",
+        extra={"MAC2JB_U2_FIXTURE_LEASE_NS": str(20_000_000_000),
+               "MAC2JB_U3_FIXTURE_PUBLICATION_LIFE_NS": str(25_000_000_000)})
+    try:
+        require(service.command("prepare") == "OK prepared")
+        worker = watch(service)
+        require(service.command("renew-lease").startswith("OK lease-renewed"))
+        journaled = journaled_record(service)["leaseDeadlineUptime"]
+        service.process.kill()
+        service.process.wait(timeout=3)
+        worker.close()
+        service.start()
+        # The new instance has neither the worker nor the anchor the cap is
+        # measured from, so there is nothing it may extend.
+        require(service.command("renew-lease") == "ERR rejected",
+                "a restarted broker renewed a lease it knows nothing about")
+        require(journaled_record(service)["leaseDeadlineUptime"] == journaled,
+                "a restart changed the journaled deadline")
+        require(not published.exists(), "a restart published something")
+    finally:
+        service.stop()
+
+
+def heal_during_a_live_lease_keeps_the_appended_function(binary, parent):
+    """The mechanism that recovers USB must not delete what it is recovering.
+
+    A description swap leaves a random function unregistered and the controller
+    off bus; the healer re-publishes to recreate every nub. With a publication
+    still live, that re-publication has to put the intended description back -
+    the journaled original plus the appended function - because the bare
+    original would take the appended function off and there would again be
+    nothing to observe. The journal stays published and keeps the unmodified
+    original as the restore target, so every restore path is unchanged.
+    """
+    directory = parent / "live-heal"
+    directory.mkdir(mode=0o700)
+    ready = directory / "ready"
+    ready.write_text("0")
+    (directory / "queue").write_text("USBAudio2StreamOUT\nValeria")
+    service, published = service_with_added_function(
+        binary, parent, "live-heal-state",
+        extra={"MAC2JB_U2_FIXTURE_READINESS_FILE": str(ready),
+               "MAC2JB_U2_FIXTURE_UNSERVED_QUEUE": str(directory / "queue"),
+               "MAC2JB_U2_FIXTURE_RESTART_LOG": str(directory / "restarts"),
+               "MAC2JB_U2_FIXTURE_HEAL_ON_RESTART": "1",
+               "MAC2JB_U2_FIXTURE_LEASE_NS": str(25_000_000_000)})
+    try:
+        require(service.command("prepare") == "OK prepared")
+        worker = watch(service)
+        require(service.command(f"publish-hid {ADDED}") == "OK published-additive")
+        require(service.count() == 1)
+        expected = expected_appended(service.original)
+        require(plistlib.loads(published.read_bytes()) == expected)
+        # A kernel-owned gap first, so the heal must re-publish rather than
+        # restart an owner, then the owner-owned gap it can fix.
+        reply = heal_now(service)
+        require(reply == "OK healed republications=1 "
+                         "owner-restarts=com.apple.audiomxd", reply)
+        require(service.count() == 2, "exactly one re-publication expected")
+        require(plistlib.loads(published.read_bytes()) == expected,
+                "the heal re-published the bare original and lost the function")
+        require(journaled_original(service) == service.original,
+                "the heal changed the restore target")
+        record = journaled_record(service)
+        require(record["phase"] == "published",
+                "a heal during a live lease ended the publication: " + record["phase"])
+        require(record["appendedFunctionName"] == ADDED)
+        # And it is still restorable, to exactly the original bytes.
+        worker.close()
+        wait_phase(service, "awaitingVerification")
+        require(service.count() == 3, "worker death did not restore")
+        require_original_restored(service, published)
+    finally:
+        service.stop()
+
+
+def heal_without_a_live_lease_restores_the_bare_original(binary, parent):
+    """Once the lease is gone, every heal re-publication is a restore.
+
+    The lease expires with the appended function on the bus and the controller
+    off bus, so the readiness gate times out and the broker heals. That heal is
+    not continuing a trial, so each of its bounded re-publications must put the
+    journaled original back - the appended function comes off and stays off.
+    """
+    directory = parent / "dead-heal"
+    directory.mkdir(mode=0o700)
+    ready = directory / "ready"
+    ready.write_text("0")
+    (directory / "queue").write_text("USBAudio2StreamOUT")
+    service, published = service_with_added_function(
+        binary, parent, "dead-heal-state",
+        extra={"MAC2JB_U2_FIXTURE_READINESS_FILE": str(ready),
+               "MAC2JB_U2_FIXTURE_UNSERVED_QUEUE": str(directory / "queue"),
+               "MAC2JB_U2_FIXTURE_RESTART_LOG": str(directory / "restarts"),
+               "MAC2JB_U2_FIXTURE_HEAL_ON_RESTART": "0"})
+    try:
+        require(service.command("prepare") == "OK prepared")
+        worker = watch(service)
+        require(service.command(f"publish-hid {ADDED}") == "OK published-additive")
+        require(service.count() == 1)
+        # The one-second lease expires, the readiness gate times out, and the
+        # bounded heal re-publishes. Never the appended description.
+        status = ""
+        deadline = time.monotonic() + 90
+        while time.monotonic() < deadline:
+            try:
+                status = service.command("heal-status")
+            except (TimeoutError, OSError):
+                time.sleep(0.5)
+                continue
+            if status.startswith("OK last-heal heal-gave-up"):
+                break
+            time.sleep(0.25)
+        require(status.startswith("OK last-heal heal-gave-up "
+                                  "missing=USBAudio2StreamOUT republications=5"), status)
+        require(service.count() == 6, "must stop after 5 re-publications")
+        require_original_restored(service, published)
+        require(service.command("renew-lease") == "ERR rejected",
+                "a lease that is gone was renewed")
+        worker.close()
+    finally:
+        service.stop()
+
+
 def conservative_variant_has_no_appending_command(binary, parent):
     """A broker built without the appending capability refuses the command.
 
@@ -428,6 +655,13 @@ def conservative_variant_has_no_appending_command(binary, parent):
         require(cycled == "ERR rejected",
                 "a broker without the appending command must refuse the bus "
                 "cycle too: " + str(cycled))
+        # The renewable lease exists to observe an appended function, so the
+        # rollback artifact keeps the single hard-bounded lease the U2 hardware
+        # trials passed with and has no renewal command at all.
+        renewed = service.command("renew-lease")
+        require(renewed == "ERR rejected",
+                "a broker without the appending command must refuse lease "
+                "renewal too: " + str(renewed))
         require(not published.exists(),
                 "a broker lacking the command still published an appended description")
         require(service.count() == 0, "a refused command still called the controller")
@@ -453,7 +687,11 @@ def main():
                            ("failed-call", failed_controller_call_still_restores),
                            ("no-drop", retry_never_drops_an_interface),
                            ("duplicate", existing_name_refused),
-                           ("cycle", bus_cycle_only_while_a_publication_is_live)):
+                           ("cycle", bus_cycle_only_while_a_publication_is_live),
+                           ("renewal", renewal_keeps_one_publication_alive_and_capped),
+                           ("renewal-restart", renewal_state_is_lost_with_the_broker),
+                           ("live-heal", heal_during_a_live_lease_keeps_the_appended_function),
+                           ("dead-heal", heal_without_a_live_lease_restores_the_bare_original)):
             directory = root / ("case-" + name)
             directory.mkdir(mode=0o700)
             test(binary, directory)
@@ -476,7 +714,13 @@ def main():
           "publish over a description the journal never recorded, and a "
           "standalone bus cycle that publishes nothing, reports its raw "
           "return verbatim and is refused with no worker, with no journal, "
-          "before anything is published and once the original is back")
+          "before anything is published and once the original is back, a "
+          "heartbeat-renewable lease that moves its deadline forward only, is "
+          "refused with no journal, no worker, a restarted broker or a phase "
+          "where no lease applies, caps the total life of one publication "
+          "however many renewals arrive and restores on its own when renewal "
+          "stops, and a heal that re-publishes the intended description while "
+          "that lease is live but the bare journaled original once it is not")
 
 
 if __name__ == "__main__":

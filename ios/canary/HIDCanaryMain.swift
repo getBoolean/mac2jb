@@ -207,14 +207,20 @@ enum HIDCanaryMain {
         // neutral report on a controlled exit, and the lease handed back.
         let summary = HIDCanaryRun(sink: transport(session, handles: handles),
                                    lease: lease, reports: arguments.mode.reportsToWrite,
+                                   visibility: pipeVisibility(session, handles: handles),
                                    shouldStop: { interrupted != 0 }).run()
         // The wait's own answer, on its own line and before the report counts:
         // "configured and the host enumerated it" is a strictly stronger
         // result than "configured", so every mode that gets this far reports
         // it. The poll count tells "enumerated after a moment" from "never
         // enumerated", and the last raw return is printed verbatim.
+        // The size is the primary signal and the raw return the secondary one,
+        // so both are printed: zero with a waited-on raw return is "the host
+        // has not selected a configuration containing this interface yet", and
+        // the endpoint's size is the host's active configuration containing it.
         line("enumeration host=\(summary.enumeration.state.label) " +
              "polls=\(summary.enumeration.polls) " +
+             "max-packet=\(summary.enumeration.lastMaxPacketSize) " +
              "io=" + hex(summary.enumeration.lastRawReturn))
         // Counts only: the keys themselves never reach the log.
         line("reports written=\(summary.reportsWritten) stop=\(summary.stop) " +
@@ -223,6 +229,25 @@ enum HIDCanaryMain {
              "transport=pipe-write")
         MAC2JBUSBFunctionClose(session)
         exit(summary.stop.exitCode)
+    }
+
+    // The production visibility probe: ask the pipe what its current maximum
+    // packet size is. It is zero until a host has selected a configuration
+    // containing this interface and the endpoint's size once it has, so the
+    // wait for host enumeration polls this and puts nothing on the bus. Each
+    // poll is silent; the wait's own summary line reports what it saw.
+    private static func pipeVisibility(_ session: OpaquePointer,
+                                       handles: PipeHandles) -> HIDPipeVisibility {
+        PipeSizeVisibility(probe: {
+            var maxPacketSize: UInt64 = 0
+            var callReturn: Int32 = 0
+            let result = MAC2JBUSBFunctionPipeMaxPacketSize(
+                session, UInt32(MAC2JBUSBFunctionSelectorPipeMaxPacketSize.rawValue),
+                handles.pipeID, &maxPacketSize, &callReturn)
+            return HIDPipeSizeProbe(result: Int32(bitPattern: result.rawValue),
+                                    rawReturn: callReturn,
+                                    maxPacketSize: maxPacketSize)
+        })
     }
 
     // The production report sink: stage the bytes in the mapped shared buffer

@@ -35,6 +35,7 @@ BROKERS = {
     "v14": ("dev.mac2jb.u2.additivev14", "f8e17bbdfc26df182c584383f180814a485014fe7244161af1066ff81e835229"),
     "v15": ("dev.mac2jb.u2.additivev15", "bbc4946fa6af6d3013be689ec581114266848f106bea1cad6b0fabed91f20e3a"),
     "v16": ("dev.mac2jb.u2.additivev16", "11f63007bd9e5ce2f16bc2c8eb88bc3245ed073857b3bfea1cb964b49b58df87"),
+    "v17": ("dev.mac2jb.u2.additivev17", "2d1c7582a739c90397f8b2f6c0d483222e743dda818e26cb5fd9b80e017ed0fb"),
 }
 
 

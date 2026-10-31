@@ -51,6 +51,39 @@ private final class RecordingSink: HIDReportSink {
     }
 }
 
+// The pipe's answers to the wait's visibility query, scripted. Zero is "the
+// host has not selected a configuration containing this interface yet" and the
+// endpoint's size is "it has"; the last answer repeats forever. Nothing here
+// writes a report, which is the point: the wait's mechanism is no longer the
+// mechanism of typing.
+private final class FakeVisibility: HIDPipeVisibility {
+    // A shim result that is not success, for a query the build will not answer.
+    static let refusedResult: Int32 = 9
+    // A raw return that is neither zero nor one of the reference's "not yet"
+    // values, so it reads as a real refusal rather than "keep waiting".
+    static let refusedRawReturn = Int32(bitPattern: 0xE00002C0)
+
+    static let visible = HIDPipeSizeProbe(result: HIDPipeSizeProbe.success,
+                                          rawReturn: 0, maxPacketSize: 8)
+    static let notYet = HIDPipeSizeProbe(result: HIDPipeSizeProbe.success,
+                                         rawReturn: PipeReportTransport.notEnumerated,
+                                         maxPacketSize: 0)
+    static let quiet = HIDPipeSizeProbe(result: HIDPipeSizeProbe.success,
+                                        rawReturn: 0, maxPacketSize: 0)
+
+    private let answers: [HIDPipeSizeProbe]
+    private(set) var polls = 0
+
+    init(_ answers: [HIDPipeSizeProbe] = [FakeVisibility.visible]) {
+        self.answers = answers
+    }
+
+    func currentMaxPacketSize() -> HIDPipeSizeProbe {
+        polls += 1
+        return answers[min(polls - 1, answers.count - 1)]
+    }
+}
+
 // A clock the wait's deadline can be driven from without waiting on a real one.
 // Every pause advances it, which is what the production pause does too.
 private final class FakeClock {
@@ -163,8 +196,10 @@ enum HIDReportTests {
         // 7. A controlled exit emits exactly one neutral report.
         var sink = RecordingSink()
         var lease = FakeLease(heldChecks: .max)
+        var visible = FakeVisibility()
         var summary = HIDCanaryRun(sink: sink, lease: lease,
-                                   reports: [valid, HIDKeyboard.neutralReport]).run()
+                                   reports: [valid, HIDKeyboard.neutralReport],
+                                   visibility: visible).run()
         try require(summary.stop == .completed, "a delivered run completes: \(summary)")
         try require(summary.reportsWritten == 2, "both reports must be written: \(summary)")
         try require(summary.neutralAttempts == 1,
@@ -178,38 +213,45 @@ enum HIDReportTests {
         // the broker cannot protect the description against a late write.
         sink = RecordingSink()
         lease = FakeLease(heldChecks: 0)
-        summary = HIDCanaryRun(sink: sink, lease: lease, reports: [valid]).run()
+        visible = FakeVisibility()
+        summary = HIDCanaryRun(sink: sink, lease: lease, reports: [valid],
+                               visibility: visible).run()
         try require(summary.stop == .leaseLost && summary.reportsWritten == 0 &&
                     summary.neutralAttempts == 0 && sink.written.isEmpty,
                     "no write is allowed without the lease: \(summary)")
+        try require(visible.polls == 0,
+                    "the wait may not even look without the lease: \(visible.polls)")
         try require(lease.released && lease.releasedNeutral == false,
                     "the lease must still be given up: \(summary)")
         // The enumeration wait takes the first lease check, so one report needs
-        // two: the wait's poll and the loop's own check before the write.
+        // two: the wait's poll and the loop's own check before the write. The
+        // poll itself writes nothing, so the first write is the first report.
         sink = RecordingSink()
         lease = FakeLease(heldChecks: 2)
-        summary = HIDCanaryRun(sink: sink, lease: lease, reports: [valid, valid, valid]).run()
+        summary = HIDCanaryRun(sink: sink, lease: lease, reports: [valid, valid, valid],
+                               visibility: FakeVisibility()).run()
         try require(summary.stop == .leaseLost && summary.reportsWritten == 1 &&
-                    summary.neutralAttempts == 0 &&
-                    sink.written == [HIDKeyboard.neutralReport, valid],
+                    summary.neutralAttempts == 0 && sink.written == [valid],
                     "writes must stop the moment the lease expires: \(summary)")
 
-        // 9. A disconnect bounds the neutral attempts at three. The sink
-        // delivers once first, because a refusal before the host has enumerated
-        // is the wait's answer rather than the report loop's.
-        sink = RecordingSink([.delivered, .failed])
+        // 9. A disconnect bounds the neutral attempts at three. The wait does
+        // not consume a sink answer any more, so the first answer is the first
+        // report's.
+        sink = RecordingSink([.failed])
         lease = FakeLease(heldChecks: .max)
-        summary = HIDCanaryRun(sink: sink, lease: lease, reports: [valid]).run()
+        summary = HIDCanaryRun(sink: sink, lease: lease, reports: [valid],
+                               visibility: FakeVisibility()).run()
         try require(summary.stop == .writeFailed && summary.reportsWritten == 0,
                     "a refused write stops the run: \(summary)")
         try require(summary.neutralAttempts == 3 && !summary.neutralDelivered,
                     "a failing sink must be retried at most three times: \(summary)")
-        try require(sink.neutralWrites == 4,
-                    "three teardown neutral writes plus the wait's one poll: " +
+        try require(sink.neutralWrites == 3,
+                    "three teardown neutral writes and nothing from the wait: " +
                     "\(sink.neutralWrites)")
-        sink = RecordingSink([.delivered, .disconnected])
+        sink = RecordingSink([.disconnected])
         lease = FakeLease(heldChecks: .max)
-        summary = HIDCanaryRun(sink: sink, lease: lease, reports: [valid]).run()
+        summary = HIDCanaryRun(sink: sink, lease: lease, reports: [valid],
+                               visibility: FakeVisibility()).run()
         try require(summary.stop == .disconnected && summary.neutralAttempts <= 3 &&
                     !summary.neutralDelivered,
                     "a disconnect stops retrying within the bound: \(summary)")
@@ -220,7 +262,8 @@ enum HIDReportTests {
         sink = RecordingSink()
         lease = FakeLease(heldChecks: .max)
         var writesBeforeStop = 0
-        var run = HIDCanaryRun(sink: sink, lease: lease, reports: [valid, valid, valid])
+        var run = HIDCanaryRun(sink: sink, lease: lease, reports: [valid, valid, valid],
+                               visibility: FakeVisibility())
         run.shouldStop = { writesBeforeStop >= 1 }
         let interrupted = run.run()
         writesBeforeStop = 0
@@ -229,7 +272,8 @@ enum HIDReportTests {
         sink = RecordingSink()
         lease = FakeLease(heldChecks: .max)
         var seen = 0
-        run = HIDCanaryRun(sink: sink, lease: lease, reports: [valid, valid, valid])
+        run = HIDCanaryRun(sink: sink, lease: lease, reports: [valid, valid, valid],
+                           visibility: FakeVisibility())
         run.shouldStop = { seen += 1; return seen > 2 }
         let signalled = run.run()
         try require(signalled.stop == .interrupted,
@@ -245,10 +289,10 @@ enum HIDReportTests {
         sink = RecordingSink()
         lease = FakeLease(heldChecks: .max)
         summary = HIDCanaryRun(sink: sink, lease: lease,
-                               reports: [valid, [0, 0x01, 0, 0, 0, 0, 0, 0]]).run()
+                               reports: [valid, [0, 0x01, 0, 0, 0, 0, 0, 0]],
+                               visibility: FakeVisibility()).run()
         try require(summary.stop == .invalidReport && summary.reportsWritten == 1 &&
-                    sink.written == [HIDKeyboard.neutralReport, valid,
-                                     HIDKeyboard.neutralReport],
+                    sink.written == [valid, HIDKeyboard.neutralReport],
                     "an invalid report must never be written: \(sink.written)")
 
         // 11. The fixed canary string: a press and a release per character,
@@ -383,13 +427,14 @@ enum HIDReportTests {
         sink = RecordingSink()
         lease = FakeLease(heldChecks: .max)
         summary = HIDCanaryRun(sink: sink, lease: lease,
-                               reports: HIDCanaryMode.configureOnly.reportsToWrite).run()
+                               reports: HIDCanaryMode.configureOnly.reportsToWrite,
+                               visibility: FakeVisibility()).run()
         try require(summary.reportsWritten == 0 && summary.stop == .completed,
                     "a reportless gate writes nothing and still completes: \(summary)")
         try require(summary.neutralAttempts == 1 && summary.neutralDelivered,
                     "a controlled exit still writes exactly one neutral report: \(summary)")
-        try require(sink.keystrokes.isEmpty && sink.written.count == 2,
-                    "only the wait's poll and the teardown neutral: \(sink.written)")
+        try require(sink.keystrokes.isEmpty && sink.written.count == 1,
+                    "the teardown neutral and nothing else: \(sink.written)")
         try require(lease.released && lease.releasedNeutral == true,
                     "the lease must be handed back: \(summary)")
         // The configure-and-stop gate reports the wait's answer too: configured
@@ -401,59 +446,77 @@ enum HIDReportTests {
         sink = RecordingSink()
         lease = FakeLease(heldChecks: 0)
         summary = HIDCanaryRun(sink: sink, lease: lease,
-                               reports: HIDCanaryMode.configureOnly.reportsToWrite).run()
+                               reports: HIDCanaryMode.configureOnly.reportsToWrite,
+                               visibility: FakeVisibility()).run()
         try require(sink.written.isEmpty && summary.neutralAttempts == 0 && lease.released,
                     "a reportless gate writes nothing once the lease is gone: \(summary)")
 
         // 15. The bounded wait for host enumeration. Committing the
         // configuration makes the device re-present itself, so the host needs a
-        // moment to read the new descriptors and select a configuration: a
-        // write before that returns not-enumerated, which means "not yet", not
-        // "the host is gone".
-        let waiting = HIDReportWrite(outcome: .disconnected,
-                                     rawReturn: PipeReportTransport.notEnumerated)
-        let timedOut = HIDReportWrite(outcome: .failed,
-                                      rawReturn: PipeReportTransport.writeTimedOut)
-        let refused = HIDReportWrite(outcome: .failed,
-                                     rawReturn: RecordingSink.refusedRawReturn)
-        let through = HIDReportWrite(outcome: .delivered, rawReturn: 0)
+        // moment to read the new descriptors and select a configuration. The
+        // wait asks the pipe for its current maximum packet size, which is zero
+        // until the host has selected a configuration containing this
+        // interface and the endpoint's size once it has. It writes nothing at
+        // all, so no amount of waiting can type into the host.
+        let notYet = FakeVisibility.notYet
+        let quiet = FakeVisibility.quiet
+        let timedOut = HIDPipeSizeProbe(result: HIDPipeSizeProbe.success,
+                                        rawReturn: PipeReportTransport.writeTimedOut,
+                                        maxPacketSize: 0)
+        let refusedRaw = HIDPipeSizeProbe(result: HIDPipeSizeProbe.success,
+                                          rawReturn: FakeVisibility.refusedRawReturn,
+                                          maxPacketSize: 0)
+        let unavailable = HIDPipeSizeProbe(result: FakeVisibility.refusedResult,
+                                           rawReturn: 0, maxPacketSize: 0)
+        let selected = FakeVisibility.visible
 
-        // A host that is already watching answers the first poll.
-        sink = RecordingSink(answers: [through])
+        // A host that has already selected the configuration answers the first
+        // poll with the endpoint's size, and nothing was written to find out.
+        sink = RecordingSink()
         lease = FakeLease(heldChecks: .max)
-        summary = HIDCanaryRun(sink: sink, lease: lease, reports: [valid]).run()
+        visible = FakeVisibility([selected])
+        summary = HIDCanaryRun(sink: sink, lease: lease, reports: [valid],
+                               visibility: visible).run()
         try require(summary.enumeration.state == .enumerated &&
                     summary.enumeration.polls == 1 &&
+                    summary.enumeration.lastMaxPacketSize == 8 &&
                     summary.enumeration.lastRawReturn == 0,
-                    "a watching host enumerates on the first poll: \(summary.enumeration)")
+                    "a selected configuration answers the first poll: \(summary.enumeration)")
         try require(summary.stop == .completed && summary.reportsWritten == 1,
                     "an enumerated host is typed to: \(summary)")
+        try require(sink.written == [valid, HIDKeyboard.neutralReport],
+                    "the wait must put nothing on the bus: \(sink.written)")
 
-        // A host that needs a moment answers a later poll, and the polls are
-        // all neutral: nothing is typed before the host has enumerated.
+        // A host that needs a moment answers a later poll. A size of zero means
+        // "not yet" whether the raw return is one of the reference's waited-on
+        // values or plain success, and nothing is typed until the size appears.
         var clock = FakeClock(stepMilliseconds: 250)
-        sink = RecordingSink(answers: [waiting, waiting, timedOut, through])
+        sink = RecordingSink()
         lease = FakeLease(heldChecks: .max)
-        run = HIDCanaryRun(sink: sink, lease: lease, reports: [valid])
+        visible = FakeVisibility([notYet, quiet, timedOut, selected])
+        run = HIDCanaryRun(sink: sink, lease: lease, reports: [valid],
+                           visibility: visible)
         run.now = clock.now
         run.pause = clock.pause
         summary = run.run()
         try require(summary.enumeration.state == .enumerated &&
                     summary.enumeration.polls == 4 &&
-                    summary.enumeration.lastRawReturn == 0,
-                    "not-enumerated and a timeout mean keep waiting: \(summary.enumeration)")
-        try require(sink.written.prefix(4).allSatisfy { $0 == HIDKeyboard.neutralReport },
-                    "no keystroke may be written before the host enumerates: \(sink.written)")
+                    summary.enumeration.lastMaxPacketSize == 8,
+                    "a zero size means keep waiting: \(summary.enumeration)")
         try require(sink.keystrokes == [valid] && summary.reportsWritten == 1,
-                    "typing starts only once a poll gets through: \(sink.written)")
+                    "typing starts only once the size appears: \(sink.written)")
+        try require(sink.neutralWrites == 1,
+                    "the only neutral report is the teardown's: \(sink.written)")
 
-        // A host that never enumerates is bounded, and it is not a disconnect:
-        // the two point at completely different causes, so the stop reason and
-        // the exit code are its own.
+        // A host that never selects the configuration is bounded, and it is not
+        // a disconnect: the two point at completely different causes, so the
+        // stop reason and the exit code are its own.
         clock = FakeClock(stepMilliseconds: 500)
-        sink = RecordingSink(answers: [waiting])
+        sink = RecordingSink()
         lease = FakeLease(heldChecks: .max)
-        run = HIDCanaryRun(sink: sink, lease: lease, reports: [valid])
+        visible = FakeVisibility([notYet])
+        run = HIDCanaryRun(sink: sink, lease: lease, reports: [valid],
+                           visibility: visible)
         run.now = clock.now
         run.pause = clock.pause
         summary = run.run()
@@ -463,8 +526,9 @@ enum HIDReportTests {
                     "never enumerated is not a disconnect: \(summary)")
         try require(summary.enumeration.polls == 30,
                     "the wait is bounded at the reference's attempts: \(summary.enumeration)")
-        try require(summary.enumeration.lastRawReturn == PipeReportTransport.notEnumerated,
-                    "the last raw return must be kept verbatim: \(summary.enumeration)")
+        try require(summary.enumeration.lastRawReturn == PipeReportTransport.notEnumerated &&
+                    summary.enumeration.lastMaxPacketSize == 0,
+                    "the last size and raw return must be kept verbatim: \(summary.enumeration)")
         try require(summary.reportsWritten == 0 && sink.keystrokes.isEmpty,
                     "an unenumerated host is never typed to: \(sink.written)")
         try require(HIDCanaryStop.hostNeverEnumerated.exitCode !=
@@ -483,46 +547,80 @@ enum HIDReportTests {
                     "the wait must not be able to outlive the lease")
 
         // Any other raw return is a real failure: it stops the wait at once and
-        // is recorded verbatim, with no retry and no interpretation.
-        sink = RecordingSink(answers: [refused])
+        // is recorded verbatim, with no retry and no interpretation. It is not
+        // a write failure, because the wait writes nothing.
+        sink = RecordingSink()
         lease = FakeLease(heldChecks: .max)
-        summary = HIDCanaryRun(sink: sink, lease: lease, reports: [valid]).run()
+        summary = HIDCanaryRun(sink: sink, lease: lease, reports: [valid],
+                               visibility: FakeVisibility([refusedRaw])).run()
         try require(summary.enumeration.state == .waitFailed &&
                     summary.enumeration.polls == 1 &&
-                    summary.enumeration.lastRawReturn == RecordingSink.refusedRawReturn,
+                    summary.enumeration.lastRawReturn == FakeVisibility.refusedRawReturn,
                     "a real refusal stops the wait at once: \(summary.enumeration)")
-        try require(summary.stop == .writeFailed && summary.reportsWritten == 0 &&
+        try require(summary.stop == .enumerationWaitFailed && summary.reportsWritten == 0 &&
                     sink.keystrokes.isEmpty,
                     "a refused wait never types: \(summary)")
 
-        // The lease disappearing mid-wait stops the wait, and nothing more is
+        // A query the build will not answer at all is a third fact: the wait
+        // could not look, which is not the same statement as looking and seeing
+        // nothing, so it keeps its own state and its own exit code.
+        sink = RecordingSink()
+        lease = FakeLease(heldChecks: .max)
+        summary = HIDCanaryRun(sink: sink, lease: lease, reports: [valid],
+                               visibility: FakeVisibility([unavailable])).run()
+        try require(summary.enumeration.state == .probeUnavailable &&
+                    summary.enumeration.polls == 1,
+                    "an unanswerable query is its own answer: \(summary.enumeration)")
+        try require(summary.stop == .enumerationProbeUnavailable &&
+                    summary.reportsWritten == 0 && sink.keystrokes.isEmpty,
+                    "an unanswerable query never types: \(summary)")
+        try require(HIDCanaryStop.enumerationProbeUnavailable.exitCode !=
+                    HIDCanaryStop.hostNeverEnumerated.exitCode,
+                    "could not look and never enumerated need their own exit codes")
+        try require(![0, 1, 2, 3, 4, 5, 6].contains(
+                        HIDCanaryStop.enumerationProbeUnavailable.exitCode),
+                    "the unanswerable-query exit code must be unused elsewhere: " +
+                    "\(HIDCanaryStop.enumerationProbeUnavailable.exitCode)")
+        // A controlled exit still writes exactly one neutral report, whatever
+        // the wait found, and the lease still goes back.
+        try require(summary.neutralAttempts == 1 && summary.neutralDelivered &&
+                    sink.written == [HIDKeyboard.neutralReport] && lease.released,
+                    "the lease rules do not change with the wait's answer: \(summary)")
+
+        // The lease disappearing mid-wait stops the wait, and nothing is
         // written: a write after the lease has gone is the one thing the broker
         // cannot restore from.
         clock = FakeClock(stepMilliseconds: 250)
-        sink = RecordingSink(answers: [waiting])
+        sink = RecordingSink()
         lease = FakeLease(heldChecks: 2)
-        run = HIDCanaryRun(sink: sink, lease: lease, reports: [valid])
+        visible = FakeVisibility([notYet])
+        run = HIDCanaryRun(sink: sink, lease: lease, reports: [valid],
+                           visibility: visible)
         run.now = clock.now
         run.pause = clock.pause
         summary = run.run()
         try require(summary.enumeration.state == .leaseLost &&
                     summary.enumeration.polls == 2,
                     "the lease is checked before every poll: \(summary.enumeration)")
-        try require(summary.stop == .leaseLost && sink.written.count == 2 &&
+        try require(summary.stop == .leaseLost && sink.written.isEmpty &&
                     summary.neutralAttempts == 0 && summary.reportsWritten == 0,
                     "nothing is written once the lease is gone: \(summary)")
         try require(lease.released && lease.releasedNeutral == false,
                     "the lease must still be given up: \(summary)")
 
         // A signal during the wait is a controlled exit like any other.
-        sink = RecordingSink(answers: [waiting])
+        sink = RecordingSink()
         lease = FakeLease(heldChecks: .max)
-        run = HIDCanaryRun(sink: sink, lease: lease, reports: [valid])
+        visible = FakeVisibility([notYet])
+        run = HIDCanaryRun(sink: sink, lease: lease, reports: [valid],
+                           visibility: visible)
         run.shouldStop = { true }
         summary = run.run()
         try require(summary.enumeration.state == .interrupted &&
                     summary.enumeration.polls == 0 && summary.stop == .interrupted,
                     "a signal stops the wait before it polls: \(summary)")
+        try require(visible.polls == 0,
+                    "a signal stops the wait before it looks: \(visible.polls)")
         print("PASS HID canary report, plan, gate-mode, enumeration-wait and " +
               "exit-path tests (15 scenarios)")
     }

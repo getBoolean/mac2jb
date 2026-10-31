@@ -63,7 +63,8 @@ LABELS = {"v11": "dev.mac2jb.u2.nooptrialv11",
           "v13": "dev.mac2jb.u2.additivev13",
           "v14": "dev.mac2jb.u2.additivev14",
           "v15": "dev.mac2jb.u2.additivev15",
-          "v16": "dev.mac2jb.u2.additivev16"}
+          "v16": "dev.mac2jb.u2.additivev16",
+          "v17": "dev.mac2jb.u2.additivev17"}
 
 
 def main(broker, mode, publication="publish-noop"):
