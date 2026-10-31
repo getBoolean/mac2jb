@@ -22,8 +22,14 @@ import tempfile
 
 ROOT = Path(__file__).resolve().parents[5]
 BUILD = ROOT / "build/ipad-hardware"
-# Current broker build. Old variants (v2-v11) are in git history.
-OUTPUT = BUILD / "u2-native-noop-trial-v12-learned-profile"
+# Selectable broker builds. Old variants (v2-v11) are in git history.
+# The learned-profile build publishes only the journaled original; the
+# additive build can also publish that original plus one appended function
+# name. Both carry the same entitlements and the same restore path.
+VARIANTS = {
+    "--v12-learned-profile": "u2-native-noop-trial-v12-learned-profile",
+    "--v13-additive-function": "u3-native-additive-function-v13",
+}
 # Resolve the installed iPhoneOS SDK instead of pinning an Xcode point release.
 SDK = subprocess.run(["/usr/bin/xcrun", "--sdk", "iphoneos", "--show-sdk-path"],
                      stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True).stdout.strip()
@@ -57,15 +63,16 @@ def run(command, env=None, timeout=60):
 def main():
     # Flags of the current auto-heal broker: explicit bus cycle, controller
     # clone, post-clone journal normalization, readiness gate (always on).
-    if len(sys.argv) != 2 or sys.argv[1] != "--v12-learned-profile":
-        raise ValueError("usage: --v12-learned-profile")
+    if len(sys.argv) != 2 or sys.argv[1] not in VARIANTS:
+        raise ValueError("usage: " + " | ".join(sorted(VARIANTS)))
+    output = BUILD / VARIANTS[sys.argv[1]]
     explicit_cycle = True
     controller_clone = True
     post_clone = True
     settled_recovery = False
     ready_gated = True
     no_initial_cycle = False
-    if OUTPUT.exists() or not BUILD.is_dir() or not Path(SDK).is_dir():
+    if output.exists() or not BUILD.is_dir() or not Path(SDK).is_dir():
         raise ValueError("unsafe output or missing SDK")
     if plistlib.loads(ENTITLEMENTS.read_bytes()) != EXPECTED_ENTITLEMENTS:
         raise ValueError("entitlements changed")
@@ -117,7 +124,7 @@ def main():
         data = binary.read_bytes()
         if len(data) > 4 * 1024 * 1024:
             raise ValueError("oversize trial binary")
-        fd = os.open(OUTPUT, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o700)
+        fd = os.open(output, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o700)
         try:
             if os.write(fd, data) != len(data):
                 raise ValueError("short binary write")
