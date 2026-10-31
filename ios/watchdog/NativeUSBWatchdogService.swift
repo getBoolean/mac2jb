@@ -183,15 +183,45 @@ final class NativeUSBWatchdogService {
     }
 
     private func recoverAtStart() throws {
-        guard let record = try currentRecord() else { return }
+        guard let record = try currentRecord() else {
+            clearStartHealCount()
+            return
+        }
+        if record.phase == .recoveryRequired {
+            // A previous instance died or gave up mid-recovery (for example a
+            // jetsam kill during re-publication). Heal, bounded across restarts.
+            autoHealAtStart()
+            return
+        }
         // A failed external comparison requires an explicit recovery decision.
         // A successful controller call awaiting proof must not be reissued on
         // a routine service restart. Only uncertain or pre-call phases recover.
         if record.phase != .restored && record.phase != .awaitingVerification &&
                 record.phase != .recoveryRequired {
             settleBeforeRecovery(record.phase)
-            try coordinator.recover()
+            do {
+                try coordinator.recover()
+            } catch {
+                // Watchdog restart after a publication that never enumerated.
+                autoHealAtStart()
+            }
         }
+    }
+
+    // Persisted per journal so a crashing broker cannot re-publish forever.
+    private var startHealPath: String { stateDirectory + "/heal-at-start.count" }
+
+    private func clearStartHealCount() { _ = unlink(startHealPath) }
+
+    private func autoHealAtStart() {
+        let previous = (try? String(contentsOfFile: startHealPath, encoding: .utf8))
+            .flatMap { Int($0.trimmingCharacters(in: .whitespacesAndNewlines)) } ?? 0
+        guard previous < 3 else {
+            lastHeal = "start-heal-limit-reached"
+            return
+        }
+        try? String(previous + 1).write(toFile: startHealPath, atomically: true, encoding: .utf8)
+        autoHeal()
     }
 
     private func settleBeforeRecovery(_ phase: USBRestorePhase) {
@@ -311,6 +341,7 @@ final class NativeUSBWatchdogService {
             verifier.suppliedProof = proof
             defer { verifier.suppliedProof = nil }
             try coordinator.confirmExternalRestore()
+            clearStartHealCount()
             return "verified-and-cleared"
         }
         throw NativeUSBWatchdogError.invalidRequest
@@ -499,7 +530,11 @@ final class NativeUSBWatchdogService {
             }
             if let record = try? currentRecord(),
                record.phase == .prepared || record.phase == .published {
-                _ = try? coordinator.recoverIfLeaseExpired()
+                do {
+                    _ = try coordinator.recoverIfLeaseExpired()
+                } catch {
+                    autoHeal()  // lease expired and the readiness gate timed out
+                }
             }
         }
     }

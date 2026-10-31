@@ -60,17 +60,17 @@ enum USBFunctionRegistrationHealerTests {
         outcome = try USBFunctionRegistrationHealer(probe: probe, policy: policy).heal()
         try require(outcome == .configured(republications: 0, ownerRestarts: []), "PTP-only is configured")
 
-        // Bounded: persistent kernel gap gives up after maxRepublications.
+        // Bounded: persistent kernel gap gives up after maxRepublications (5).
         probe = FakeProbe([["USBAudio2StreamOUT"]])
         outcome = try USBFunctionRegistrationHealer(probe: probe, policy: policy).heal()
-        try require(outcome == .gaveUp(missing: ["USBAudio2StreamOUT"], republications: 3, ownerRestarts: []),
-                    "must give up after 3 republications: \(outcome)")
+        try require(outcome == .gaveUp(missing: ["USBAudio2StreamOUT"], republications: 5, ownerRestarts: []),
+                    "must give up after 5 republications: \(outcome)")
 
         // Bounded: an owner restart that does not help is retried at most twice,
         // then the healer falls back to republication.
         probe = FakeProbe([["Valeria"]])
         outcome = try USBFunctionRegistrationHealer(probe: probe, policy: policy).heal()
-        try require(outcome == .gaveUp(missing: ["Valeria"], republications: 3,
+        try require(outcome == .gaveUp(missing: ["Valeria"], republications: 5,
                                        ownerRestarts: ["com.apple.audiomxd", "com.apple.audiomxd"]),
                     "owner restarts must be bounded: \(outcome)")
 

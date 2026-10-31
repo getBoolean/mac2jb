@@ -17,6 +17,7 @@ full external check is still required before any confirmation.
 """
 
 import json
+import os
 from pathlib import Path
 import runpy
 import shlex
@@ -56,13 +57,19 @@ def start_syslog(path):
         return None
     handle = open(path, "wb")
     path.chmod(0o600)
-    return subprocess.Popen(["/opt/homebrew/bin/idevicesyslog", "-n", "-u", ids[0].decode(),
-                             "--no-colors"], stdout=handle, stderr=subprocess.DEVNULL)
+    # The network relay drops when the USB link changes; reconnect until stopped.
+    loop = ('while :; do /opt/homebrew/bin/idevicesyslog -n -u "$1" --no-colors; '
+            'echo "--- syslog stream reconnect ---"; sleep 1; done')
+    return subprocess.Popen(["/bin/sh", "-c", loop, "sh", ids[0].decode()], stdout=handle,
+                            stderr=subprocess.DEVNULL, start_new_session=True)
 
 
 def stop_syslog(process):
     if process is not None:
-        process.terminate()
+        try:
+            os.killpg(process.pid, 15)
+        except ProcessLookupError:
+            pass
         try:
             process.wait(timeout=5)
         except subprocess.TimeoutExpired:

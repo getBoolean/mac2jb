@@ -758,8 +758,8 @@
     <aside class="mission-rail" aria-label="Plan navigation">
       <p class="rail-mark">mac2jb / iPad port<span>M2 · iPad14,5 · iPadOS 17.0</span></p>
       <div class="mission-status">
-        <strong>Read-only U1 passed · U2 worker-death recovery failed</strong>
-        The iPad hardware child plan's U1 inventory and authorization gate passes for R1–R3 and its scoped evidence decision. All six authorization profiles have two validated read-only rounds in Mac A/B and owner-confirmed direct Switch 2 A/B. Six complete Mac USB lifecycle windows recorded zero target events and final presence. Both Switch orientations showed a configured, on-bus device controller and external power without charging. Three earlier U2 no-op trials failed external recovery and their journals were archived after owner-assisted restarts. A distinct v4 normal trial recovered external USB/NCM functions during the trial. The subsequent v5 worker-death trial failed in-trial recovery. A new boot restored external USB/NCM, pairing, and power; the exact failed journal was backed up and archived, the active name is absent, and the v4/v5 enabled trial stages were cleaned. U2 is not cleared and HID publication is blocked.
+        <strong>U1 passed · U2 passed (automatic USB recovery)</strong>
+        U1 read-only inventory and authorization passed. U2 passed on 2026-10-31: the v11 broker journals the original USB description and, after a description swap leaves functions unregistered, heals automatically by bounded re-publication and restarting the function owner. Five consecutive hardware no-op trials, including worker-kill and watchdog-kill, recovered USB without owner action and passed the strict external check. HID publication (U3) is next.
       </div>
       <ol class="rail-nav">
         <li><a href="#overview"><b>0</b><span>Mission</span></a></li>
@@ -780,7 +780,7 @@
           <div><dt>Target</dt><dd>iPad14,5 / T8112 / iPadOS 17.0</dd></div>
           <div><dt>Install model</dt><dd>TrollStore app + rootless package</dd></div>
           <div><dt>Execution</dt><dd>Six gated implementation plans</dd></div>
-          <div><dt>Current gate</dt><dd>Hardware U2 restoration and watchdog</dd></div>
+          <div><dt>Current gate</dt><dd>Hardware U3 HID canary</dd></div>
         </dl>
       </header>
 
@@ -828,7 +828,7 @@
               <h3><a href="01-hardware-feasibility.md">Hardware feasibility gates</a></h3>
               <p>Proves USB-C device role, private API/entitlement access, bindable HID function publication, exact restoration, and a viable Switch-to-iPad network topology. Its read-only U1 inventory and authorization gate has passed: the earlier controller/interface and platform profiles and two attested ordinary SpringBoard baseline/set-description apps each have two validated rounds for Mac A/B and direct Switch 2 A/B. Six complete Mac host lifecycle windows recorded zero target events. Both owner-reported Switch orientations had configured, on-bus controller and external-power observations. The older toolbox and platform test apps were removed by the owner; their raw evidence remains retained privately. Earlier U2 no-op trials failed external recovery; their journals were preserved and archived after owner-assisted restarts. One v4 normal trial restored external USB functions, but a guarded clean-start v4 repeat failed to re-enumerate. Its active journal and private evidence are preserved. Exact restoration and fault recovery remain open. HID and network gates remain open, with reversible device artifacts in a cleanup ledger.</p>
             </div>
-            <div class="plan-output"><strong>Gate status</strong>Hardware child-plan U1 passes for read-only R1–R3 and its scoped R14 evidence decision. The raw reports, exact installed-code attestations, host lifecycle bindings, stock-source cross-check, and operator peer labels are retained privately. U2's durable journal and watchdog are implemented. The guarded clean-start v4 repeat failed to re-enumerate; U2 is not cleared and U3 is blocked. <a href="../../ipad/u2-usb-recovery-failure-analysis.md">Review the recovery analysis.</a> <a href="scripts/README.md">Browse the iPad test scripts.</a> <a href="../../ipad/hardware-matrix.md">Review the U1 evidence decision.</a></div>
+            <div class="plan-output"><strong>Gate status</strong>Hardware child-plan U1 passes for read-only R1–R3 and its scoped R14 evidence decision. The raw reports, exact installed-code attestations, host lifecycle bindings, stock-source cross-check, and operator peer labels are retained privately. U2 passed on 2026-10-31 with automatic same-boot USB recovery (5/5 hardware trials). U3 is next. <a href="../../ipad/usb-auto-recovery.md">How automatic recovery works.</a> <a href="../../ipad/u2-usb-recovery-failure-analysis.md">Review the recovery analysis.</a> <a href="scripts/README.md">Browse the iPad test scripts.</a> <a href="../../ipad/hardware-matrix.md">Review the U1 evidence decision.</a></div>
           </li>
           <li class="plan">
             <div class="phase-marker" aria-label="Plan 2"></div>

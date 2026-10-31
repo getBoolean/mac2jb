@@ -31,6 +31,8 @@ OUTPUT_V6 = BUILD / "u2-native-noop-trial-v6-settled"
 OUTPUT_V7 = BUILD / "u2-native-noop-trial-v7-ready-gated"
 OUTPUT_V8 = BUILD / "u2-native-noop-trial-v8-wifi-restore"
 OUTPUT_V9 = BUILD / "u2-native-noop-trial-v9-auto-heal"
+OUTPUT_V10 = BUILD / "u2-native-noop-trial-v10-auto-heal-5"
+OUTPUT_V11 = BUILD / "u2-native-noop-trial-v11-auto-heal-restart"
 OUTPUT_NO_INITIAL_CYCLE = BUILD / "u2-native-noop-trial-clone-no-initial-cycle"
 # Resolve the installed iPhoneOS SDK instead of pinning an Xcode point release.
 SDK = subprocess.run(["/usr/bin/xcrun", "--sdk", "iphoneos", "--show-sdk-path"],
@@ -105,6 +107,20 @@ def main():
     elif len(sys.argv) == 2 and sys.argv[1] == "--v9-auto-heal":
         # v8 flags; the source adds automatic function-registration healing.
         OUTPUT = OUTPUT_V9
+        explicit_cycle = True
+        controller_clone = True
+        post_clone = True
+        ready_gated = True
+    elif len(sys.argv) == 2 and sys.argv[1] == "--v10-auto-heal":
+        # v9 flags; the healer now allows 5 republications.
+        OUTPUT = OUTPUT_V10
+        explicit_cycle = True
+        controller_clone = True
+        post_clone = True
+        ready_gated = True
+    elif len(sys.argv) == 2 and sys.argv[1] == "--v11-auto-heal":
+        # v10 plus healing on watchdog restart and lease expiry.
+        OUTPUT = OUTPUT_V11
         explicit_cycle = True
         controller_clone = True
         post_clone = True

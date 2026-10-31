@@ -81,6 +81,8 @@ Reuse three pieces unchanged: the C shim (`USBRestoreControllerShim.c/.h`), `USB
 
 ## Status and open items
 
+- **U2 PASS (2026-10-31), v11 broker:** heals after a failed first enumeration, worker death, watchdog restart (start-up recovery, at most 3 start heals per journal) and lease expiry, with `maxRepublications` 5 and JetsamMemoryLimit 96. Five consecutive hardware no-op trials (normal ×3, worker-kill, watchdog-kill) recovered without owner action in 46–61 s and passed the strict external check. Heals used 1–3 re-publications; two also restarted `audiomxd` automatically.
+
 - **Hardware result (2026-10-31):** a v9 no-op trial lost USB on its first publication and **recovered automatically**, with `healed republications=3 owner-restarts=none`. External checks passed and the journal was confirmed. The manual owner-restart remedy also worked once (`host/recover-u2-restart-function-owner-wifi.py com.apple.audiomxd`).
 - The trial used the full republication bound; consider `maxRepublications` 5 now that the jetsam limit is 96 MB. One run is not a reliability figure; repeat trials are needed.
 - Hardware scripts: `host/transition-u2-v8-to-v9-wifi.py` (stage v9 over an unresolved journal), `host/run-u2-native-noop-trial-v9-wifi.py` (trial plus a 90 s heal window and one Wi-Fi `heal` fallback), `host/confirm-u2-after-heal-wifi.py` (heal, external checks, confirm).

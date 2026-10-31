@@ -86,9 +86,26 @@ def main():
         try:
             worker_death(service)
             status = wait_heal(service, "heal-gave-up")
-            assert status.startswith("OK last-heal heal-gave-up missing=USBAudio2StreamOUT republications=3"), status
-            assert service.count() == 4, "must stop after 3 republications"
+            assert status.startswith("OK last-heal heal-gave-up missing=USBAudio2StreamOUT republications=5"), status
+            assert service.count() == 6, "must stop after 5 republications"
             service.phase("awaitingVerification")  # healing never confirms or clears
+        finally:
+            service.stop()
+
+        # Watchdog killed after publication: launchd-style restart must heal.
+        service, restarts = case(binary, root, "watchdog-restart", ["Valeria"], True)
+        try:
+            assert service.command("prepare") == "OK prepared"
+            worker = service.connect("watch")
+            assert worker.recv(256) == b"OK watching\n"
+            assert service.command("publish-noop") == "OK published"
+            service.process.kill()
+            service.process.wait(timeout=3)
+            worker.close()
+            service.start(timeout=60)  # recoverAtStart: gate times out, then heals
+            status = wait_heal(service, "healed")
+            assert status == "OK last-heal healed republications=0 owner-restarts=com.apple.audiomxd", status
+            service.phase("awaitingVerification")
         finally:
             service.stop()
 
@@ -100,7 +117,7 @@ def main():
             print("  restore-after-failure path:", service.command("heal-status"))
         finally:
             service.stop()
-    print("PASS native U2 auto-heal: owner restart, republish-then-restart, bounded give-up, never confirms")
+    print("PASS native U2 auto-heal: owner restart, republish-then-restart, bounded give-up, watchdog restart, never confirms")
 
 
 if __name__ == "__main__":

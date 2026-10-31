@@ -4,13 +4,14 @@
 
 *Single source of truth for what is true now. Replace this block (do not append below it) after every device action; keep dated history in the paragraphs that follow. The repository skill holds procedure only and never status.*
 
-- **As of:** 2026-10-31, after the first **automatic** same-boot USB recovery (v9 no-op trial healed by itself).
-- **Gates:** U1 passed. U2: one automatic no-op round trip recovered and was externally confirmed. Still required: repeated cycles (release plan: 30 normal plus fault cases), worker- and watchdog-kill cases, and the stricter full USB/NCM/descriptor comparison. U3 blocked.
-- **USB data:** healthy. Mac USBMux at configuration 5, pairing valid, XDCI configured at 784/9, function census identical to the healthy reference. Pinned Wi-Fi SSH healthy.
-- **Journal:** none active (the v9 trial journal was confirmed and cleared after external checks). Seven old-boot archives retained.
-- **Staged on device:** v9 broker `dev.mac2jb.u2.nooptrialv9`, binary `.mac2jb-u2-noop-trial-507b5889`, plist with `JetsamMemoryLimit 96`. It is the only U2 launchd plist. The v8 binary remains without a plist.
-- **Mechanism and remedy:** see [automatic recovery](usb-auto-recovery.md).
-- **Next step:** raise `maxRepublications` (the trial needed all 3) and repeat v9 normal trials, then worker-kill and watchdog-kill trials, counting automatic recoveries. Fix the early syslog-stream drop.
+- **As of:** 2026-10-31, after five passing v11 trials and U1 test-app cleanup.
+- **Gates:** U1 passed. **U2 passed** (automatic recovery, 5/5 hardware no-op trials incl. worker-kill and watchdog-kill; see [hardware matrix](hardware-matrix.md)). U3 (HID canary) next.
+- **USB data:** healthy; the strict check against `build/ipad-hardware/u2-v9-trial-baseline/` passes with no journal. Pinned Wi-Fi SSH healthy.
+- **Journal:** none active. Seven old-boot archives retained.
+- **Staged on device:** v11 broker `dev.mac2jb.u2.nooptrialv11` (binary `.mac2jb-u2-noop-trial-8fdb044f`, JetsamMemoryLimit 96) is the only U2 launchd plist. Older v8/v9/v10 broker binaries remain without plists (see [ledger](device-cleanup-ledger.md)).
+- **TrollStore test apps:** all uninstalled by the owner; the seven staged `.tipa` packages were removed after exact hash checks; `ClientTruth.plist` equals its private backup. Other U1 helper files (admission-smoke binaries, SSH-key setup scripts) remain in `/var/mobile/Media`.
+- **Run a trial:** `python3 docs/plans/ipad-port/scripts/ipad-hardware/host/run-u2-native-noop-trial-v11-wifi.py normal|worker-kill|watchdog-kill`.
+- **Next step:** U3 HID canary on top of the v11 broker; optional longer qualification run (release plan: 30 cycles).
 
 **Tool references migrated from the repository skill, 2026-10-30:** The skill's dated status paragraphs were removed because they are recorded below and in the runbook, failure analysis, and ledger. These tool facts appeared only in the skill: trial binaries are built with `build-u2-noop-trial-binary.py --v3-buscycle` or `--v4-clone` (v2 used `cycleBus=false`; a read-only target symbol lookup for v3 returned `set=present cycle=present`); `check-u2-v5-service-wifi.py --validate-only` exercised v5's native in-memory normalization/clone with the journal absent; `diagnose-u2-recovery-stage.py` proved the first postreboot recovery state; `run-u2-launchd-native-admission-wifi.py` reported the one-shot launchd native admission `alive` and removed its staged files; the read-only journal probe is `run-u2-readonly-default-description-wifi.py --native-journal`; `tests/test-u2-native-service-fixture.py` runs only on the Mac and needs normal host permission for its local Unix socket. For U1, `host/run-springboard-r2-switch-a.py` is the accepted Switch 2 A wrapper, the accepted Mac B window source is privately snapshotted at `build/ipad-hardware/springboard-r2-usb-window-b-source.py`, and `run-springboard-r2-report-wifi.go` accepts `baseline|setdescription state`, `round1`...`round8`, and `clear1`...`clear7`. The skill's older `uiopen <bundle-id>` example was wrong: bare IDs take the URL branch, so `uiopen --bundleid <id>` is required.
 

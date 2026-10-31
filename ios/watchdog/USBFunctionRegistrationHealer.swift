@@ -27,7 +27,7 @@ protocol USBFunctionHealProbe {
 }
 
 struct USBFunctionHealPolicy {
-    var maxRepublications = 3
+    var maxRepublications = 5  // v9 hardware trial needed 3
     var maxRestartsPerOwner = 2
     var settleSeconds = 6.0
     var pollSeconds = 0.25
