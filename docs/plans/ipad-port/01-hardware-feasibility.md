@@ -93,7 +93,7 @@ The evidence therefore supports a **credible implementation path, not proof of i
 - The canary does not type a real bootstrap until descriptor restoration has passed on a generic USB host and then the Switch keyboard screen.
 - This plan does not build the production UI, Node runtime, or homebrew features.
 - Kernel patching and system-process injection are not added: TrollStore documents that it cannot provide the latter, and the target should first use preserved entitlements plus the jailbreak service boundary.
-- Support for other iPads, OS versions, hubs, or general adapter configurations is deferred until the exact target passes; the single adapter topology permitted by R13 is only a bounded release-gate fallback.
+- Each gate is proven on the reference M2 iPad first. The owner's product goal is all jailbroken/TrollStore USB-C iPads and iPhones, with Lightning as a stretch goal. Code must therefore avoid baking in reference-device constants: product/build pins, the `AppleT8112USBXDCI` class, the function list and the owner map belong in a per-device profile captured on that device. Qualifying another model or iOS build means capturing its profile and rerunning U2 (normal, worker-kill, watchdog-kill) and the later gates on it. Hubs and general adapter configurations stay deferred; the single adapter topology permitted by R13 is only a bounded release-gate fallback.
 - A Mac relay, Bluetooth keyboard emulation, or separate USB microcontroller does not satisfy this plan's direct-iPad HID gate. If the bounded direct path fails, record the stop decision rather than silently changing the product requirement.
 
 ---

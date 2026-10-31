@@ -99,14 +99,14 @@ The repository is an integrated macOS product rather than a portable command-lin
 
 **In scope**
 
-- M2 iPad Pro 12.9-inch (6th generation), `iPad14,5` / `J620AP` / `T8112`, iPadOS 17.0, Dopamine rootless, TrollStore, Switch 2, and the repository's currently supported SmileBASIC versions and host profiles.
+- **Product goal (owner, 2026-10-31): every jailbroken or TrollStore-capable iPad and iPhone with USB-C.** Lightning devices are a stretch goal, contingent on HID function publication working over Lightning. The M2 iPad Pro 12.9-inch (6th generation), `iPad14,5` / `J620AP` / `T8112`, iPadOS 17.0, Dopamine rootless, TrollStore, is the **reference device**: every gate is proven there first. Other devices join through a per-device profile plus qualification (see the hardware plan's device-generalization unit). Also in scope: Switch 2 and the repository's currently supported SmileBASIC versions and host profiles.
 - Native iPad UI and a local background service, with the current JavaScript orchestration reused behind platform adapters where practical.
 - A physical-device lab procedure even when public CI cannot attach the target iPad and Switch.
 
 **Non-goals considered and not built**
 
 - Stock iPadOS support is excluded because R4, R9, and R10 require private entitlements, unsandboxed helpers, and a jailbreak service.
-- Other iPad chips and iPadOS versions are excluded from the first release because USB controller behavior, jailbreak support, and entitlements are target-specific; add them only after device-backed qualification.
+- Devices or iOS versions where no public jailbreak or TrollStore can grant `com.apple.private.usbdevice.setdescription` with `platform-application` to a root process are out of reach, not deferred. Each other in-reach USB-C device ships only after device-backed qualification on that model and iOS build.
 - A remote-Mac fallback is excluded from the parity path because it would violate R3; it may remain a developer diagnostic outside the release workflow.
 - App Store distribution is excluded because the required private entitlements and executable helper model are incompatible with that channel.
 
