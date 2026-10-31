@@ -67,8 +67,23 @@ void MAC2JBUSBFunctionLedgerInit(MAC2JBUSBFunctionLedger *ledger) {
     ledger->attempted = 0;
     ledger->refused = 0;
     ledger->abortedBy = MAC2JBUSBFunctionOperationNone;
-    for (int index = 0; index < MAC2JBUSBFunctionOperationCount; index++)
+    for (int index = 0; index < MAC2JBUSBFunctionOperationCount; index++) {
+        ledger->attempts[index] = 0;
         ledger->calls[index] = MAC2JBUSBFunctionCallNotAttempted;
+    }
+}
+
+bool MAC2JBUSBFunctionOperationIsRepeatable(MAC2JBUSBFunctionOperation operation) {
+    return operation == MAC2JBUSBFunctionOperationWritePipe ||
+        operation == MAC2JBUSBFunctionOperationPipeMaxPacketSize;
+}
+
+void MAC2JBUSBFunctionSplitScalarResult(
+    int32_t rawReturn, const uint64_t *output, uint32_t outputCount,
+    uint64_t *value
+) {
+    if (!value) return;
+    *value = (rawReturn == 0 && output && outputCount >= 1) ? output[0] : 0;
 }
 
 // The interface open is the gate for everything else, and it is derivable
@@ -84,9 +99,13 @@ MAC2JBUSBFunctionResult MAC2JBUSBFunctionLedgerBegin(
     if (!ledger || operation >= MAC2JBUSBFunctionOperationCount)
         return MAC2JBUSBFunctionInvalidInput;
     uint32_t bit = 1u << (uint32_t)operation;
-    if (ledger->attempted & bit) return MAC2JBUSBFunctionAlreadyAttempted;
+    // A transmit operation runs once per report, so only the configuration
+    // cells are spent by a single attempt.
+    if ((ledger->attempted & bit) &&
+        !MAC2JBUSBFunctionOperationIsRepeatable(operation))
+        return MAC2JBUSBFunctionAlreadyAttempted;
     // A half-configured interface must not be configured further, so the first
-    // refusal closes the session to every later operation.
+    // refusal closes the session to every later operation, transmit included.
     if (ledger->abortedBy != MAC2JBUSBFunctionOperationNone)
         return MAC2JBUSBFunctionOperationRefused;
     // Order is enforced here, not left to the caller's call order: nothing but
@@ -96,6 +115,7 @@ MAC2JBUSBFunctionResult MAC2JBUSBFunctionLedgerBegin(
         !interface_is_open(ledger))
         return MAC2JBUSBFunctionInterfaceNotOpen;
     ledger->attempted |= bit;
+    if (ledger->attempts[operation] < UINT32_MAX) ledger->attempts[operation]++;
     return MAC2JBUSBFunctionSuccess;
 }
 
@@ -107,6 +127,10 @@ void MAC2JBUSBFunctionLedgerRecord(
     ledger->calls[operation] = rawReturn;
     if (rawReturn == 0) return;
     ledger->refused |= 1u << (uint32_t)operation;
+    // A transient transfer failure is not a refused configuration selector, so
+    // a repeatable operation never closes the session; the caller decides
+    // whether to send the next report.
+    if (MAC2JBUSBFunctionOperationIsRepeatable(operation)) return;
     if (ledger->abortedBy == MAC2JBUSBFunctionOperationNone)
         ledger->abortedBy = (uint8_t)operation;
 }
@@ -454,7 +478,7 @@ MAC2JBUSBFunctionResult MAC2JBUSBFunctionCreatePipe(
     uint32_t outputCount = 1;
     kern_return_t status = session->callScalar(session->connection, selector,
                                                arguments, 6, output, &outputCount);
-    if (status == KERN_SUCCESS && outputCount == 1) *pipeID = output[0];
+    MAC2JBUSBFunctionSplitScalarResult((int32_t)status, output, outputCount, pipeID);
     return finish(session, MAC2JBUSBFunctionOperationCreatePipe, status, callReturn);
 }
 
@@ -493,4 +517,49 @@ MAC2JBUSBFunctionResult MAC2JBUSBFunctionCreateBuffer(
         *token = output[2];
     }
     return finish(session, MAC2JBUSBFunctionOperationCreateBuffer, status, callReturn);
+}
+
+MAC2JBUSBFunctionResult MAC2JBUSBFunctionWritePipe(
+    MAC2JBUSBFunctionSession *session, uint32_t selector,
+    uint64_t pipeID, uint64_t bufferToken, uint64_t length,
+    uint64_t timeoutMilliseconds, uint64_t *transferred, int32_t *callReturn
+) {
+    if (transferred) *transferred = 0;
+    MAC2JBUSBFunctionResult gate = begin(session, MAC2JBUSBFunctionOperationWritePipe,
+                                         callReturn);
+    if (gate != MAC2JBUSBFunctionSuccess) return gate;
+    // The report bytes are already in the mapped buffer: the caller staged
+    // them there and hands over the token, so a kernel refusal here cannot be
+    // mistaken for a bad copy.
+    if (!transferred || length == 0) return MAC2JBUSBFunctionInvalidInput;
+    uint64_t arguments[4] = { pipeID, bufferToken, length, timeoutMilliseconds };
+    uint64_t output[1] = { 0 };
+    uint32_t outputCount = 1;
+    kern_return_t status = session->callScalar(session->connection, selector,
+                                               arguments, 4, output, &outputCount);
+    // Separate storage: the raw return goes to callReturn, the byte count to
+    // transferred, and the caller compares the count against length.
+    MAC2JBUSBFunctionSplitScalarResult((int32_t)status, output, outputCount,
+                                       transferred);
+    return finish(session, MAC2JBUSBFunctionOperationWritePipe, status, callReturn);
+}
+
+MAC2JBUSBFunctionResult MAC2JBUSBFunctionPipeMaxPacketSize(
+    MAC2JBUSBFunctionSession *session, uint32_t selector,
+    uint64_t pipeID, uint64_t *maxPacketSize, int32_t *callReturn
+) {
+    if (maxPacketSize) *maxPacketSize = 0;
+    MAC2JBUSBFunctionResult gate = begin(
+        session, MAC2JBUSBFunctionOperationPipeMaxPacketSize, callReturn);
+    if (gate != MAC2JBUSBFunctionSuccess) return gate;
+    if (!maxPacketSize) return MAC2JBUSBFunctionInvalidInput;
+    uint64_t arguments[1] = { pipeID };
+    uint64_t output[1] = { 0 };
+    uint32_t outputCount = 1;
+    kern_return_t status = session->callScalar(session->connection, selector,
+                                               arguments, 1, output, &outputCount);
+    MAC2JBUSBFunctionSplitScalarResult((int32_t)status, output, outputCount,
+                                       maxPacketSize);
+    return finish(session, MAC2JBUSBFunctionOperationPipeMaxPacketSize, status,
+                  callReturn);
 }

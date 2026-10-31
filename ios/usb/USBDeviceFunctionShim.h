@@ -34,9 +34,12 @@ typedef enum {
     MAC2JBUSBFunctionInterfaceNotOpen = 9 /* the interface open has not succeeded yet */
 } MAC2JBUSBFunctionResult;
 
-// The operations, in the order the macOS reference performs them: the
-// interface open comes first, over the connection, straight after the service
-// open and before any class, descriptor or pipe selector.
+// Identifiers for the ledger's cells. These are not a call order: only the
+// interface open is ordered here, and it is enforced, because it goes over the
+// connection straight after the service open and before any class, descriptor
+// or pipe selector. The caller owns the rest of the order, which in the macOS
+// reference runs class, subclass, protocol, both descriptor appends, the pipe,
+// the buffers, the commit, and the class-command callbacks last.
 typedef enum {
     MAC2JBUSBFunctionOperationInterfaceOpen = 0,
     MAC2JBUSBFunctionOperationSetClass = 1,
@@ -49,7 +52,10 @@ typedef enum {
     MAC2JBUSBFunctionOperationCommit = 8,
     MAC2JBUSBFunctionOperationCreateBuffer = 9,
     MAC2JBUSBFunctionOperationInterfaceClose = 10,
-    MAC2JBUSBFunctionOperationCount = 11,
+    /* The transmit path. Repeatable: a keyboard sends many reports. */
+    MAC2JBUSBFunctionOperationWritePipe = 11,
+    MAC2JBUSBFunctionOperationPipeMaxPacketSize = 12,
+    MAC2JBUSBFunctionOperationCount = 13,
     MAC2JBUSBFunctionOperationNone = 255  /* nothing has aborted the sequence */
 } MAC2JBUSBFunctionOperation;
 
@@ -67,6 +73,8 @@ typedef enum {
     MAC2JBUSBFunctionSelectorSetClassCommandCallbacks = 8,
     MAC2JBUSBFunctionSelectorCreatePipe = 10,
     MAC2JBUSBFunctionSelectorCommit = 11,
+    MAC2JBUSBFunctionSelectorWritePipe = 14,
+    MAC2JBUSBFunctionSelectorPipeMaxPacketSize = 17,
     MAC2JBUSBFunctionSelectorCreateBuffer = 18
 } MAC2JBUSBFunctionSelector;
 
@@ -83,13 +91,21 @@ typedef enum {
 // out here so the header needs no IOKit.
 #define MAC2JBUSBFunctionCallNotAttempted ((int32_t)0xE00002D1)
 
-// The attempt matrix for one session: which operations were tried, which were
-// refused, which refusal aborted the sequence, and the raw IOReturn of each
-// call exactly as the kernel returned it.
+// The attempt matrix for one session: which operations were tried and how
+// often, which were refused, which refusal aborted the sequence, and the raw
+// IOReturn of each call exactly as the kernel returned it.
+//
+// A repeatable cell is read differently from a once-only one, and
+// MAC2JBUSBFunctionOperationIsRepeatable is how a reader tells them apart:
+// attempts can exceed 1, calls holds the most recent raw return rather than
+// the only one, and refused means at least one call was refused.
 typedef struct {
     uint32_t attempted;  /* bit (1u << operation) set once the call was made */
-    uint32_t refused;    /* bit set when that call returned nonzero */
-    uint8_t abortedBy;   /* first refusing operation, else MAC2JBUSBFunctionOperationNone */
+    uint32_t refused;    /* bit set when a call returned nonzero */
+    uint8_t abortedBy;   /* first refusing configuration operation, else
+                            MAC2JBUSBFunctionOperationNone; a repeatable
+                            operation never names itself here */
+    uint32_t attempts[MAC2JBUSBFunctionOperationCount];
     int32_t calls[MAC2JBUSBFunctionOperationCount];
 } MAC2JBUSBFunctionLedger;
 
@@ -105,19 +121,36 @@ MAC2JBUSBFunctionResult MAC2JBUSBFunctionValidateName(const char *name);
 
 // Pure ledger logic; the real entries below go through exactly these.
 void MAC2JBUSBFunctionLedgerInit(MAC2JBUSBFunctionLedger *ledger);
-// Gate for one operation: MAC2JBUSBFunctionAlreadyAttempted when it already
-// ran this session, MAC2JBUSBFunctionOperationRefused once any operation has
-// been refused, MAC2JBUSBFunctionInterfaceNotOpen for anything other than the
-// interface open while that open has not succeeded, otherwise
-// MAC2JBUSBFunctionSuccess with the attempt recorded. Only a success spends
-// the single attempt; a gate refusal spends nothing.
+// True for the transmit operations, which run once per report rather than once
+// per session and whose failure is a transient transfer problem, not a refused
+// configuration selector.
+bool MAC2JBUSBFunctionOperationIsRepeatable(MAC2JBUSBFunctionOperation operation);
+// Gate for one operation: MAC2JBUSBFunctionAlreadyAttempted when a once-only
+// operation already ran this session, MAC2JBUSBFunctionOperationRefused once
+// the sequence has been aborted, MAC2JBUSBFunctionInterfaceNotOpen for
+// anything other than the interface open while that open has not succeeded,
+// otherwise MAC2JBUSBFunctionSuccess with the attempt counted. A repeatable
+// operation skips only the once-only rule; it is gated like the rest. A gate
+// refusal counts nothing.
 MAC2JBUSBFunctionResult MAC2JBUSBFunctionLedgerBegin(
     MAC2JBUSBFunctionLedger *ledger, MAC2JBUSBFunctionOperation operation);
-// Stores the raw return verbatim; a nonzero return names this operation as the
-// aborter unless an earlier one already holds that place.
+// Stores the raw return verbatim; a nonzero return from a once-only operation
+// names it as the aborter unless an earlier one already holds that place. A
+// repeatable operation never becomes the aborter: one timed-out report must
+// not kill a configured interface, so the caller decides what to do next.
 void MAC2JBUSBFunctionLedgerRecord(
     MAC2JBUSBFunctionLedger *ledger, MAC2JBUSBFunctionOperation operation,
     int32_t rawReturn);
+
+// Publishes the single output scalar of a scalar method without letting it
+// share storage with the return code. The reference backend assigns
+// output[0] over its IOReturn variable, so a short transfer and an error are
+// indistinguishable there; here *value is the scalar and the raw IOReturn
+// stays in its own out parameter. A refused call accounts for nothing, so
+// *value becomes 0 and only the raw return describes the failure.
+void MAC2JBUSBFunctionSplitScalarResult(
+    int32_t rawReturn, const uint64_t *output, uint32_t outputCount,
+    uint64_t *value);
 
 // Match one IOUSBDeviceInterface whose USBDeviceFunction property is exactly
 // functionName and whose service-plane ancestor controller has the expected
@@ -216,9 +249,30 @@ MAC2JBUSBFunctionResult MAC2JBUSBFunctionCommit(
     MAC2JBUSBFunctionSession *session, uint32_t selector, int32_t *callReturn);
 
 // Shared buffer for setup and pipe traffic. The three outputs are the
-// reference's address, size and token.
+// reference's address, size and token: the caller writes its report bytes to
+// address and passes token to MAC2JBUSBFunctionWritePipe.
 MAC2JBUSBFunctionResult MAC2JBUSBFunctionCreateBuffer(
     MAC2JBUSBFunctionSession *session, uint32_t selector, uint32_t size,
     uint64_t *address, uint64_t *bufferSize, uint64_t *token, int32_t *callReturn);
+
+// The transmit path. Both entries are repeatable and both still require a
+// successful interface open and an unaborted sequence.
+
+// Hands one already-staged report to the pipe. The caller copies its bytes to
+// the mapped address MAC2JBUSBFunctionCreateBuffer returned and passes that
+// buffer's token here; this entry does not copy, so a kernel refusal is never
+// confused with a bad memcpy. length must not exceed the buffer size
+// MAC2JBUSBFunctionCreateBuffer reported, and the caller compares *transferred
+// against the length it asked for to detect a short write: *callReturn is the
+// raw IOReturn and *transferred is the byte count, never the same value.
+MAC2JBUSBFunctionResult MAC2JBUSBFunctionWritePipe(
+    MAC2JBUSBFunctionSession *session, uint32_t selector,
+    uint64_t pipeID, uint64_t bufferToken, uint64_t length,
+    uint64_t timeoutMilliseconds, uint64_t *transferred, int32_t *callReturn);
+
+// The pipe's current maximum packet size, which bounds one report.
+MAC2JBUSBFunctionResult MAC2JBUSBFunctionPipeMaxPacketSize(
+    MAC2JBUSBFunctionSession *session, uint32_t selector,
+    uint64_t pipeID, uint64_t *maxPacketSize, int32_t *callReturn);
 
 #endif

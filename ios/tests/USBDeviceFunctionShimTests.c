@@ -131,9 +131,15 @@ static void ledger_accepts_each_operation_once(void) {
         require(MAC2JBUSBFunctionLedgerBegin(&ledger, operation) ==
                 MAC2JBUSBFunctionSuccess);
         MAC2JBUSBFunctionLedgerRecord(&ledger, operation, 0);
+        // A transmit operation runs as often as the keyboard has reports to
+        // send, so only the configuration cells are once-only.
         require(MAC2JBUSBFunctionLedgerBegin(&ledger, operation) ==
-                MAC2JBUSBFunctionAlreadyAttempted);
+                (MAC2JBUSBFunctionOperationIsRepeatable(operation)
+                     ? MAC2JBUSBFunctionSuccess
+                     : MAC2JBUSBFunctionAlreadyAttempted));
         require(ledger.calls[index] == 0);
+        require(ledger.attempts[index] ==
+                (MAC2JBUSBFunctionOperationIsRepeatable(operation) ? 2u : 1u));
     }
     require(ledger.abortedBy == MAC2JBUSBFunctionOperationNone);
     require(MAC2JBUSBFunctionLedgerBegin(&ledger, MAC2JBUSBFunctionOperationCount) ==
@@ -195,6 +201,88 @@ static void refused_interface_open_aborts_everything(void) {
     }
 }
 
+// The transmit path: repeatable, gated the same way, and not allowed to kill a
+// session because one write timed out.
+static void transmit_operations_repeat_without_aborting(void) {
+    require(MAC2JBUSBFunctionOperationIsRepeatable(
+        MAC2JBUSBFunctionOperationWritePipe));
+    require(MAC2JBUSBFunctionOperationIsRepeatable(
+        MAC2JBUSBFunctionOperationPipeMaxPacketSize));
+    require(!MAC2JBUSBFunctionOperationIsRepeatable(
+        MAC2JBUSBFunctionOperationCommit));
+    require(!MAC2JBUSBFunctionOperationIsRepeatable(
+        MAC2JBUSBFunctionOperationInterfaceOpen));
+
+    MAC2JBUSBFunctionLedger ledger;
+    MAC2JBUSBFunctionLedgerInit(&ledger);
+    // Gated like everything else: no interface open, no write.
+    require(MAC2JBUSBFunctionLedgerBegin(&ledger, MAC2JBUSBFunctionOperationWritePipe) ==
+            MAC2JBUSBFunctionInterfaceNotOpen);
+    require(MAC2JBUSBFunctionLedgerBegin(
+                &ledger, MAC2JBUSBFunctionOperationPipeMaxPacketSize) ==
+            MAC2JBUSBFunctionInterfaceNotOpen);
+    require(ledger.attempts[MAC2JBUSBFunctionOperationWritePipe] == 0);
+
+    require(MAC2JBUSBFunctionLedgerBegin(&ledger,
+                                         MAC2JBUSBFunctionOperationInterfaceOpen) ==
+            MAC2JBUSBFunctionSuccess);
+    MAC2JBUSBFunctionLedgerRecord(&ledger, MAC2JBUSBFunctionOperationInterfaceOpen, 0);
+    for (uint32_t round = 1; round <= 5; round++) {
+        require(MAC2JBUSBFunctionLedgerBegin(
+                    &ledger, MAC2JBUSBFunctionOperationWritePipe) ==
+                MAC2JBUSBFunctionSuccess);
+        MAC2JBUSBFunctionLedgerRecord(&ledger, MAC2JBUSBFunctionOperationWritePipe, 0);
+        require(ledger.attempts[MAC2JBUSBFunctionOperationWritePipe] == round);
+    }
+    require(MAC2JBUSBFunctionLedgerBegin(
+                &ledger, MAC2JBUSBFunctionOperationPipeMaxPacketSize) ==
+            MAC2JBUSBFunctionSuccess);
+
+    // A failed write records its raw return but does not name itself aborter,
+    // so the next report may still be attempted.
+    MAC2JBUSBFunctionLedgerRecord(&ledger, MAC2JBUSBFunctionOperationWritePipe, REFUSED);
+    require(ledger.abortedBy == MAC2JBUSBFunctionOperationNone);
+    require(ledger.calls[MAC2JBUSBFunctionOperationWritePipe] == REFUSED);
+    require(MAC2JBUSBFunctionLedgerBegin(&ledger, MAC2JBUSBFunctionOperationWritePipe) ==
+            MAC2JBUSBFunctionSuccess);
+    require(MAC2JBUSBFunctionLedgerBegin(&ledger, MAC2JBUSBFunctionOperationCommit) ==
+            MAC2JBUSBFunctionSuccess);
+
+    // A refused configuration selector still closes the transmit path.
+    MAC2JBUSBFunctionLedgerRecord(&ledger, MAC2JBUSBFunctionOperationCommit, REFUSED);
+    require(ledger.abortedBy == MAC2JBUSBFunctionOperationCommit);
+    require(MAC2JBUSBFunctionLedgerBegin(&ledger, MAC2JBUSBFunctionOperationWritePipe) ==
+            MAC2JBUSBFunctionOperationRefused);
+    require(MAC2JBUSBFunctionLedgerBegin(
+                &ledger, MAC2JBUSBFunctionOperationPipeMaxPacketSize) ==
+            MAC2JBUSBFunctionOperationRefused);
+}
+
+// The reference returns a transferred byte count through the same variable as
+// the IOReturn, so a short write is indistinguishable from an error code.
+// Here the two are split and never share storage.
+static void scalar_output_never_carries_the_return_code(void) {
+    uint64_t value = 999;
+    uint64_t output[1] = { 4 };
+    // A short write: success, fewer bytes than the caller asked for. The
+    // caller, not this code, decides whether 4 of 8 is a problem.
+    MAC2JBUSBFunctionSplitScalarResult(0, output, 1, &value);
+    require(value == 4);
+    // A refused call accounts for no bytes; the error stays in the return.
+    value = 999;
+    output[0] = (uint64_t)(uint32_t)REFUSED;
+    MAC2JBUSBFunctionSplitScalarResult(REFUSED, output, 1, &value);
+    require(value == 0);
+    // A success with no output scalar reports no bytes rather than garbage.
+    value = 999;
+    MAC2JBUSBFunctionSplitScalarResult(0, output, 0, &value);
+    require(value == 0);
+    value = 999;
+    MAC2JBUSBFunctionSplitScalarResult(0, NULL, 1, &value);
+    require(value == 0);
+    MAC2JBUSBFunctionSplitScalarResult(0, output, 1, NULL);  // Harmless.
+}
+
 static void refusal_aborts_the_sequence(void) {
     MAC2JBUSBFunctionLedger ledger;
     MAC2JBUSBFunctionLedgerInit(&ledger);
@@ -244,6 +332,8 @@ static void selectors_are_exposed_and_overridable(void) {
     require(MAC2JBUSBFunctionSelectorCreatePipe == 10);
     require(MAC2JBUSBFunctionSelectorCommit == 11);
     require(MAC2JBUSBFunctionSelectorCreateBuffer == 18);
+    require(MAC2JBUSBFunctionSelectorWritePipe == 14);
+    require(MAC2JBUSBFunctionSelectorPipeMaxPacketSize == 17);
     require(MAC2JBUSBFunctionReferenceUserClientType == 123);
     require(MAC2JBUSBFunctionHIDDescriptorType == 0x21);
     require(MAC2JBUSBFunctionHIDReportDescriptorType == 0x22);
@@ -282,6 +372,15 @@ static void entries_reject_a_missing_session(void) {
     require(MAC2JBUSBFunctionCreateBuffer(NULL, 99, 0x1000, &address, &size,
                                           &token, &raw) ==
             MAC2JBUSBFunctionInvalidInput);
+    // The transferred count and the raw return are separate out parameters, so
+    // neither can arrive carrying the other.
+    uint64_t transferred = 999, maxPacket = 999;
+    require(MAC2JBUSBFunctionWritePipe(NULL, 99, 1, token, 8, 50, &transferred,
+                                       &raw) == MAC2JBUSBFunctionInvalidInput);
+    require(transferred == 0);
+    require(MAC2JBUSBFunctionPipeMaxPacketSize(NULL, 99, 1, &maxPacket, &raw) ==
+            MAC2JBUSBFunctionInvalidInput);
+    require(maxPacket == 0);
     require(raw == MAC2JBUSBFunctionCallNotAttempted);
     MAC2JBUSBFunctionLedger ledger;
     require(MAC2JBUSBFunctionCopyLedger(NULL, &ledger) == MAC2JBUSBFunctionInvalidInput);
@@ -297,6 +396,8 @@ int main(void) {
     ledger_accepts_each_operation_once();
     configuration_requires_the_interface_open();
     refused_interface_open_aborts_everything();
+    transmit_operations_repeat_without_aborting();
+    scalar_output_never_carries_the_return_code();
     refusal_aborts_the_sequence();
     selectors_are_exposed_and_overridable();
     entries_reject_a_missing_session();
@@ -306,8 +407,9 @@ int main(void) {
     }
     printf("PASS added-function matcher and interface operation entries: "
            "exact name match, name validation, absent vs denied distinct, "
-           "one attempt per operation, interface open required before "
-           "configuration, refusal aborts the sequence, "
-           "overridable reference selectors\n");
+           "one attempt per configuration operation, interface open required "
+           "before configuration, refusal aborts the sequence, repeatable "
+           "transmit path that does not abort it, transferred count split from "
+           "the raw return, overridable reference selectors\n");
     return 0;
 }
