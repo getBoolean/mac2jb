@@ -7,9 +7,9 @@
 - **As of:** 2026-10-31, after five passing v11 trials and U1 test-app cleanup.
 - **Gates:** U1 passed. **U2 passed** (automatic recovery, 5/5 hardware no-op trials incl. worker-kill and watchdog-kill; see [hardware matrix](hardware-matrix.md)). U3 (HID canary) next.
 - **USB data:** healthy; the strict check against `build/ipad-hardware/u2-v9-trial-baseline/` passes with no journal. Pinned Wi-Fi SSH healthy.
-- **Journal:** none active. Seven old-boot archives retained.
-- **Staged on device:** v11 broker `dev.mac2jb.u2.nooptrialv11` (binary `.mac2jb-u2-noop-trial-8fdb044f`, JetsamMemoryLimit 96) is the only U2 launchd plist. Older v8/v9/v10 broker binaries remain without plists (see [ledger](device-cleanup-ledger.md)).
-- **TrollStore test apps:** all uninstalled by the owner; the seven staged `.tipa` packages were removed after exact hash checks; `ClientTruth.plist` equals its private backup. Other U1 helper files (admission-smoke binaries, SSH-key setup scripts) remain in `/var/mobile/Media`.
+- **Journal:** none active; no old-boot archives on the iPad (Mac copies in the kits).
+- **On device (after 2026-10-31 cleanup):** only the v11 broker `dev.mac2jb.u2.nooptrialv11` (binary `.mac2jb-u2-noop-trial-8fdb044f`, plist with JetsamMemoryLimit 96), its state directory `/var/jb/var/lib/mac2jb-u2-native/` (lock and socket), and the SSH `authorized_keys`. Old brokers, journal archives, U1 helpers and the old watchdog package were removed; byte copies are in restore kit `build/ipad-hardware/u2-wifi-restore-kit/1793438256099897000/`.
+- **TrollStore test apps:** all uninstalled; staged packages and other U1 helper files removed; `ClientTruth.plist` equals its private backup.
 - **Run a trial:** `python3 docs/plans/ipad-port/scripts/ipad-hardware/host/run-u2-native-noop-trial-v11-wifi.py normal|worker-kill|watchdog-kill`.
 - **Next step:** U3 HID canary on top of the v11 broker; optional longer qualification run (release plan: 30 cycles).
 
