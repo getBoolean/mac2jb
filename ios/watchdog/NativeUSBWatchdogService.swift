@@ -57,7 +57,15 @@ private final class NativeExternalVerifier: USBExternalRestoreVerifier {
 
 final class NativeUSBWatchdogService {
     static let stateDirectory = "/var/jb/var/lib/mac2jb-u2-native"
-    private static let leaseNanoseconds: UInt64 = 15_000_000_000
+    // The worker holds this lease across a publication, and for an appending
+    // publication it has to cover three waits in series: the appended
+    // function's interface appearing, its configuration, and then the host
+    // reading the new descriptors and selecting a configuration. Fifteen
+    // seconds covered a no-op; it left the host-enumeration wait a few
+    // seconds and reported a slow host as a lost lease. The coordinator
+    // already refuses anything beyond thirty, which stays the ceiling.
+    // Worker death still restores immediately; this bounds only a hung one.
+    private static let leaseNanoseconds: UInt64 = 30_000_000_000
 
     private let stateDirectory: String
     private var socketPath: String { stateDirectory + "/broker.sock" }
@@ -72,6 +80,9 @@ final class NativeUSBWatchdogService {
     private let controllerConfigured: (() throws -> Bool)?
     // Injected so this file never links the C publication shim.
     private let selectedConfiguration: (() throws -> Int)?
+    // Takes the controller off and on the bus and publishes nothing, returning
+    // the raw IOReturn of that one call.
+    private let cycleBus: (() throws -> Int32)?
     private let unservedFunctions: (() throws -> Set<String>)?
     private let restartOwner: ((String) throws -> Void)?
     private let healPolicy: USBFunctionHealPolicy
@@ -106,13 +117,17 @@ final class NativeUSBWatchdogService {
         let recoveryController = controller
         #endif
         // Only the build that can append a function needs to read which
-        // configuration the host selected; the other has no such command.
+        // configuration the host selected, or to cycle the bus a second time
+        // so the host re-reads a configuration descriptor that includes the
+        // appended interface; the other has neither command.
         #if MAC2JB_U3_ADDITIVE_FUNCTION
         let selectedConfigurationReader: (() throws -> Int)? = {
             try controller.selectedConfiguration()
         }
+        let busCycler: (() throws -> Int32)? = { try controller.cycleBusOnly() }
         #else
         let selectedConfigurationReader: (() throws -> Int)? = nil
+        let busCycler: (() throws -> Int32)? = nil
         #endif
         try self.init(
             publicationEnabled: publicationEnabled,
@@ -129,6 +144,7 @@ final class NativeUSBWatchdogService {
             },
             controllerConfigured: { try controller.isConfigured() },
             selectedConfiguration: selectedConfigurationReader,
+            cycleBus: busCycler,
             unservedFunctions: { try controller.unservedFunctions() },
             restartOwner: { try USBFunctionOwnerRestarter.restart($0, allowed: profile.ownerProcesses) },
             healPolicy: profile.healPolicy(), deviceProfile: profile,
@@ -148,6 +164,7 @@ final class NativeUSBWatchdogService {
          beforeRecovery: @escaping () throws -> Void,
          controllerConfigured: (() throws -> Bool)? = nil,
          selectedConfiguration: (() throws -> Int)? = nil,
+         cycleBus: (() throws -> Int32)? = nil,
          unservedFunctions: (() throws -> Set<String>)? = nil,
          restartOwner: ((String) throws -> Void)? = nil,
          healPolicy: USBFunctionHealPolicy = USBFunctionHealPolicy(),
@@ -162,6 +179,7 @@ final class NativeUSBWatchdogService {
         self.validateInMemory = validateInMemory
         self.controllerConfigured = controllerConfigured
         self.selectedConfiguration = selectedConfiguration
+        self.cycleBus = cycleBus
         self.unservedFunctions = unservedFunctions
         self.restartOwner = restartOwner
         self.healPolicy = healPolicy
@@ -277,6 +295,12 @@ final class NativeUSBWatchdogService {
         throw NativeUSBWatchdogError.unavailable
     }
 
+    // A raw IOReturn as the device tools spell it, so a reply carries the
+    // kernel's value and not a decimal reinterpretation of it.
+    private static func hex(_ value: Int32) -> String {
+        String(format: "0x%08x", UInt32(bitPattern: value))
+    }
+
     private func handle(_ command: String) throws -> String {
         if command == "status" {
             return "phase=\(try phase()) publication=" +
@@ -339,6 +363,30 @@ final class NativeUSBWatchdogService {
             try coordinator.publishAdditive(function: name,
                                             configuration: try selectedConfiguration())
             return "published-additive"
+        }
+        // Take the controller off and on the bus and publish nothing. The
+        // publication above already cycled the bus, so the host read the
+        // configuration descriptor before the appended interface had a class,
+        // descriptors or endpoints; the worker configures it afterwards, which
+        // changes only the device's own state, so the host never re-reads the
+        // configuration and never asks for a report descriptor. This cycle is
+        // what makes the device re-present itself. It lives here because
+        // controller authority stays with this process: the worker that holds
+        // the interface user client cannot cycle the bus itself.
+        if command == "cycle-bus" {
+            guard publicationEnabled, worker >= 0, let cycleBus else {
+                throw NativeUSBWatchdogError.disabled
+            }
+            // Only meaningful inside a live trial: a publication has happened
+            // and has not been restored yet. With no journal, or with the
+            // original already back, there is nothing to make visible and a
+            // cycle would only disturb a healthy connection.
+            guard let record = try currentRecord(), record.phase == .published else {
+                throw NativeUSBWatchdogError.invalidRequest
+            }
+            // Verbatim: the raw return is reported whatever it is, with no
+            // interpretation, no retry and no suppression.
+            return "bus-cycled io=" + Self.hex(try cycleBus())
         }
         #endif
         if command == "restore" {

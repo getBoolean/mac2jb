@@ -38,6 +38,21 @@ registered, and that registration is also what makes the worker's death
 restore the original. The canary holds that one connection open across the
 publication and waits, bounded, for the appended interface to appear.
 
+Publishing the description cycles the bus, so the host reads the configuration
+descriptor at that moment - before the appended interface has any class,
+descriptors or endpoints. The canary configures and commits it afterwards,
+which changes the device's own state and nothing the host has read, so the
+interface stays absent from the host's view and it never asks for a report
+descriptor. So once the canary reports its configuration sequence succeeded,
+and while it is still inside its own bounded wait for the host, the runner asks
+the broker for `cycle-bus`: the device re-presents itself and the host
+enumerates again, this time reading a configuration descriptor that includes
+the keyboard. Only the broker has controller authority, so only it can cycle
+the bus; the canary holds the interface user client and nothing else. If the
+configuration line never arrives, nothing is cycled - re-presenting an
+unconfigured interface would only repeat what the host already read - and the
+existing refusals report the run.
+
 The report capture is armed before `publish-hid`, not after: the device
 publishes itself as a real USB keyboard, so a trial that let the system bind it
 first would type its string into whatever window has focus on this Mac. Armed
@@ -116,6 +131,20 @@ FULL_MODE = "full"
 MODES = (FULL_MODE, "open-only", "configure-only")
 # The canary says this as soon as the broker has made it the worker.
 LEASE_MARKER = b"U3_HID_CANARY lease=held"
+# The canary prints its configuration ledger on this line once the sequence has
+# run, and then enters its own bounded wait for the host. The ledger's
+# "nothing aborted the sequence" value is what says the interface is configured;
+# an aborted sequence prints the same line with the operation that refused.
+CONFIGURED_MARKER = b"U3_HID_CANARY operations "
+CONFIGURED_NOTHING_ABORTED = b"aborted-by=255"
+# Bounded wait for that line: the configuration sequence runs after the
+# publication, so this covers the canary's own wait for the appended interface
+# to appear as well as the selectors themselves. It stays inside the broker's
+# lease, which is the real bound.
+CONFIGURE_WAIT_SECONDS = 30
+# Said in the trial's report where the cycle was not sent at all, as distinct
+# from a cycle that was sent and returned something.
+CYCLE_NOT_SENT = "not-sent"
 PREFIX = "U2_HID_TRIAL"
 ASK = ('import socket,sys;s=socket.socket(socket.AF_UNIX);s.settimeout(150);'
        's.connect("/var/jb/var/lib/mac2jb-u2-native/broker.sock");'
@@ -283,6 +312,23 @@ def main(options, env):
                     if published != "OK published-additive":
                         raise ValueError("broker refused the additive publication (%s)"
                                          % published)
+                    # The publication's own bus cycle happened before the
+                    # appended interface had a class, descriptors or
+                    # endpoints, so the configuration descriptor the host read
+                    # does not contain it and no commit afterwards can change
+                    # what the host already read. Asked for here, after the
+                    # canary reports the sequence succeeded and while it is
+                    # still waiting for the host: the device re-presents
+                    # itself and the host enumerates again, this time reading
+                    # the interface. Sent to the broker because controller
+                    # authority is the broker's alone.
+                    cycled = CYCLE_NOT_SENT
+                    if env["await_configured"](canary):
+                        cycled = env["ask"]("cycle-bus")
+                        if not cycled.startswith("OK bus-cycled "):
+                            raise ValueError("broker refused the bus cycle (%s); the "
+                                             "host cannot re-read the configuration "
+                                             "descriptor without it" % cycled)
                 finally:
                     # Collected on every path, including a refused publication:
                     # a reader left running holds a device seized. Bounded by
@@ -299,10 +345,10 @@ def main(options, env):
             # expected report count arrives, so both still fall inside the
             # lease the canary has not yet given back.
             capture = env["start_capture"]("published", reports[2])
-            return (published, env["collect_canary"](canary),
+            return (published, cycled, env["collect_canary"](canary),
                     env["collect_capture"](capture), reports)
 
-        (published, canary, capture, reports), lifecycle = env["observe"](body)
+        (published, cycled, canary, capture, reports), lifecycle = env["observe"](body)
         env["evidence"]("lifecycle.ndjson", lifecycle[:16384])
         env["evidence"]("canary.txt", canary[1][:8192])
         env["evidence"]("report-capture.txt", reports[1].encode("ascii")[:8192])
@@ -321,10 +367,10 @@ def main(options, env):
         # A mode that writes no reports cannot have a capture gap: there was
         # never a sequence to miss. Its result is its own, reported below.
         gap = reports_gap(reports[0]) if typing else None
-        print("%s mode=%s published=%s canary-exit=%d reports=%s enumeration=%s "
-              "hid-proof=%s usb=%s heal=%s"
-              % (PREFIX, options["mode"], published, canary[0], reports[0], capture[0],
-                 proof, "returned" if back else "absent", heal), flush=True)
+        print("%s mode=%s published=%s cycle=%s canary-exit=%d reports=%s "
+              "enumeration=%s hid-proof=%s usb=%s heal=%s"
+              % (PREFIX, options["mode"], published, cycled, canary[0], reports[0],
+                 capture[0], proof, "returned" if back else "absent", heal), flush=True)
         if not back:
             raise ValueError("USB did not return in %ds; journal retained, heal %s"
                              % (USB_RETURN_SECONDS, heal))
@@ -369,7 +415,7 @@ def main(options, env):
                 "no-report-sequence-was-recorded-on-this-Mac"
                 if capture[0] == "reports-unobserved" else "see-the-enumeration-evidence"))
         return {"confirmed": True, "enumeration": capture[0], "hid_proof": proof,
-                "reports": reports[0], "canary_exit": canary[0]}
+                "reports": reports[0], "canary_exit": canary[0], "cycle": cycled}
     finally:
         env["stop_syslog"](syslog)
 
@@ -432,10 +478,15 @@ def live_environment(options):
             stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
         return {"process": process, "output": b""}
 
-    def await_lease(handle):
-        """Bounded wait for the canary's own report that the lease is held."""
+    def await_line(handle, marker, seconds, required=None):
+        """Bounded read of the canary's streamed output for one of its lines.
+
+        Every line read is kept, so the canary's own evidence is complete
+        whether or not the line arrives. A closed stream and an expired
+        deadline both mean it did not.
+        """
         process = handle["process"]
-        deadline = time.monotonic() + LEASE_WAIT_SECONDS
+        deadline = time.monotonic() + seconds
         while True:
             remaining = deadline - time.monotonic()
             if remaining <= 0 or not select.select([process.stdout], [], [], remaining)[0]:
@@ -444,8 +495,23 @@ def live_environment(options):
             if not text:
                 return False
             handle["output"] += text
-            if text.startswith(LEASE_MARKER):
+            if text.startswith(marker) and (required is None or required in text):
                 return True
+
+    def await_lease(handle):
+        """Bounded wait for the canary's own report that the lease is held."""
+        return await_line(handle, LEASE_MARKER, LEASE_WAIT_SECONDS)
+
+    def await_configured(handle):
+        """Bounded wait for the canary's report that the interface is configured.
+
+        The same streamed output the lease is read from. An aborted sequence
+        prints the same line naming the operation that refused, so the ledger's
+        "nothing aborted the sequence" value is required: a refused
+        configuration is not something to cycle the bus for.
+        """
+        return await_line(handle, CONFIGURED_MARKER, CONFIGURE_WAIT_SECONDS,
+                          CONFIGURED_NOTHING_ABORTED)
 
     def collect_canary(handle):
         process = handle["process"]
@@ -525,6 +591,7 @@ def live_environment(options):
         "observe": observe,
         "start_canary": start_canary,
         "await_lease": await_lease,
+        "await_configured": await_configured,
         "collect_canary": collect_canary,
         "start_reports": start_reports,
         "collect_reports": collect_reports,

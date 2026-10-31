@@ -8,7 +8,7 @@ Redacted gate decisions for the iPad port's hardware plan (`docs/plans/ipad-port
 |---|---|---|
 | U1 read-only target inventory | **Pass (2026-10-30)** | R1–R3 and U1-scoped R14, below. Read-only inventory, authorization and role/power only. |
 | U2 restoration journal and watchdog | **Pass (2026-10-31)** | Automatic same-boot recovery: v11 5/5 and v12 2/2 hardware no-op trials. Semantic external equivalence; the `AllowMultipleCreates` flag is an accepted deviation. Below. |
-| U3 additive HID canary | In progress | A changed description recovers automatically, and an appended function **materializes as a gadget interface whose user client opens** with the interface-class entitlement alone (both below). No configuration operation has been attempted, so no descriptor, endpoint or report evidence exists. |
+| U3 additive HID canary | In progress, blocked on host enumeration | The device side works end to end: the appended function materializes, its user client opens, and **every configuration operation this build authorizes returns success**. The host never enumerates the keyboard, and forcing it with a second bus cycle destabilized function re-registration badly enough to need operator-assisted recovery. All below. |
 | U4 exclusive-HID fallback | Not tested | Conditional fallback only. |
 | U5 network topology | Not tested | No paired 20-attempt exploit comparison. |
 | U6 capability contract | Not tested | No signed final capability record. |
@@ -23,6 +23,70 @@ The client, platform and ordinary baseline/set-description authorization profile
 | R2 authorization boundaries | Ordinary in-process apps: controller opens unsupported (`-536870201`), function opens denied (`-536870174`); the set-description entitlement made no read-only difference. Publication needs `com.apple.private.usbdevice.setdescription` with `platform-application` in a root launchd job (plain apps are SIGKILLed before `main`). | Pass for classification |
 | R3 direct role/power | Configured/on-bus with external power on both Switch 2 orientations; peer identity is owner-reported. | Pass (device side) |
 | R14 evidence | Private reports, attestations, host-window bindings and stock-source snapshots retained in `build/ipad-hardware/`. | Pass |
+
+## U3 operation matrix (2026-10-31): every configuration operation is authorized
+
+Walked the configuration sequence one operation at a time, recording each raw
+return and stopping at the first refusal. Nothing refused.
+
+```
+interface-open=0x00000000 set-class=0x00000000 set-subclass=0x00000000
+set-protocol=0x00000000 append-standard=0x00000000 append-nonstandard=0x00000000
+class-callbacks=0x00000000 create-pipe=0x00000000 commit=0x00000000
+create-buffer=0x00000000 pipe-max-packet=0x00000000  aborted-by=255
+```
+
+Every selector number came from reading a macOS backend and was treated as a
+hypothesis to test here, with neighbouring numbers to be probed if one reported
+an unsupported selector. None did: **the reference numbering is correct on this
+build**, including the user-client type. Device-side HID configuration works.
+
+Two observations kept for the next gate: the pipe's current max packet size
+reads 0 rather than 8 while no host has configured the interface, and this
+heal needed one owner restart (`com.apple.audiomxd`) after two
+re-publications, the first HID trial to need one.
+
+## U3 host enumeration (2026-10-31): not achieved, and the obvious lever is too costly
+
+The keyboard exists on the device and the host cannot see it.
+
+```
+outcome=interface-absent interfaces=8 reports=0
+control-request get-descriptor configuration=observed
+control-request set-configuration=observed
+control-request get-descriptor hid-report=not-observed
+```
+
+The host reads the configuration descriptor and selects a configuration when
+the publication cycles the bus - **before** the appended interface has a class,
+descriptors or endpoints. Committing the interface afterwards changes the
+device's own state only, so the interface is absent from the host's view and it
+never asks for a report descriptor. The macOS backend this follows pokes its
+gadget kext to re-present the device; this controller has no such path, and the
+equivalent here is the controller's off-and-on-bus cycle.
+
+Issuing that cycle after the commit worked as an operation (`io=0x00000000`)
+and made things worse overall. Replacing the description already races the
+function re-registration; a second cycle while the appended interface was live
+left **three** functions unregistered (`IapOverUsbHid`, `USBAudio2StreamOUT`,
+`Valeria`) where every earlier trial lost one or two. Two are kernel-owned, so
+the healer correctly declined owner restarts - it restarts owners only when
+every missing function has one - fell back to re-publication, spent its bound
+of five and gave up. Mac USB stayed down past the runner's 120 s wait.
+
+Recovery followed the runbook and needed no reboot: pinned Wi-Fi SSH was
+healthy throughout, one `restore-after-failure` healed with zero further
+re-publications, the Mac saw the device again, and the journal was confirmed
+only on the strict external check's own output. Interfaces, scalars, pairing
+and packet flow all compared equal afterwards.
+
+**The conclusion is about the approach, not the incident.** The host does have
+to re-read the configuration descriptor, but driving that with a second full
+bus cycle multiplies the one race this project spent seven trial designs
+characterizing. The untried alternative is to publish **without** the initial
+cycle - the broker already has that shape for its recovery path - configure the
+interface, and then cycle once, so the host's first and only enumeration
+already contains the keyboard and the race runs once instead of twice.
 
 ## U3 interface gate (2026-10-31): the appended function appears and opens
 

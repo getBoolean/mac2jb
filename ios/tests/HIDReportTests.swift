@@ -14,22 +14,53 @@ private func require(_ condition: Bool, _ message: String) throws {
 }
 
 private final class RecordingSink: HIDReportSink {
-    private let outcomes: [HIDReportWriteOutcome]
+    // A raw return that is neither not-enumerated nor the write timeout, so a
+    // plain .failed answer reads as a real refusal rather than "keep waiting".
+    static let refusedRawReturn = Int32(bitPattern: 0xE00002C0)
+
+    private let answers: [HIDReportWrite]
     var written: [[UInt8]] = []
 
-    // outcomes is consumed per write; the last one repeats forever.
+    // answers is consumed per write; the last one repeats forever.
     init(_ outcomes: [HIDReportWriteOutcome] = [.delivered]) {
-        self.outcomes = outcomes
+        answers = outcomes.map { outcome in
+            switch outcome {
+            case .delivered: return HIDReportWrite(outcome: .delivered, rawReturn: 0)
+            case .failed: return HIDReportWrite(outcome: .failed,
+                                                rawReturn: RecordingSink.refusedRawReturn)
+            case .disconnected:
+                return HIDReportWrite(outcome: .disconnected,
+                                      rawReturn: PipeReportTransport.notEnumerated)
+            }
+        }
     }
 
-    func write(_ report: [UInt8]) -> HIDReportWriteOutcome {
+    init(answers: [HIDReportWrite]) { self.answers = answers }
+
+    func write(_ report: [UInt8]) -> HIDReportWrite {
         written.append(report)
-        return outcomes[min(written.count - 1, outcomes.count - 1)]
+        return answers[min(written.count - 1, answers.count - 1)]
     }
 
     var neutralWrites: Int {
         written.filter { $0 == HIDKeyboard.neutralReport }.count
     }
+
+    var keystrokes: [[UInt8]] {
+        written.filter { $0 != HIDKeyboard.neutralReport }
+    }
+}
+
+// A clock the wait's deadline can be driven from without waiting on a real one.
+// Every pause advances it, which is what the production pause does too.
+private final class FakeClock {
+    private(set) var nanoseconds: UInt64 = 0
+    let step: UInt64
+
+    init(stepMilliseconds: UInt64) { step = stepMilliseconds * 1_000_000 }
+
+    func now() -> UInt64 { nanoseconds }
+    func pause() { nanoseconds += step }
 }
 
 private final class FakeLease: CanaryLease {
@@ -153,23 +184,30 @@ enum HIDReportTests {
                     "no write is allowed without the lease: \(summary)")
         try require(lease.released && lease.releasedNeutral == false,
                     "the lease must still be given up: \(summary)")
+        // The enumeration wait takes the first lease check, so one report needs
+        // two: the wait's poll and the loop's own check before the write.
         sink = RecordingSink()
-        lease = FakeLease(heldChecks: 1)
+        lease = FakeLease(heldChecks: 2)
         summary = HIDCanaryRun(sink: sink, lease: lease, reports: [valid, valid, valid]).run()
         try require(summary.stop == .leaseLost && summary.reportsWritten == 1 &&
-                    summary.neutralAttempts == 0 && sink.written == [valid],
+                    summary.neutralAttempts == 0 &&
+                    sink.written == [HIDKeyboard.neutralReport, valid],
                     "writes must stop the moment the lease expires: \(summary)")
 
-        // 9. A disconnect bounds the neutral attempts at three.
-        sink = RecordingSink([.failed])
+        // 9. A disconnect bounds the neutral attempts at three. The sink
+        // delivers once first, because a refusal before the host has enumerated
+        // is the wait's answer rather than the report loop's.
+        sink = RecordingSink([.delivered, .failed])
         lease = FakeLease(heldChecks: .max)
         summary = HIDCanaryRun(sink: sink, lease: lease, reports: [valid]).run()
         try require(summary.stop == .writeFailed && summary.reportsWritten == 0,
                     "a refused write stops the run: \(summary)")
         try require(summary.neutralAttempts == 3 && !summary.neutralDelivered,
                     "a failing sink must be retried at most three times: \(summary)")
-        try require(sink.neutralWrites == 3, "exactly three neutral writes: \(sink.neutralWrites)")
-        sink = RecordingSink([.disconnected])
+        try require(sink.neutralWrites == 4,
+                    "three teardown neutral writes plus the wait's one poll: " +
+                    "\(sink.neutralWrites)")
+        sink = RecordingSink([.delivered, .disconnected])
         lease = FakeLease(heldChecks: .max)
         summary = HIDCanaryRun(sink: sink, lease: lease, reports: [valid]).run()
         try require(summary.stop == .disconnected && summary.neutralAttempts <= 3 &&
@@ -209,7 +247,8 @@ enum HIDReportTests {
         summary = HIDCanaryRun(sink: sink, lease: lease,
                                reports: [valid, [0, 0x01, 0, 0, 0, 0, 0, 0]]).run()
         try require(summary.stop == .invalidReport && summary.reportsWritten == 1 &&
-                    sink.written == [valid, HIDKeyboard.neutralReport],
+                    sink.written == [HIDKeyboard.neutralReport, valid,
+                                     HIDKeyboard.neutralReport],
                     "an invalid report must never be written: \(sink.written)")
 
         // 11. The fixed canary string: a press and a release per character,
@@ -241,19 +280,38 @@ enum HIDReportTests {
                                     return (ioReturn, transferred)
                                 })
         }
-        try require(transport(0, 8).write(valid) == .delivered,
+        try require(transport(0, 8).write(valid).outcome == .delivered,
                     "a full transfer with a successful call is delivered")
         try require(submitted == [8], "the submit must carry the report length: \(submitted)")
-        try require(transport(0, 4).write(valid) == .failed,
+        try require(transport(0, 4).write(valid).outcome == .failed,
                     "a short write is not delivered even when the call succeeded")
-        try require(transport(0, 0).write(valid) == .failed,
+        try require(transport(0, 0).write(valid).outcome == .failed,
                     "a zero-byte transfer is not delivered")
-        try require(transport(Int32(bitPattern: 0xE00002D6), 0).write(valid) == .failed,
+        try require(transport(PipeReportTransport.writeTimedOut, 0).write(valid).outcome
+                    == .failed,
                     "a refused write is a failure, not a disconnect")
-        try require(transport(PipeReportTransport.notEnumerated, 0).write(valid) == .disconnected,
+        try require(transport(PipeReportTransport.notEnumerated, 0).write(valid).outcome
+                    == .disconnected,
                     "a host that is not enumerated reads as a disconnect")
-        try require(transport(0, 8, staged: false).write(valid) == .failed,
+        try require(transport(0, 8, staged: false).write(valid).outcome == .failed,
                     "a payload that cannot be staged is never submitted")
+        // The raw IOReturn comes back beside the outcome, because the wait for
+        // host enumeration reports the last one verbatim and a staging refusal
+        // has no raw return of its own.
+        try require(transport(RecordingSink.refusedRawReturn, 0).write(valid).rawReturn
+                    == RecordingSink.refusedRawReturn,
+                    "the raw IOReturn must be reported verbatim")
+        try require(transport(0, 8, staged: false).write(valid).rawReturn == 0,
+                    "a payload that cannot be staged has no raw return")
+        // The two raw returns that mean "the host has not finished enumerating"
+        // rather than "the host is gone", as the reference's wait treats them.
+        try require(PipeReportTransport.notYetEnumerated ==
+                    [PipeReportTransport.notEnumerated, PipeReportTransport.writeTimedOut],
+                    "not-enumerated and the write timeout are the only waitable returns")
+        try require(!PipeReportTransport.notYetEnumerated.contains(0) &&
+                    !PipeReportTransport.notYetEnumerated.contains(
+                        RecordingSink.refusedRawReturn),
+                    "no other raw return may be waited on")
 
         // 13. The staged gates. Each mode answers one question, so the modes
         // are selected by an argument and an absent argument is still the full
@@ -330,10 +388,15 @@ enum HIDReportTests {
                     "a reportless gate writes nothing and still completes: \(summary)")
         try require(summary.neutralAttempts == 1 && summary.neutralDelivered,
                     "a controlled exit still writes exactly one neutral report: \(summary)")
-        try require(sink.written == [HIDKeyboard.neutralReport],
-                    "the neutral report is the only write: \(sink.written)")
+        try require(sink.keystrokes.isEmpty && sink.written.count == 2,
+                    "only the wait's poll and the teardown neutral: \(sink.written)")
         try require(lease.released && lease.releasedNeutral == true,
                     "the lease must be handed back: \(summary)")
+        // The configure-and-stop gate reports the wait's answer too: configured
+        // and enumerated by the host is a strictly stronger result.
+        try require(summary.enumeration.state == .enumerated &&
+                    summary.enumeration.polls == 1,
+                    "the reportless gate still waits for the host: \(summary.enumeration)")
         // Without the lease not even the neutral report is allowed.
         sink = RecordingSink()
         lease = FakeLease(heldChecks: 0)
@@ -341,6 +404,126 @@ enum HIDReportTests {
                                reports: HIDCanaryMode.configureOnly.reportsToWrite).run()
         try require(sink.written.isEmpty && summary.neutralAttempts == 0 && lease.released,
                     "a reportless gate writes nothing once the lease is gone: \(summary)")
-        print("PASS HID canary report, plan, gate-mode and exit-path tests (14 scenarios)")
+
+        // 15. The bounded wait for host enumeration. Committing the
+        // configuration makes the device re-present itself, so the host needs a
+        // moment to read the new descriptors and select a configuration: a
+        // write before that returns not-enumerated, which means "not yet", not
+        // "the host is gone".
+        let waiting = HIDReportWrite(outcome: .disconnected,
+                                     rawReturn: PipeReportTransport.notEnumerated)
+        let timedOut = HIDReportWrite(outcome: .failed,
+                                      rawReturn: PipeReportTransport.writeTimedOut)
+        let refused = HIDReportWrite(outcome: .failed,
+                                     rawReturn: RecordingSink.refusedRawReturn)
+        let through = HIDReportWrite(outcome: .delivered, rawReturn: 0)
+
+        // A host that is already watching answers the first poll.
+        sink = RecordingSink(answers: [through])
+        lease = FakeLease(heldChecks: .max)
+        summary = HIDCanaryRun(sink: sink, lease: lease, reports: [valid]).run()
+        try require(summary.enumeration.state == .enumerated &&
+                    summary.enumeration.polls == 1 &&
+                    summary.enumeration.lastRawReturn == 0,
+                    "a watching host enumerates on the first poll: \(summary.enumeration)")
+        try require(summary.stop == .completed && summary.reportsWritten == 1,
+                    "an enumerated host is typed to: \(summary)")
+
+        // A host that needs a moment answers a later poll, and the polls are
+        // all neutral: nothing is typed before the host has enumerated.
+        var clock = FakeClock(stepMilliseconds: 250)
+        sink = RecordingSink(answers: [waiting, waiting, timedOut, through])
+        lease = FakeLease(heldChecks: .max)
+        run = HIDCanaryRun(sink: sink, lease: lease, reports: [valid])
+        run.now = clock.now
+        run.pause = clock.pause
+        summary = run.run()
+        try require(summary.enumeration.state == .enumerated &&
+                    summary.enumeration.polls == 4 &&
+                    summary.enumeration.lastRawReturn == 0,
+                    "not-enumerated and a timeout mean keep waiting: \(summary.enumeration)")
+        try require(sink.written.prefix(4).allSatisfy { $0 == HIDKeyboard.neutralReport },
+                    "no keystroke may be written before the host enumerates: \(sink.written)")
+        try require(sink.keystrokes == [valid] && summary.reportsWritten == 1,
+                    "typing starts only once a poll gets through: \(sink.written)")
+
+        // A host that never enumerates is bounded, and it is not a disconnect:
+        // the two point at completely different causes, so the stop reason and
+        // the exit code are its own.
+        clock = FakeClock(stepMilliseconds: 500)
+        sink = RecordingSink(answers: [waiting])
+        lease = FakeLease(heldChecks: .max)
+        run = HIDCanaryRun(sink: sink, lease: lease, reports: [valid])
+        run.now = clock.now
+        run.pause = clock.pause
+        summary = run.run()
+        try require(summary.enumeration.state == .neverEnumerated,
+                    "an unenumerated host must be reported as such: \(summary.enumeration)")
+        try require(summary.stop == .hostNeverEnumerated && summary.stop != .disconnected,
+                    "never enumerated is not a disconnect: \(summary)")
+        try require(summary.enumeration.polls == 30,
+                    "the wait is bounded at the reference's attempts: \(summary.enumeration)")
+        try require(summary.enumeration.lastRawReturn == PipeReportTransport.notEnumerated,
+                    "the last raw return must be kept verbatim: \(summary.enumeration)")
+        try require(summary.reportsWritten == 0 && sink.keystrokes.isEmpty,
+                    "an unenumerated host is never typed to: \(sink.written)")
+        try require(HIDCanaryStop.hostNeverEnumerated.exitCode !=
+                    HIDCanaryStop.disconnected.exitCode,
+                    "the two causes need their own exit codes")
+        try require(HIDCanaryStop.hostNeverEnumerated.exitCode != 0 &&
+                    ![1, 2, 3, 4, 5].contains(HIDCanaryStop.hostNeverEnumerated.exitCode),
+                    "the never-enumerated exit code must be unused elsewhere: " +
+                    "\(HIDCanaryStop.hostNeverEnumerated.exitCode)")
+        try require(HIDCanaryStop.completed.exitCode == 0 &&
+                    HIDCanaryStop.disconnected.exitCode == 1 &&
+                    HIDCanaryStop.writeFailed.exitCode == 1,
+                    "every other stop keeps the generic refusal code")
+        // The lease is the real bound, so the backstop cannot outlive it.
+        try require(HIDCanaryRun.enumerationWaitSeconds <= BrokerSocketLease.maximumLeaseSeconds,
+                    "the wait must not be able to outlive the lease")
+
+        // Any other raw return is a real failure: it stops the wait at once and
+        // is recorded verbatim, with no retry and no interpretation.
+        sink = RecordingSink(answers: [refused])
+        lease = FakeLease(heldChecks: .max)
+        summary = HIDCanaryRun(sink: sink, lease: lease, reports: [valid]).run()
+        try require(summary.enumeration.state == .waitFailed &&
+                    summary.enumeration.polls == 1 &&
+                    summary.enumeration.lastRawReturn == RecordingSink.refusedRawReturn,
+                    "a real refusal stops the wait at once: \(summary.enumeration)")
+        try require(summary.stop == .writeFailed && summary.reportsWritten == 0 &&
+                    sink.keystrokes.isEmpty,
+                    "a refused wait never types: \(summary)")
+
+        // The lease disappearing mid-wait stops the wait, and nothing more is
+        // written: a write after the lease has gone is the one thing the broker
+        // cannot restore from.
+        clock = FakeClock(stepMilliseconds: 250)
+        sink = RecordingSink(answers: [waiting])
+        lease = FakeLease(heldChecks: 2)
+        run = HIDCanaryRun(sink: sink, lease: lease, reports: [valid])
+        run.now = clock.now
+        run.pause = clock.pause
+        summary = run.run()
+        try require(summary.enumeration.state == .leaseLost &&
+                    summary.enumeration.polls == 2,
+                    "the lease is checked before every poll: \(summary.enumeration)")
+        try require(summary.stop == .leaseLost && sink.written.count == 2 &&
+                    summary.neutralAttempts == 0 && summary.reportsWritten == 0,
+                    "nothing is written once the lease is gone: \(summary)")
+        try require(lease.released && lease.releasedNeutral == false,
+                    "the lease must still be given up: \(summary)")
+
+        // A signal during the wait is a controlled exit like any other.
+        sink = RecordingSink(answers: [waiting])
+        lease = FakeLease(heldChecks: .max)
+        run = HIDCanaryRun(sink: sink, lease: lease, reports: [valid])
+        run.shouldStop = { true }
+        summary = run.run()
+        try require(summary.enumeration.state == .interrupted &&
+                    summary.enumeration.polls == 0 && summary.stop == .interrupted,
+                    "a signal stops the wait before it polls: \(summary)")
+        print("PASS HID canary report, plan, gate-mode, enumeration-wait and " +
+              "exit-path tests (15 scenarios)")
     }
 }

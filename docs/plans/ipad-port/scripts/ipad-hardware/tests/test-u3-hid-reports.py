@@ -28,6 +28,9 @@ MAC_SOURCES = [
     ROOT / "ios/tests/HIDReportTests.swift",
 ]
 HEADER = ROOT / "ios/usb/USBDeviceFunctionShim.h"
+# The reference backend's own names for the two raw returns the wait for host
+# enumeration keeps waiting on.
+REFERENCE_RETURNS = ROOT / "vendor/libusbd/src/plat/macos/impl.h"
 # Publication authority stays in the broker: none of this may appear.
 FORBIDDEN = ("MAC2JBUSBRestoreShim", "USBRestoreJournal", "SetDescription",
              "setdescription", "MAC2JBUSBRestore")
@@ -116,6 +119,32 @@ def open_outcome_codes_match_the_shim():
     print("PASS stop-after-open gate reads the shim's own result codes")
 
 
+def enumeration_wait_returns_match_the_reference():
+    """The waitable raw returns are the reference backend's own values.
+
+    Committing the configuration re-presents the device, so a write before the
+    host has read the new descriptors returns not-activated, and a write the
+    host has not collected times out. Both mean "not yet"; every other raw
+    return is a real failure. Reading a real failure as "keep waiting" would
+    hide it for the whole budget, so the two values are checked against the
+    reference backend that defines them rather than kept as a drifting copy.
+    """
+    reference = REFERENCE_RETURNS.read_text()
+    run_source = (CANARY / "HIDCanaryRun.swift").read_text()
+    for name, label in (("LIBUSBD_MACOS_ERR_NOTACTIVATED", "notEnumerated"),
+                        ("LIBUSBD_MACOS_ERR_TIMEOUT", "writeTimedOut")):
+        found = re.search(r"define\s+" + name + r"\s*\(?(0[xX][0-9a-fA-F]+)", reference)
+        if not found:
+            raise AssertionError("the reference backend no longer defines " + name)
+        expected = int(found.group(1), 16)
+        declared = re.search(label + r"\s*=\s*Int32\(bitPattern:\s*(0[xX][0-9a-fA-F]+)\)",
+                             run_source)
+        if not declared or int(declared.group(1), 16) != expected:
+            raise AssertionError("%s must be 0x%08X, as the reference backend says" %
+                                 (label, expected))
+    print("PASS enumeration wait waits on the reference backend's own raw returns")
+
+
 def open_gate_attempts_one_open_and_configures_nothing():
     """One open attempt in the whole canary, and the gate stops before configuring.
 
@@ -144,6 +173,7 @@ def main():
         device_build(directory)
     canary_publishes_nothing()
     open_outcome_codes_match_the_shim()
+    enumeration_wait_returns_match_the_reference()
     open_gate_attempts_one_open_and_configures_nothing()
 
 

@@ -73,6 +73,20 @@ MAC2JBUSBResult MAC2JBUSBCloneAppendFunctionOrPublish(
     int32_t *busReturn
 );
 
+// Take the exact controller off and on the bus and do nothing else: no
+// description is created, compared, edited or written. Publishing a description
+// already cycles the bus, so the host reads the configuration descriptor at
+// that moment - before an appended interface has a class, descriptors or
+// endpoints. Committing the interface afterwards changes only the device's own
+// state, so the host never re-reads the configuration and never requests a
+// report descriptor. This is the one call that makes the device re-present
+// itself so the host enumerates again. The raw IOReturn of the cycle is
+// written to *busReturn verbatim whatever it is.
+MAC2JBUSBResult MAC2JBUSBCycleControllerBus(
+    uint64_t expectedControllerRegistryID,
+    int32_t *busReturn
+);
+
 // Pure: deserialize a device-description plist, append one function last in the
 // given configuration, and serialize the result. No IOKit, no controller. The
 // caller owns *out and must free it with MAC2JBUSBFreeCapturedDescription.

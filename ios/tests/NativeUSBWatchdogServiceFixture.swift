@@ -53,6 +53,10 @@ struct TargetUSBRestoreController: USBRestoreController {
     func selectedConfiguration() throws -> Int {
         throw FixtureFailure()
     }
+
+    func cycleBusOnly() throws -> Int32 {
+        throw FixtureFailure()
+    }
 }
 
 private struct FileBackedController: USBRestoreController {
@@ -196,6 +200,14 @@ enum NativeUSBWatchdogServiceFixture {
         let publishedPath = ProcessInfo.processInfo.environment["MAC2JB_U3_FIXTURE_APPENDED_FILE"]
         let selected = ProcessInfo.processInfo.environment["MAC2JB_U3_FIXTURE_SELECTED_CONFIGURATION"]
             .flatMap(Int.init)
+        // The bus cycle stand-in: one byte per accepted cycle in its own log,
+        // and the raw return the test wants reported. It writes no description
+        // at all, which is the property under test - a cycle re-presents the
+        // device that is already on the bus and publishes nothing.
+        let cyclePath = ProcessInfo.processInfo.environment["MAC2JB_U3_FIXTURE_BUS_CYCLE_LOG"]
+        let cycleReturn = ProcessInfo.processInfo
+            .environment["MAC2JB_U3_FIXTURE_BUS_CYCLE_RETURN"]
+            .flatMap(UInt32.init).map(Int32.init(bitPattern:)) ?? 0
         let service = try NativeUSBWatchdogService(
             publicationEnabled: true, stateDirectory: state,
             expectedOwner: geteuid(), currentIdentity: identity,
@@ -222,6 +234,18 @@ enum NativeUSBWatchdogServiceFixture {
                 return try Data(contentsOf: URL(fileURLWithPath: readinessPath)) ==
                     Data("1".utf8)
             }, selectedConfiguration: selected.map { value in { value } },
+            cycleBus: {
+                if let cyclePath {
+                    let fd = open(cyclePath, O_WRONLY | O_APPEND | O_CREAT | O_NOFOLLOW, 0o600)
+                    guard fd >= 0 else { throw FixtureFailure() }
+                    defer { _ = close(fd) }
+                    let byte: UInt8 = 67  // 'C': one fake bus cycle, no publication.
+                    guard write(fd, [byte], 1) == 1, fsync(fd) == 0 else {
+                        throw FixtureFailure()
+                    }
+                }
+                return cycleReturn
+            },
             unservedFunctions: unservedPath.map { path in {
                 // Line N of the queue = unserved functions after publication N
                 // (publication count = bytes in the event file).

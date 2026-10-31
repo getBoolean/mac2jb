@@ -757,6 +757,47 @@ finished:
     return result;
 }
 
+MAC2JBUSBResult MAC2JBUSBCycleControllerBus(
+    uint64_t expectedControllerRegistryID, int32_t *busReturn
+) {
+    if (busReturn) *busReturn = kIOReturnNotReady;
+    if (!busReturn || expectedControllerRegistryID == 0) return MAC2JBUSBInvalidInput;
+    // Same dynamic resolution as the publication path: none of these symbols is
+    // declared in any SDK header, so a build cannot depend on them existing.
+    void *handle = dlopen("/System/Library/Frameworks/IOKit.framework/IOKit", RTLD_NOW | RTLD_LOCAL);
+    if (!handle) return MAC2JBUSBMissingAPI;
+    MAC2JBUSBResult result = MAC2JBUSBMissingAPI;
+    CreateController createController = (CreateController)dlsym(handle, "IOUSBDeviceControllerCreate");
+    GetService getService = (GetService)dlsym(handle, "IOUSBDeviceControllerGetService");
+    GoOffAndOnBus goOffAndOnBus = (GoOffAndOnBus)dlsym(handle, "IOUSBDeviceControllerGoOffAndOnBus");
+    if (!createController || !getService || !goOffAndOnBus) goto close_handle;
+    ControllerRef controller = NULL;
+    if (createController(kCFAllocatorDefault, &controller) != kIOReturnSuccess || !controller) {
+        result = MAC2JBUSBControllerUnavailable;
+        goto close_handle;
+    }
+    // The registry id is checked exactly as every other entry checks it: the
+    // sole controller this trial journaled, or nothing is touched.
+    io_service_t service = getService(controller);
+    uint64_t actualRegistryID = 0;
+    if (service == IO_OBJECT_NULL ||
+        IORegistryEntryGetRegistryEntryID(service, &actualRegistryID) != kIOReturnSuccess ||
+        actualRegistryID != expectedControllerRegistryID) {
+        result = MAC2JBUSBWrongController;
+        goto release_controller;
+    }
+    // Same bound the publication path passes. Recorded verbatim: a nonzero
+    // return is the observation, not something to interpret or retry.
+    IOReturn busStatus = goOffAndOnBus(controller, 1000);
+    *busReturn = busStatus;
+    result = busStatus == kIOReturnSuccess ? MAC2JBUSBSuccess : MAC2JBUSBBusCycleFailed;
+release_controller:
+    CFRelease(controller);
+close_handle:
+    dlclose(handle);
+    return result;
+}
+
 MAC2JBUSBResult MAC2JBUSBReconstructOrPublish(
     const uint8_t *livePlist, size_t livePlistLength,
     uint64_t expectedControllerRegistryID, bool publish, bool cycleBus,

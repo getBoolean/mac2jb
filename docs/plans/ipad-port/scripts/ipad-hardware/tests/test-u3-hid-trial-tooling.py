@@ -313,7 +313,8 @@ class Surface:
             status="OK phase=absent publication=enabled",
             function="absent-service", kit=0, canary=(0, b"reports written=12\n"),
             lease=True, capture=None, reports="reports-recorded", sequence=None,
-            publish=None, usb=True, strict=(True, b"U2_V7_CURRENT ok\n"))
+            publish=None, usb=True, strict=(True, b"U2_V7_CURRENT ok\n"),
+            configured=True, cycle=None)
         self.state.update(overrides)
 
     def ask(self, command):
@@ -331,6 +332,15 @@ class Surface:
                 return "ERR rejected"
             self.phase = "published"
             return "OK published-additive"
+        if command == "cycle-bus":
+            self.steps.append("cycle-bus")
+            if self.state["cycle"] is not None:
+                return self.state["cycle"]
+            # The broker's own guards: a worker must hold the lease and a
+            # publication must be live and unrestored.
+            if not self.worker or self.phase != "published":
+                return "ERR rejected"
+            return "OK bus-cycled io=0x00000000"
         if command == "heal-status":
             return "OK last-heal none"
         if command.startswith("confirm "):
@@ -349,6 +359,17 @@ class Surface:
             return False
         self.worker = True
         return True
+
+    def await_configured(self, handle):
+        """The canary's own report that its configuration sequence succeeded.
+
+        The runner waits for this before asking the broker to cycle the bus:
+        cycling earlier would re-present a device whose appended interface
+        still has no class, descriptors or endpoints, which is exactly the
+        state the host already read once.
+        """
+        self.steps.append("await-configured")
+        return self.state["configured"]
 
     def collect_canary(self, handle):
         self.steps.append("collect-canary")
@@ -400,6 +421,7 @@ class Surface:
             "observe": lambda body: (body(), b'{"type":"ready"}\n'),
             "start_canary": self.start_canary,
             "await_lease": self.await_lease,
+            "await_configured": self.await_configured,
             "collect_canary": self.collect_canary,
             "start_reports": self.start_reports,
             "collect_reports": self.collect_reports,
@@ -441,14 +463,50 @@ def runner():
     # exit releases the lease and the interface goes away - and the descriptor
     # capture starts after the reports are collected, because the comparator
     # reads the observed sequence when it starts.
-    assert surface.steps == ["start-canary", "await-lease", "start-reports",
-                             "publish-hid", "collect-reports", "start-capture",
-                             "collect-canary", "collect-capture"], surface.steps
+    assert surface.steps == FULL_STEPS, surface.steps
     assert surface.steps.index("start-reports") < surface.steps.index("publish-hid"), (
         "the reader must be waiting before the keyboard can appear")
     live = surface.steps.index("collect-canary")
     for step in ("collect-reports", "start-capture"):
         assert surface.steps.index("publish-hid") < surface.steps.index(step) < live, step
+    # Publishing cycles the bus, so the host read the configuration descriptor
+    # while the appended interface still had no class, descriptors or
+    # endpoints; configuring it afterwards changes only the device's own state.
+    # The cycle that makes the host re-enumerate therefore goes after the
+    # canary reports the interface configured and while it is still waiting -
+    # before anything is collected - and it goes to the broker, which is the
+    # only process with controller authority.
+    assert surface.asked.count("cycle-bus") == 1, surface.asked
+    for earlier, later in (("publish-hid", "await-configured"),
+                           ("await-configured", "cycle-bus"),
+                           ("cycle-bus", "collect-reports"),
+                           ("cycle-bus", "start-capture"),
+                           ("cycle-bus", "collect-canary")):
+        assert surface.steps.index(earlier) < surface.steps.index(later), (earlier, later)
+    assert summary["cycle"] == "OK bus-cycled io=0x00000000", summary
+
+    # The raw return reaches the trial's own report unchanged: nothing here
+    # interprets it, retries on it or suppresses it.
+    raw = Surface(cycle="OK bus-cycled io=0xe0000001")
+    assert RUNNER["main"](options(), raw.environment())["cycle"] == (
+        "OK bus-cycled io=0xe0000001")
+
+    # No configuration line, no cycle: re-presenting a device whose appended
+    # interface is not configured would only repeat the state the host already
+    # read, so the existing refusals report the run instead.
+    silent = Surface(configured=False)
+    quiet_cycle = RUNNER["main"](options(), silent.environment())
+    assert "cycle-bus" not in silent.asked, silent.asked
+    assert "cycle-bus" not in silent.steps, silent.steps
+    assert quiet_cycle["cycle"] == "not-sent", quiet_cycle
+    assert silent.steps.index("await-configured") < silent.steps.index("collect-reports")
+
+    # A refused cycle is its own refusal and never a silent continuation.
+    refused_cycle = Surface(cycle="ERR rejected")
+    rejected(lambda: RUNNER["main"](options(), refused_cycle.environment()),
+             "bus cycle")
+    assert not [item for item in refused_cycle.asked if item.startswith("confirm ")], (
+        refused_cycle.asked)
 
     # The rule that matters most: the confirm argument is the digest of the
     # strict external check's own output and of nothing else.
@@ -594,7 +652,8 @@ def runner():
 
 
 FULL_STEPS = ["start-canary", "await-lease", "start-reports", "publish-hid",
-              "collect-reports", "start-capture", "collect-canary", "collect-capture"]
+              "await-configured", "cycle-bus", "collect-reports", "start-capture",
+              "collect-canary", "collect-capture"]
 
 
 def gate_modes():

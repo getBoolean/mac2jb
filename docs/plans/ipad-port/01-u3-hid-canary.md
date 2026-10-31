@@ -83,7 +83,7 @@ Two phases, per KTD-K: everything offline first, then the device trials in order
 
 - [x] **U3.6** Changed-description recovery trial, no HID configuration
 - [x] **U3.7** Function materializes and its user client opens *(R9 gate; stop here on failure)*
-- [ ] **U3.8** Walk the interface operation matrix
+- [x] **U3.8** Walk the interface operation matrix
 - [ ] **U3.9** Generic-host enumeration and report capture *(the HID proof)*
 - [ ] **U3.10** Restoration after HID, verified externally
 - [ ] **U3.11** Fault trials on the HID path
@@ -214,10 +214,10 @@ Each unit ends with the device in a state the broker can restore, and the first 
 - **Approach:** exercise the KTD-D sequence one operation at a time, stopping at the first refusal. Treat the Mac backend's selector numbers as hypotheses: if one returns an unsupported-selector code, record it and probe the neighbouring numbers before concluding the operation is unavailable.
 - **Test scenarios:** each operation attempted at most once per run; a refusal aborts the remainder; the recorded matrix contains no device identifiers; the broker still restores afterwards.
 - **Tasks:**
-  - [ ] **Device:** walk class, subclass, protocol, both descriptor appends, pipe, buffer, callbacks and commit, recording every raw `IOReturn`.
-  - [ ] Probe neighbouring selector numbers only when one reports an unsupported selector.
-  - [ ] Write `docs/ipad/hid-operation-matrix.md` (redacted) and store the selector record in the profile.
-  - [ ] Verify the broker still restores afterwards.
+  - [x] **Device:** walk class, subclass, protocol, both descriptor appends, pipe, buffer, callbacks and commit, recording every raw `IOReturn`.
+  - [x] Probe neighbouring selector numbers only when one reports an unsupported selector.
+  - [x] Write `docs/ipad/hid-operation-matrix.md` (redacted) and store the selector record in the profile.
+  - [x] Verify the broker still restores afterwards.
 
 ### U3.9 Generic-host enumeration and report capture
 

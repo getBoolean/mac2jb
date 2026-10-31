@@ -208,13 +208,21 @@ enum HIDCanaryMain {
         let summary = HIDCanaryRun(sink: transport(session, handles: handles),
                                    lease: lease, reports: arguments.mode.reportsToWrite,
                                    shouldStop: { interrupted != 0 }).run()
+        // The wait's own answer, on its own line and before the report counts:
+        // "configured and the host enumerated it" is a strictly stronger
+        // result than "configured", so every mode that gets this far reports
+        // it. The poll count tells "enumerated after a moment" from "never
+        // enumerated", and the last raw return is printed verbatim.
+        line("enumeration host=\(summary.enumeration.state.label) " +
+             "polls=\(summary.enumeration.polls) " +
+             "io=" + hex(summary.enumeration.lastRawReturn))
         // Counts only: the keys themselves never reach the log.
         line("reports written=\(summary.reportsWritten) stop=\(summary.stop) " +
              "neutral-attempts=\(summary.neutralAttempts) " +
              "neutral=\(summary.neutralDelivered ? "delivered" : "undelivered") " +
              "transport=pipe-write")
         MAC2JBUSBFunctionClose(session)
-        exit(summary.stop == .completed ? 0 : 1)
+        exit(summary.stop.exitCode)
     }
 
     // The production report sink: stage the bytes in the mapped shared buffer

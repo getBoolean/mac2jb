@@ -42,6 +42,9 @@ EXISTING_INTERFACES = {
     SELECTED_CONFIGURATION: ["PTP", "USBAudio2StreamOUT", "AppleUSBMux"],
 }
 ADDED = "Mac2jbCanary"
+# A raw controller return that is neither success nor a value anything here
+# interprets: the reply has to carry it through unchanged.
+BUS_CYCLE_RETURN = 0xE0000001
 
 
 def require(value, what="additive publication mismatch"):
@@ -347,6 +350,64 @@ def existing_name_refused(binary, parent):
         service.stop()
 
 
+def bus_cycle_only_while_a_publication_is_live(binary, parent):
+    """The standalone bus cycle: refused outside a live publication, publishes nothing.
+
+    Publishing cycles the bus, so the host reads the configuration descriptor
+    before the appended interface has a class, descriptors or endpoints.
+    Committing the interface afterwards changes only the device's own state, so
+    the host never requests a report descriptor for it. A second cycle, with the
+    interface configured and the lease still held, is what makes the host
+    re-enumerate - and it is only ever meaningful there, so it is refused with
+    no worker, with no journal and once the original is back.
+    """
+    cycles = parent / "bus-cycles"
+    service, published = service_with_added_function(
+        binary, parent, "cycle",
+        extra={"MAC2JB_U3_FIXTURE_BUS_CYCLE_LOG": str(cycles),
+               "MAC2JB_U3_FIXTURE_BUS_CYCLE_RETURN": str(BUS_CYCLE_RETURN)})
+    try:
+        # No journal: nothing has been published, so a cycle would only
+        # disturb a connection that is already healthy.
+        require(service.command("cycle-bus") == "ERR rejected",
+                "the bus was cycled with no journal")
+        require(service.command("prepare") == "OK prepared")
+        # Journalled, but no worker holds the lease: outside a live trial a
+        # cycle has nothing to make visible and nothing to restore it.
+        require(service.command("cycle-bus") == "ERR rejected",
+                "the bus was cycled with no worker holding the lease")
+        worker = watch(service)
+        # A lease, but no publication yet.
+        require(service.command("cycle-bus") == "ERR rejected",
+                "the bus was cycled before anything was published")
+        require(not cycles.exists(), "a refused cycle reached the controller")
+        require(service.command(f"publish-hid {ADDED}") == "OK published-additive")
+        require(service.count() == 1)
+        appended = published.read_bytes()
+
+        reply = service.command("cycle-bus")
+        require(reply == "OK bus-cycled io=0x%08x" % BUS_CYCLE_RETURN,
+                "the raw bus-cycle return was not reported verbatim: " + str(reply))
+        require(len(cycles.read_bytes()) == 1,
+                "the accepted cycle did not reach the controller exactly once")
+        # It publishes nothing: the description on the bus is the one the
+        # additive publication wrote, and no publication event was recorded.
+        require(published.read_bytes() == appended,
+                "a bus cycle changed the live description")
+        require(service.count() == 1, "a bus cycle published something")
+
+        # Once the original is back, cycling is pointless and refused again.
+        worker.close()
+        service.phase("awaitingVerification")
+        require(service.count() == 2)
+        require_original_restored(service, published)
+        require(service.command("cycle-bus") == "ERR rejected",
+                "the bus was cycled after the original was already back")
+        require(len(cycles.read_bytes()) == 1, "a refused cycle reached the controller")
+    finally:
+        service.stop()
+
+
 def conservative_variant_has_no_appending_command(binary, parent):
     """A broker built without the appending capability refuses the command.
 
@@ -361,6 +422,12 @@ def conservative_variant_has_no_appending_command(binary, parent):
         reply = service.command(f"publish-hid {ADDED}")
         require(reply == "ERR rejected",
                 "a broker without the appending command must refuse it: " + str(reply))
+        # The standalone bus cycle exists only for an appended function, so it
+        # is behind the same compile-time condition and is equally absent here.
+        cycled = service.command("cycle-bus")
+        require(cycled == "ERR rejected",
+                "a broker without the appending command must refuse the bus "
+                "cycle too: " + str(cycled))
         require(not published.exists(),
                 "a broker lacking the command still published an appended description")
         require(service.count() == 0, "a refused command still called the controller")
@@ -385,7 +452,8 @@ def main():
                            ("restore", explicit_restore_after_additive),
                            ("failed-call", failed_controller_call_still_restores),
                            ("no-drop", retry_never_drops_an_interface),
-                           ("duplicate", existing_name_refused)):
+                           ("duplicate", existing_name_refused),
+                           ("cycle", bus_cycle_only_while_a_publication_is_live)):
             directory = root / ("case-" + name)
             directory.mkdir(mode=0o700)
             test(binary, directory)
@@ -405,7 +473,10 @@ def main():
           "the wrong phase, on an existing name and on a malformed name, both "
           "before any controller write and with nothing to undo, recovery "
           "from a failed controller call, a fallback that refuses to "
-          "publish over a description the journal never recorded")
+          "publish over a description the journal never recorded, and a "
+          "standalone bus cycle that publishes nothing, reports its raw "
+          "return verbatim and is refused with no worker, with no journal, "
+          "before anything is published and once the original is back")
 
 
 if __name__ == "__main__":

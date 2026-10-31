@@ -72,6 +72,26 @@ struct TargetUSBRestoreController: USBRestoreController {
         }
     }
 
+    // Cycle the bus and publish nothing. Publication already cycles the bus,
+    // so the host read the configuration descriptor before the appended
+    // interface had a class, descriptors or endpoints; configuring it
+    // afterwards changes only the device's own state. This is what makes the
+    // device re-present itself so the host reads a configuration descriptor
+    // that includes the interface. Controller authority stays here in the
+    // broker: the process that configures the interface cannot do this.
+    func cycleBusOnly() throws -> Int32 {
+        var busStatus: Int32 = 0
+        let result = MAC2JBUSBCycleControllerBus(controllerRegistryID, &busStatus)
+        // A cycle that the controller refused is still a reported observation,
+        // so its raw return goes back to the caller rather than being
+        // collapsed into an error. Only a call that never reached the cycle -
+        // a missing symbol, the wrong controller - is an error here.
+        guard result == MAC2JBUSBSuccess || result == MAC2JBUSBBusCycleFailed else {
+            throw TargetUSBRestoreError.operation(result, 0, busStatus)
+        }
+        return busStatus
+    }
+
     // The configuration the host currently selects; never assumed.
     func selectedConfiguration() throws -> Int {
         var number: Int32 = 0

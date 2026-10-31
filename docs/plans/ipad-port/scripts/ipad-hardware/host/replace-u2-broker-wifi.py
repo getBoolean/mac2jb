@@ -22,7 +22,9 @@ BINARIES = {"v12": ("u2-native-noop-trial-v12-learned-profile", "9629611372c6f57
             # Digests pin the exact artifact, not the variant name: rebuilding an
             # older variant from changed sources yields a different binary, so the
             # entry for an installed broker keeps the digest that is on the device.
-            "v13": ("u3-native-additive-function-v13", "71cf7b63072919370e2e6b41aa6b249a761cc10ff684aa79fa3a49f6348dcc97")}
+            "v13": ("u3-native-additive-function-v13", "71cf7b63072919370e2e6b41aa6b249a761cc10ff684aa79fa3a49f6348dcc97"),
+            "v14": ("u3-native-additive-function-v14", "f8e17bbdfc26df182c584383f180814a485014fe7244161af1066ff81e835229"),
+            "v15": ("u3-native-additive-function-v15", "bbc4946fa6af6d3013be689ec581114266848f106bea1cad6b0fabed91f20e3a")}
 SUPPORT = runpy.run_path(str(HOST / "u2_trial_support.py"))
 
 
