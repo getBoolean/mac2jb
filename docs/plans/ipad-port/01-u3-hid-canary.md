@@ -64,7 +64,19 @@ Inherited from the parent plan; this plan adds no requirements.
 
 ## Implementation Units
 
-Ordered. Each unit ends with the device in a state the broker can restore, and the first failing operation is recorded rather than worked around. A device trial runs only when the Current state block in `docs/ipad/target-device-findings.md` allows it.
+Ordered; each is a checklist below. Mac-only units need no device.
+
+- [ ] **U3.1** Profile support for an added function — Mac only
+- [ ] **U3.2** Additive publication path in the broker — Mac fixtures, then one device trial
+- [ ] **U3.3** Function materializes and its user client opens — device *(R9 gate; stop here on failure)*
+- [ ] **U3.4** Interface operation matrix, one selector at a time — device
+- [ ] **U3.5** Lease-bound canary process — Mac only
+- [ ] **U3.6** Generic-host enumeration and report capture — device *(the HID proof)*
+- [ ] **U3.7** Restoration after HID, verified externally — device
+- [ ] **U3.8** Fault trials on the HID path — device
+- [ ] **U3.9** Direct Switch run — owner-assisted
+
+Each unit ends with the device in a state the broker can restore, and the first failing operation is recorded rather than worked around. A device trial runs only when the Current state block in `docs/ipad/target-device-findings.md` allows it.
 
 ### U3.1 Learn and extend the device profile for a HID function
 
@@ -72,6 +84,11 @@ Ordered. Each unit ends with the device in a state the broker can restore, and t
 - **Files:** `ios/watchdog/USBDeviceProfile.swift`, `ios/tests/USBDeviceProfileTests.swift`, `docs/plans/ipad-port/scripts/ipad-hardware/tests/test-u2-device-profile.py`
 - **Approach:** add an optional `addedFunctions` section recording the function name, its interface's observed selector results, and that its owner is this port's canary. Keep `schemaVersion` migration explicit: a learned v2 profile stays valid and gains the section empty.
 - **Test scenarios (Mac-only):** a v2 profile loads and validates unchanged; an added function round-trips through the store; a profile naming an added function absent from the live function list fails validation; the healer policy derived from a profile with a self-owned function restarts that owner and not another.
+- **Tasks:**
+  - [ ] Add `addedFunctions` to `USBDeviceProfile` (name, selector record, self-owned flag) with explicit v2→v3 migration.
+  - [ ] Teach `healPolicy()` to treat a self-owned added function as restartable by the canary.
+  - [ ] Extend `USBDeviceProfileTests.swift` with the four scenarios listed above.
+  - [ ] Run `tests/test-u2-device-profile.py` plus the full `test-u2-*` suite; no regression.
 
 ### U3.2 Add an additive-publication path to the broker
 
@@ -80,6 +97,14 @@ Ordered. Each unit ends with the device in a state the broker can restore, and t
 - **Approach:** a new shim entry clones the live description, appends one function to the configuration list that mac2jb will use, and publishes. The journal still holds the **unmodified** original, so restore semantics are untouched. Add a `publish-hid <name>` command beside `publish-noop`, under the same lease and readiness gate. The restore path, the healer and `confirm` are unchanged.
 - **Test scenarios (Mac-only fixture):** the published description equals the original plus exactly one function; the journal is byte-equal to the original; worker death, watchdog restart and lease expiry each restore the original; `publish-hid` is refused without a lease, with an existing journal, or when the name is already present; a malformed name is rejected before any controller call.
 - **Device trial:** publish with the appended name and **no** interface configuration, then let the broker restore. This isolates "does a changed description still recover" from HID itself. Verify with the strict external check.
+- **Tasks:**
+  - [ ] Add a shim entry that clones the live description and appends one named function to the mac2jb configuration.
+  - [ ] Reject a malformed or already-present name before any controller call.
+  - [ ] Add the `publish-hid <name>` broker command under the existing lease and readiness gate; leave restore, heal and `confirm` untouched.
+  - [ ] Extend the Mac fixture: published = original + one function, journal byte-equal to original, and restore on worker death, watchdog restart and lease expiry.
+  - [ ] Run the full `test-u2-*` suite.
+  - [ ] Build and deploy a broker with this path; take a restore kit first.
+  - [ ] **Device trial:** publish the name with no interface configuration, let the broker restore, verify with the strict external check, and record how healing behaved.
 
 ### U3.3 Prove the function materializes and its user client opens
 
@@ -88,6 +113,13 @@ Ordered. Each unit ends with the device in a state the broker can restore, and t
 - **Approach:** after U3.2's publication, match `IOUSBDeviceInterface` by `USBDeviceFunction` equal to the appended name, require it under the same controller (the census already walks that subtree), then `IOServiceOpen` it with the `IOUSBDeviceInterfaceUserClient` exception that U1 proved sufficient for existing interfaces. Record the raw `IOReturn` at each step.
 - **Test scenarios:** a name that never appears is reported as absent, not as success; a service under a different controller is rejected; an open failure records its raw code and leaves the description restorable. Fixture-level: the matcher rejects a property match that is a prefix or case variant of the name.
 - **Stop condition:** if no matching service appears, or the open is denied, record the boundary and stop. That is an R9 failure, and U4's exclusive-HID fallback becomes the question.
+- **Tasks:**
+  - [ ] Add a read-only matcher for `IOUSBDeviceInterface` by `USBDeviceFunction`, requiring the same controller subtree.
+  - [ ] Reject prefix and case-variant property matches (fixture-level).
+  - [ ] Add the pinned host reader and device payload; report absent-vs-open-denied distinctly, with raw `IOReturn`.
+  - [ ] **Device trial:** after a U3.2 publication, match the function and open its user client with the interface-class entitlement only.
+  - [ ] Record the outcome in the learned profile and restore the description.
+  - [ ] **Stop and report if** no matching service appears or the open is denied.
 
 ### U3.4 Map the interface operation matrix one selector at a time
 
@@ -96,6 +128,12 @@ Ordered. Each unit ends with the device in a state the broker can restore, and t
 - **Approach:** exercise, individually and in KTD-D order: set class 3, subclass 1, protocol 1; append the 9-byte HID descriptor (standard, type `0x21`); append the 65-byte report descriptor (nonstandard, type `0x22`); create one interrupt-IN pipe, 8-byte max packet, interval 10; create a buffer; register class-command callbacks; commit. Record every `IOReturn` and stop at the first refusal. Treat the selector numbers as hypotheses: if one returns an unsupported/bad-selector code, record it and probe the neighbouring numbers before concluding the operation is unavailable.
 - **Test scenarios:** each operation is attempted at most once per run; a refusal aborts the remaining sequence; the recorded matrix contains no device identifiers; the broker can still restore afterwards.
 - **Output:** the matrix doc plus the learned profile's selector record (KTD-B).
+- **Tasks:**
+  - [ ] Add the function shim entries for class/subclass/protocol, standard and nonstandard descriptor append, pipe creation, buffer creation, callbacks and commit — each individually callable.
+  - [ ] Attempt each operation at most once per run and abort the sequence at the first refusal.
+  - [ ] **Device trial:** walk the KTD-D sequence, recording every raw `IOReturn`; probe neighbouring selector numbers only when one reports an unsupported selector.
+  - [ ] Write `docs/ipad/hid-operation-matrix.md` (redacted; no device identifiers) and store the selector record in the profile.
+  - [ ] Verify the broker still restores afterwards.
 
 ### U3.5 Add the lease-bound canary process
 
@@ -103,6 +141,12 @@ Ordered. Each unit ends with the device in a state the broker can restore, and t
 - **Files:** `ios/canary/` (new: main, HID report model, lease client), `ios/entitlements/canary-interface.plist` (new: `platform-application` plus the interface-class exception only; **no** set-description), `ios/tests/HIDReportTests.swift` (new)
 - **Approach:** the canary never publishes a description and never writes the journal; it asks the broker for a lease, configures the already-published function, writes reports, and on every exit path sends a neutral report and returns the lease. Reuse `keyboard.c`'s validation rules: no modifier-only garbage, no duplicate keycodes, no gaps, keycodes in range.
 - **Test scenarios (Mac-only):** golden-test the 9-byte HID descriptor including the corrected report-length bytes, the 65-byte report descriptor, the 3/1/1 tuple, the 8-byte report shape and the VID/PID policy; reject an invalid report before any write; a controlled exit emits exactly one neutral report; lease expiry stops writes; three bounded neutral attempts on disconnect.
+- **Tasks:**
+  - [ ] Create `ios/canary/` with the lease client, HID report model and exit handling; it never publishes or writes the journal.
+  - [ ] Add `canary-interface.plist`: `platform-application` plus the interface-class exception only, no set-description.
+  - [ ] Port `keyboard.c`'s report validation (no modifier-only garbage, no duplicate keycodes, no gaps, keycodes in range).
+  - [ ] Emit exactly one neutral report on every controlled exit; stop writes on lease expiry; three bounded neutral attempts on disconnect.
+  - [ ] Add `HIDReportTests.swift` golden tests for the 9-byte HID descriptor (with the corrected report-length bytes), the 65-byte report descriptor, the 3/1/1 tuple, the 8-byte report shape and the VID/PID policy.
 
 ### U3.6 Generic-host enumeration and report capture
 
@@ -111,12 +155,25 @@ Ordered. Each unit ends with the device in a state the broker can restore, and t
 - **Approach:** with the iPad on the Mac, capture the new interface's descriptors from the host side (class 3, subclass 1, protocol 1; the expected report descriptor; one 8-byte interrupt-IN endpoint), record the host's HID control requests where observable, then have the canary type `MAC2JB` and compare every report against the expected press/release sequence.
 - **Test scenarios:** a missing or mismatched report descriptor fails; an extra or missing report fails; a host that never enumerates is reported as not-enumerated rather than as a pass; the capture contains no serial or UDID.
 - **Gate:** passing this unit is the proof that direct USB HID works on this iPad.
+- **Tasks:**
+  - [ ] Add the host capture tool; reuse the lifecycle monitor and raw-configuration reader.
+  - [ ] Assert host-side class 3 / subclass 1 / protocol 1, the expected report descriptor, and one 8-byte interrupt-IN endpoint.
+  - [ ] Record the host's HID control requests where observable.
+  - [ ] **Device trial:** type `MAC2JB` and compare every report against the expected press/release sequence.
+  - [ ] Treat a non-enumerating host as not-enumerated, never as a pass; keep serials and UDIDs out of the capture.
+  - [ ] **Gate:** this passing is the proof that direct USB HID works on this iPad. Record it in the hardware matrix.
 
 ### U3.7 Restoration after HID, verified externally
 
 - **Goal:** AE2's restoration half and R8's journal rule, on the HID path.
 - **Approach:** after U3.6, have the broker restore the original description, then run the strict external check (`host/check-u2-trial-current.py`) and confirm the journal only with that check's output as proof, exactly as U2 trials do.
 - **Test scenarios:** restoration returns the original function list with no HID function; the strict check passes including resolved strings and NCM packet flow; the journal is cleared only after that; a failed check leaves the journal and reports recovery-required.
+- **Tasks:**
+  - [ ] **Device trial:** have the broker restore the original description after U3.6.
+  - [ ] Run `host/check-u2-trial-current.py --expect-journal=awaitingVerification`; require resolved strings and NCM packet flow to pass.
+  - [ ] Confirm the journal only with that check's output as proof, then re-check with no journal.
+  - [ ] Verify the restored function list contains no HID function.
+  - [ ] Verify a failed check leaves the journal and reports recovery-required.
 
 ### U3.8 Fault trials on the HID path
 
@@ -124,12 +181,25 @@ Ordered. Each unit ends with the device in a state the broker can restore, and t
 - **Files:** `docs/plans/ipad-port/scripts/ipad-hardware/host/run-u2-hid-trial-wifi.py` (new, modelled on `run-u2-noop-trial-auto-heal-wifi.py`)
 - **Approach:** repeat U3.6's publication under each fault: kill the canary while configuring, while enumerated, and while actively writing; kill the broker; let the lease expire; disconnect the cable mid-press. Each must end with the original description restored automatically and the strict check passing. Record how often healing needed a re-publication or an owner restart, since the added function changes the race.
 - **Test scenarios:** each fault state is exercised separately; a neutral report is attempted before restoration on controlled exits; no fault path confirms a journal; the HID function is absent after every restore.
+- **Tasks:**
+  - [ ] Add the HID trial runner, modelled on the auto-heal no-op runner (restore kit, syslog, lifecycle monitor, strict check, confirm).
+  - [ ] **Device trials, separately:** canary killed while configuring, while enumerated, and while writing; broker killed; lease expired; cable disconnected mid-press.
+  - [ ] Require automatic restoration and a passing strict check after each.
+  - [ ] Verify a neutral report is attempted before restoration on controlled exits, and that no fault path confirms a journal.
+  - [ ] Record re-publication and owner-restart counts per fault; compare with U2's no-op baseline.
 
 ### U3.9 Direct Switch run
 
 - **Goal:** the mac2jb path itself.
 - **Approach:** owner-assisted. Move the cable to the Switch 2, prove the iPad still enters peripheral role (the existing Type-C and controller readers already do this), open the keyboard screen, and type a harmless canary string. The Switch gives no host-side capture, so the evidence is the device-side state plus the owner's observation of typed characters.
 - **Test scenarios:** refuse to run unless U3.6 has passed on a generic host; refuse without a recorded peer and orientation; restoration verified after the run.
+- **Tasks:**
+  - [ ] Refuse to run unless U3.6 has passed on a generic host.
+  - [ ] Refuse without a recorded peer and cable orientation.
+  - [ ] **Owner-assisted:** move the cable to the Switch 2 and confirm the iPad still enters peripheral role with the existing Type-C and controller readers.
+  - [ ] Open the keyboard screen and type a harmless canary string; record the owner's observation of the typed characters.
+  - [ ] Verify restoration and the strict check afterwards.
+  - [ ] Record the U3 gate decision in `docs/ipad/hardware-matrix.md` and replace the Current state block in `docs/ipad/target-device-findings.md`.
 
 ## Verification Contract
 
