@@ -81,6 +81,8 @@ Reuse three pieces unchanged: the C shim (`USBRestoreControllerShim.c/.h`), `USB
 
 ## Status and open items
 
-- Mechanism and manual remedy are demonstrated on hardware once (`host/recover-u2-restart-function-owner-wifi.py com.apple.audiomxd`). The **automatic** v9 path has passed fixtures only; it has not yet run on the iPad.
+- **Hardware result (2026-10-31):** a v9 no-op trial lost USB on its first publication and **recovered automatically**, with `healed republications=3 owner-restarts=none`. External checks passed and the journal was confirmed. The manual owner-restart remedy also worked once (`host/recover-u2-restart-function-owner-wifi.py com.apple.audiomxd`).
+- The trial used the full republication bound; consider `maxRepublications` 5 now that the jetsam limit is 96 MB. One run is not a reliability figure; repeat trials are needed.
+- Hardware scripts: `host/transition-u2-v8-to-v9-wifi.py` (stage v9 over an unresolved journal), `host/run-u2-native-noop-trial-v9-wifi.py` (trial plus a 90 s heal window and one Wi-Fi `heal` fallback), `host/confirm-u2-after-heal-wifi.py` (heal, external checks, confirm).
 - Still unvalidated on hardware: an owner map entry for the audio-2 kernel functions (re-publication is the current remedy), and whether `accessoryd` restarts help the iAP port.
 - U2 still requires an automated no-op round trip, a full external USB/NCM/descriptor comparison and journal confirmation.
