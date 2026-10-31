@@ -52,7 +52,10 @@ private let writeTimeoutMilliseconds: UInt64 = 250
 // its caller, so the waiting is done here: a call that reports no such service
 // opened nothing, and the first call that finds the interface is the single
 // open attempt.
-private let interfaceWaitSeconds: Double = 10
+// The appended interface appears once the controller has rebuilt its function
+// nubs, which is part of the same off-bus window as the enumeration wait, so
+// this cannot be sized to the old 15 s lease either.
+private let interfaceWaitSeconds: Double = 30
 private let interfacePollMicroseconds: UInt32 = 100_000
 
 private struct Arguments {

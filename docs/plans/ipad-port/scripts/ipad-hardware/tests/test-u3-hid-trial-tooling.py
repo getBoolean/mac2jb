@@ -422,6 +422,14 @@ def lease_bounds():
     # Three attempts inside one quantum, so one lost reply cannot end it.
     assert RUNNER["RENEW_INTERVAL_SECONDS"] * 3 <= RUNNER["BROKER_LEASE_CEILING_SECONDS"], (
         RUNNER["RENEW_INTERVAL_SECONDS"])
+    # The worker's own budget must come from the same constant, stated
+    # explicitly. The first run of this rig renewed the broker's lease on
+    # schedule and still lost the publication, because the canary fell back to
+    # its own 15 s default, killed itself, and closed the lease socket - which
+    # is what makes the broker restore. Renewal on two of the three sides is
+    # worth nothing, so the argument is asserted, not assumed.
+    arguments = RUNNER["canary_arguments"](options())
+    assert "--lease-seconds %d" % budget in arguments, arguments
     source = (HOST / "run-u2-hid-trial-wifi.py").read_text()
     assert "LEASE RENEWAL SEAM" in source, "the renewal seam must be findable"
     # Wired to the broker's actual command, and stopped on every path - a
@@ -973,13 +981,17 @@ def gate_modes():
         for outcome in ("pass", "reports-unobserved", "reports-mismatch"):
             assert RUNNER["mode_hid_proof"](mode, outcome) == "not-attempted", (mode, outcome)
 
-    # The mode reaches the canary as its own argument, and the full run's
-    # command line is byte-for-byte what it was before there were modes.
-    assert RUNNER["canary_arguments"](options()) == (
-        "--function hidcanary --controller 4294967297")
+    # The mode reaches the canary as its own argument. The lease budget is now
+    # stated too: it used to be left implicit, and the canary's own 15 s
+    # default then ended the publication before the device was back on the bus,
+    # whatever the broker's renewal did. Keeping the old command line
+    # byte-for-byte is no longer the invariant worth holding.
+    budget = RUNNER["lease_budget_seconds"]()
+    base = "--function hidcanary --controller 4294967297 --lease-seconds %d" % budget
+    assert RUNNER["canary_arguments"](options()) == base
     for mode in ("open-only", "configure-only"):
         assert RUNNER["canary_arguments"](options(mode=mode)) == (
-            "--function hidcanary --controller 4294967297 --mode " + mode), mode
+            base + " --mode " + mode), mode
 
     # Defaulted, so an existing invocation selects the full run by saying nothing.
     argv = ["--broker=v13", "--function=hidcanary", "--controller=4294967297",

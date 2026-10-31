@@ -215,7 +215,7 @@ def lease_budget_seconds():
 # past the lease it is no longer waiting on the published keyboard at all. It
 # still returns the moment the expected report count arrives, so a healthy run
 # does not spend this; it is a bound, not a pause.
-REPORT_DEADLINE_SECONDS = BROKER_LEASE_CEILING_SECONDS
+REPORT_DEADLINE_SECONDS = BROKER_LEASE_CAP_SECONDS
 # A read this trial cannot place inside a live publication, said by the capture
 # itself, and a publication that had gone by the time the read finished, which
 # only this runner can see. Two different failures to be positioned, so two
@@ -294,8 +294,14 @@ def canary_arguments(options):
     The mode is passed only when it is not the full run, so the command line of
     an invocation from before the gates existed is byte-for-byte unchanged.
     """
+    # The worker's own lease budget, stated explicitly from the same constant
+    # the broker's cap comes from. Left implicit, the canary fell back to its
+    # own 15 s default and killed itself long before the device was back on the
+    # bus, which closed the lease socket and made the broker restore the
+    # original - so renewal on the broker could never keep a publication alive.
     text = ("--function " + shlex.quote(options["function"]) +
-            " --controller " + str(options["controller"]))
+            " --controller " + str(options["controller"]) +
+            " --lease-seconds " + str(BROKER_LEASE_CAP_SECONDS))
     if options["mode"] != FULL_MODE:
         text += " --mode " + shlex.quote(options["mode"])
     return text

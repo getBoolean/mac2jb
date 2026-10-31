@@ -177,7 +177,13 @@ struct HIDCanaryRun {
     // device. That is also the broker's lease ceiling, which is the point: the
     // lease check before every poll is the real bound and this deadline is
     // only the backstop, so the wait cannot outlive the lease it borrows.
-    static let enumerationWaitSeconds: Double = 15
+    // Must outlast the device's own return to the bus. Publishing a
+    // description takes the controller off bus and it comes back 29-72 s
+    // later, so a wait shorter than that ends before the host has had any
+    // chance to enumerate and reports "not enumerated" about a device that was
+    // not yet present. 120 s covers the slowest measured return with room for
+    // the host to read descriptors, and stays inside the lease above.
+    static let enumerationWaitSeconds: Double = 120
     static let enumerationPollMicroseconds: UInt32 = 500_000
 
     let sink: HIDReportSink

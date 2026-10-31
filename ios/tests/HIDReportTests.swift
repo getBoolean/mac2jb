@@ -524,8 +524,12 @@ enum HIDReportTests {
                     "an unenumerated host must be reported as such: \(summary.enumeration)")
         try require(summary.stop == .hostNeverEnumerated && summary.stop != .disconnected,
                     "never enumerated is not a disconnect: \(summary)")
-        try require(summary.enumeration.polls == 30,
-                    "the wait is bounded at the reference's attempts: \(summary.enumeration)")
+        // Derived from the budget rather than pinned at a literal: this test
+        // read `polls == 30` while the budget was 15 s, so raising the budget
+        // to outlast the device's bus return failed it for the right reason
+        // and would have been "fixed" by lowering the budget back.
+        try require(summary.enumeration.polls == Int(HIDCanaryRun.enumerationWaitSeconds / 0.5),
+                    "the wait is bounded at the budget's attempts: \(summary.enumeration)")
         try require(summary.enumeration.lastRawReturn == PipeReportTransport.notEnumerated &&
                     summary.enumeration.lastMaxPacketSize == 0,
                     "the last size and raw return must be kept verbatim: \(summary.enumeration)")
@@ -545,6 +549,16 @@ enum HIDReportTests {
         // The lease is the real bound, so the backstop cannot outlive it.
         try require(HIDCanaryRun.enumerationWaitSeconds <= BrokerSocketLease.maximumLeaseSeconds,
                     "the wait must not be able to outlive the lease")
+        // ...and the lease must outlast the device's own return to the bus, or
+        // the relationship above is satisfied by a worker that always dies
+        // first. That is what happened: a 15 s lease against a 29-72 s return
+        // meant the worker expired, closed its socket and made the broker
+        // restore the original before anything could observe the publication.
+        // Both bounds together are the contract; neither alone is.
+        try require(BrokerSocketLease.maximumLeaseSeconds >= 120,
+                    "the lease must outlast the 29-72 s bus return with room to read")
+        try require(HIDCanaryRun.enumerationWaitSeconds >= 72,
+                    "the enumeration wait must outlast the slowest measured return")
 
         // Any other raw return is a real failure: it stops the wait at once and
         // is recorded verbatim, with no retry and no interpretation. It is not

@@ -20,9 +20,17 @@ protocol CanaryLease {
 final class BrokerSocketLease: CanaryLease {
     enum Failure: Error { case unavailable, refused }
 
-    // The broker enforces a 15 second lease on a prepared description; the
-    // canary never assumes more than that, whatever it was asked for.
-    static let maximumLeaseSeconds: Double = 15
+    // Matches the broker's total life cap for one publication, because the
+    // broker - not this clock - decides when the window ends: on any restore it
+    // closes this socket, and isHeld() below reads that as the lease being gone
+    // within one poll. This value is the backstop for a broker that dies
+    // without closing anything, so it must not be *shorter* than the broker's
+    // cap either: at 15 s against a renewable 30 s quantum the worker always
+    // killed itself first, which closed the socket, which made the broker
+    // restore the original and delete the function under observation - no
+    // amount of broker-side renewal could help, because the worker was the
+    // thing expiring. Keep this and the host's BROKER_LEASE_CAP_SECONDS equal.
+    static let maximumLeaseSeconds: Double = 180
     static let defaultSocketPath = "/var/jb/var/lib/mac2jb-u2-native/broker.sock"
 
     private var descriptor: Int32 = -1
