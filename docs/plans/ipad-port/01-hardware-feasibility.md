@@ -196,10 +196,7 @@ docs/ipad/
   - Redact serials, UDIDs, MACs, and filesystem roots from a shareable report while retaining hashes and versions.
 - **Verification:** Two consecutive probes produce equivalent target/controller/function topology, the peer-role matrix is complete, and an external capture shows no USB re-enumeration.
 
-#### U1 completion (2026-10-30)
-
-- [x] **U1 PASS** for R1–R3 and the U1-scoped R14 evidence decision; decision table and limits in `docs/ipad/hardware-matrix.md`. Exact-target read-only inventory and stock-source cross-check, raw IOKit authorization outcomes for six profiles on Mac A/B and direct Switch 2 A/B, six zero-event Mac USB lifecycle windows, and configured/on-bus, externally powered Switch 2 role evidence in both orientations. Private reports, attestations and bindings are retained in ignored `build/ipad-hardware/`. The U1 test apps and helper files were removed from the iPad on 2026-10-31; the U1 scripts are in git history.
-- [x] Learned constraint carried forward: publication requires `com.apple.private.usbdevice.setdescription` with `platform-application` in a root launchd job; plain TrollStore app processes are SIGKILLed before `main`.
+- **Plan and evidence:** [`01-u1-readonly-inventory.md`](01-u1-readonly-inventory.md) — **PASS 2026-10-30** for R1–R3 and the U1-scoped R14 decision, with the measured authorization, peer/role and evidence tables.
 
 ### U2. Implement the restoration journal and watchdog
 
@@ -217,21 +214,14 @@ docs/ipad/
   - Compare live-readback, default-plus-controller, and externally captured descriptors; reject a reconstructed fallback whose functions or scalar descriptors differ.
 - **Verification:** The watchdog passes fixture fault injection and completes a no-op republish/restore against the captured live description, with usbmux/trust/charging and any active network function externally recovered.
 
-#### U2 completion (2026-10-31)
-
-- [x] Restore baseline: the live description is journaled per trial; the strict external baseline (raw configurations, resolved strings, host interfaces, scalars, NCM binding and packet reply, pairing, power) is captured twice-stable per boot (`host/capture-u2-trial-baseline.py`).
-- [x] Durable journal: versioned canonical recipe, exclusive creation, checksum, atomic replacement with file and directory fsync, phases `prepared → published → restoring → awaitingVerification → restored`, plus `recoveryRequired`; fault fixtures pass.
-- [x] Single-writer broker and watchdog: the launchd broker is the only controller writer and journal owner, with a 15 s lease, worker/watchdog-death and lease-expiry recovery, a readiness gate before a second publication, and confirmation only with external proof.
-- [x] Automatic recovery: after a swap the controller waits for every USB function to re-register. The broker heals with bounded re-publication plus restarts of user-space function owners, using an on-device learned device profile (`docs/ipad/usb-auto-recovery.md`).
-- [x] Device trials: v11 5/5 (normal ×3, worker-kill, watchdog-kill) and v12 2/2 (normal, watchdog-kill) recovered without owner action and passed the strict external check. Accepted deviation: the live description keeps `AllowMultipleCreates=true`.
-- [x] **U2 PASS**: evidence in `docs/ipad/hardware-matrix.md`; procedure in `docs/ipad/usb-recovery.md`; device inventory in `docs/ipad/device-cleanup-ledger.md`.
+- **Plan and evidence:** [`01-u2-usb-restoration.md`](01-u2-usb-restoration.md) — **PASS 2026-10-31**, with the trial-design comparison, lifecycle timings, registry census and passing-trial measurements. Mechanism: [`../../ipad/usb-auto-recovery.md`](../../ipad/usb-auto-recovery.md).
 
 ### U3. Build the additive HID canary
 
 - **Goal:** Enumerate a direct USB boot keyboard and send bounded reports without losing original functions.
 - **Requirements:** R4–R10
 - **Dependencies:** U1, U2
-- **Plan:** broken into ordered tasks in [`01a-hid-canary.md`](01a-hid-canary.md), which inherits R4–R10, AE2, AE3 and KTD1–KTD9 unchanged. It extends the U2 broker with an additive publication path, proves function materialization and each interface operation separately, captures enumeration on a generic host before the Switch, and reuses the repository's corrected HID fixtures.
+- **Plan:** ordered tasks in [`01-u3-hid-canary.md`](01-u3-hid-canary.md), which inherits R4–R10, AE2, AE3 and KTD1–KTD9 unchanged. It extends the U2 broker with an additive publication path, proves function materialization and each interface operation separately, captures enumeration on a generic host before the Switch, and reuses the repository's corrected HID fixtures.
 - **Verification:** unchanged — thirty generic-host cycles and thirty direct Switch keyboard-screen cycles pass with exact descriptor/report capture and externally verified restoration. A neutral endpoint write without host-side enumeration evidence does not count.
 
 ### U4. Characterize exclusive-HID fallback only if needed

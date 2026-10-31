@@ -6,7 +6,7 @@ artifact_contract: ce-unified-plan/v1
 product_contract_source: ce-plan-bootstrap
 execution: code
 parent_plan: docs/plans/ipad-port/01-hardware-feasibility.md
-plan_order: 1a
+plan_order: 1c
 execution_after: docs/plans/ipad-port/01-hardware-feasibility.md
 ---
 

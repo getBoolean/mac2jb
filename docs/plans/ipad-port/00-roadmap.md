@@ -240,7 +240,7 @@ The hardware plan first builds a disposable rootless probe package with the prod
 - **Files:** `docs/plans/ipad-port/01-hardware-feasibility.md`, `ios/probes/`, `docs/ipad/hardware-matrix.md`
 - **Approach:** Execute the hardware child plan in full, including its minimal rootless watchdog/probe package, and commit its machine-readable capability record and human-readable results before approving dependent units.
 - **Execution note:** Start with read-only IOKit inventory; no descriptor mutation is allowed until the current configuration and recovery path are captured.
-- **Status (2026-10-31):** Hardware child-plan U1 and U2 passed (automatic same-boot USB recovery; see `docs/ipad/hardware-matrix.md`). U3 (HID canary) is next, planned in `docs/plans/ipad-port/01a-hid-canary.md`.
+- **Status (2026-10-31):** Hardware child-plan U1 and U2 passed (automatic same-boot USB recovery; see `docs/ipad/hardware-matrix.md`). U3 (HID canary) is next, planned in `docs/plans/ipad-port/01-u3-hid-canary.md`.
 - **Test scenarios:**
   - Covers AE1. Connect the target iPad directly to a USB descriptor host, configure HID, send a known text sequence, and verify exact reports plus restoration.
   - Covers AE2. Kill the app and worker at each USB lifecycle state and verify watchdog restoration or a clearly signaled recovery-required state.
