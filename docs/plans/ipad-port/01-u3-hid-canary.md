@@ -101,7 +101,7 @@ a publication with no lease and so pinned the order the device refuses.
 
 **Before the first device trial**
 
-- [ ] Grant Input Monitoring to the report reader in the ignored build tree and to the terminal that launches the trial; the reader names both on a denial, and the grant must be given again after any change to its source.
+- [x] Grant Input Monitoring to the report reader in the ignored build tree and to the application that hosts the session that launches the trial — on this Mac that is the editor, not a terminal, because the request is attributed to the responsible process. Granted; the reader refuses nothing on permission grounds and, given the device's real identifiers, still binds nothing because no keyboard interface exists yet. Whether the grant suffices once a device is actually seized is only observable on the first trial, where a refusal names the pane, the binary and the re-grant rule. The grant must be given again after any change to the reader's source, since the file name carries its digest.
 - [x] Add the appending-capable broker to the deployment allowlists in `host/replace-u2-broker-wifi.py` and `device/u2-replace-broker.py`.
 - [x] Preflight: pinned Wi-Fi SSH, USB recognised, broker idle with a learned profile, and the strict external check passing with no journal.
 - [x] Take a fresh restore kit.
