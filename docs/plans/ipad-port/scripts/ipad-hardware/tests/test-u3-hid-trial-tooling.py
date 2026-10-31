@@ -9,12 +9,20 @@ prepared, one worker at a time, and no publication without one - so the
 refusals, the publication ordering and the single rule that matters most - no
 `confirm` without the strict external check's own output as proof - are
 observable without a trial.
+
+The host-side report reader is the one part with a compiled helper. It is built
+here and run only in a mode that can bind nothing: the identifiers it is given
+belong to no device, so it refuses and stops at its deadline. Nothing in this
+file opens, seizes or reads a device, and no report ever reaches this Mac's own
+HID stack from a test.
 """
 
 import hashlib
+import os
 from pathlib import Path
 import re
 import runpy
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -24,10 +32,15 @@ ROOT = Path(__file__).resolve().parents[6]
 HOST = ROOT / "docs/plans/ipad-port/scripts/ipad-hardware/host"
 CAPTURE = runpy.run_path(str(HOST / "capture-u2-hid-enumeration.py"))
 RUNNER = runpy.run_path(str(HOST / "run-u2-hid-trial-wifi.py"))
+REPORTS = runpy.run_path(str(HOST / "capture-u2-hid-reports.py"))
+READER = HOST / "u2-hid-report-reader.swift"
 
 VENDOR, PRODUCT = 0x05AC, 0x12AB
 FAKE_SERIAL = "F4KESER1ALNUMBER0001"
 FAKE_UDID = "00008103-000A1B2C3D4E5F60"
+# Identifiers no attached device carries, so the reader binds nothing.
+UNBOUND_VENDOR, UNBOUND_PRODUCT = 0xFFFF, 0xFFFF
+TEMPORARIES = []
 
 
 def interface(number, triple, endpoints):
@@ -290,13 +303,17 @@ class Surface:
         self.evidence = {}
         self.phase = "absent"
         self.worker = False
+        # A fresh, randomly named evidence directory, as the real run has: the
+        # provenance check accepts a reports file only inside this one.
+        self.trial = Path(tempfile.mkdtemp(prefix="u3-hid-trial-"))
+        TEMPORARIES.append(self.trial)
         self.state = dict(
             local={"canary": "a" * 64, "broker": "b" * 64},
             staged="a" * 64, reachable=True,
             status="OK phase=absent publication=enabled",
             function="absent-service", kit=0, canary=(0, b"reports written=12\n"),
-            lease=True, capture=("pass", "outcome=pass\n"), usb=True,
-            strict=(True, b"U2_V7_CURRENT ok\n"))
+            lease=True, capture=None, reports="reports-recorded", sequence=None,
+            publish=None, usb=True, strict=(True, b"U2_V7_CURRENT ok\n"))
         self.state.update(overrides)
 
     def ask(self, command):
@@ -308,6 +325,8 @@ class Surface:
             return "OK prepared"
         if command.startswith("publish-hid "):
             self.steps.append("publish-hid")
+            if self.state["publish"] is not None:
+                return self.state["publish"]
             if not self.worker or self.phase != "prepared":
                 return "ERR rejected"
             self.phase = "published"
@@ -337,13 +356,38 @@ class Surface:
         self.worker = False  # the lease goes back when the canary exits
         return self.state["canary"]
 
-    def start_capture(self, stage):
+    def start_reports(self, stage):
+        self.steps.append("start-reports")
+        return {"outcome": self.state["reports"]}
+
+    def collect_reports(self, handle):
+        """The seizing reader's own file, written where this run can own it."""
+        self.steps.append("collect-reports")
+        outcome = handle["outcome"]
+        if outcome in ("reports-recorded", "no-reports"):
+            sequence = (CAPTURE["expected_reports"]() if self.state["sequence"] is None
+                        else self.state["sequence"])
+            if outcome == "no-reports":
+                sequence = []
+            (self.trial / "reports.txt").write_text(
+                "".join(item.hex() + "\n" for item in sequence))
+        path = RUNNER["captured_reports_path"](outcome, self.trial, "reports.txt")
+        return outcome, "%s outcome=%s\n" % (REPORTS["PREFIX"], outcome), path
+
+    def start_capture(self, stage, reports):
         self.steps.append("start-capture")
-        return stage
+        return (stage, reports)
 
     def collect_capture(self, handle):
         self.steps.append("collect-capture")
-        return self.state["capture"]
+        if self.state["capture"] is not None:
+            return self.state["capture"]
+        # The real comparator, on synthetic descriptors plus whatever the
+        # capture step actually wrote: a pass can only come through that file.
+        reports = (CAPTURE["parse_reports"](Path(handle[1]).read_text())
+                   if handle[1] else None)
+        result = evaluate(published(), reports=reports)
+        return result["outcome"], CAPTURE["render"](result)
 
     def environment(self):
         return {
@@ -357,6 +401,8 @@ class Surface:
             "start_canary": self.start_canary,
             "await_lease": self.await_lease,
             "collect_canary": self.collect_canary,
+            "start_reports": self.start_reports,
+            "collect_reports": self.collect_reports,
             "start_capture": self.start_capture,
             "collect_capture": self.collect_capture,
             "usb_present": lambda: self.state["usb"],
@@ -381,13 +427,27 @@ def runner():
     surface = Surface()
     summary = RUNNER["main"](options(), surface.environment())
     assert summary["confirmed"] is True, summary
+    # The observed sequence the capture step recorded is what makes a pass
+    # reachable at all, and it only matches because it is the canary's own.
+    assert summary["hid_proof"] == "pass", summary
+    assert summary["enumeration"] == "pass", summary
     assert surface.asked[:3] == ["status", "prepare", "publish-hid hidcanary"], surface.asked
-    # The lease is held across the publication, and the host-side enumeration
-    # capture starts while it is still held: the canary's exit releases the
-    # lease and the broker tears the appended interface down again.
-    assert surface.steps == ["start-canary", "await-lease", "publish-hid",
-                             "start-capture", "collect-canary",
-                             "collect-capture"], surface.steps
+    # The report reader is armed *before* the publication, which is the whole
+    # safety argument: from the moment the interface appears until something
+    # seizes it, the device's reports are real keyboard input to this Mac, so
+    # the seize must not race the system binding the new keyboard. Everything
+    # else runs while the lease is held and the function is live - the canary's
+    # exit releases the lease and the interface goes away - and the descriptor
+    # capture starts after the reports are collected, because the comparator
+    # reads the observed sequence when it starts.
+    assert surface.steps == ["start-canary", "await-lease", "start-reports",
+                             "publish-hid", "collect-reports", "start-capture",
+                             "collect-canary", "collect-capture"], surface.steps
+    assert surface.steps.index("start-reports") < surface.steps.index("publish-hid"), (
+        "the reader must be waiting before the keyboard can appear")
+    live = surface.steps.index("collect-canary")
+    for step in ("collect-reports", "start-capture"):
+        assert surface.steps.index("publish-hid") < surface.steps.index(step) < live, step
 
     # The rule that matters most: the confirm argument is the digest of the
     # strict external check's own output and of nothing else.
@@ -403,6 +463,15 @@ def runner():
     assert other_confirms == ["confirm " + hashlib.sha256(other_output).hexdigest()], (
         other_confirms)
     assert other_confirms != confirms, other_confirms
+
+    # A refused publication still collects the reader that was already armed:
+    # one left running holds a device seized on this Mac.
+    stillborn = Surface(publish="ERR rejected")
+    rejected(lambda: RUNNER["main"](options(), stillborn.environment()),
+             "additive publication")
+    assert stillborn.steps == ["start-canary", "await-lease", "start-reports",
+                               "publish-hid", "collect-reports",
+                               "collect-canary"], stillborn.steps
 
     # No lease, no publication: the broker would refuse it anyway, and the
     # canary that was started is collected rather than left running.
@@ -425,8 +494,49 @@ def runner():
                     "report-descriptor-mismatch", "rejected"):
         assert RUNNER["hid_proof"](outcome) == "fail", outcome
 
+    # One wrong, missing or inserted report closes the only route to a pass,
+    # and the trial says which it was rather than going quiet.
+    expected = CAPTURE["expected_reports"]()
+    for sequence, name in ((([bytes([1] * 8)] + expected[1:]), "wrong"),
+                           (expected[1:], "missing"),
+                           (([bytes([1] * 8)] + expected), "inserted")):
+        divergent = Surface(sequence=sequence)
+        result = RUNNER["main"](options(), divergent.environment())
+        assert result["enumeration"] == "reports-mismatch", (name, result)
+        assert result["hid_proof"] == "fail", (name, result)
+        assert "index=0 " in divergent.evidence["enumeration.txt"].decode(), name
+
+    # A permission refusal, an empty capture and a reader that bound nothing
+    # are each their own non-pass, and none of them clears the journal: the
+    # confirm is never sent, so the original stays journalled and healable.
+    gaps = {}
+    for outcome, label in (("permission-denied", "reports-permission-denied"),
+                           ("no-reports", "reports-empty"),
+                           ("no-matching-device", "reports-device-unbound"),
+                           ("several-matching-devices", "reports-device-ambiguous"),
+                           ("profile-unavailable", "reports-precondition-missing"),
+                           ("seize-refused", "reports-capture-rejected")):
+        gap = Surface(reports=outcome)
+        gaps[label] = rejected(
+            lambda gap=gap: RUNNER["main"](options(), gap.environment()), label)
+        assert not [item for item in gap.asked if item.startswith("confirm ")], (
+            outcome, gap.asked)
+        assert "heal-status" in gap.asked, outcome
+        assert RUNNER["reports_gap"](outcome) == label, outcome
+    assert len(set(gaps.values())) == len(gaps), gaps
+    # Armed before the publication, a reader that bound nothing means the
+    # interface never appeared; that is not the same statement as a reader
+    # that held the device and saw nothing arrive.
+    assert RUNNER["REPORT_GAPS"]["no-matching-device"] != RUNNER["REPORT_GAPS"]["no-reports"]
+    assert RUNNER["reports_gap"]("reports-recorded") is None
+    assert len(set(RUNNER["REPORT_GAPS"].values())) == len(RUNNER["REPORT_GAPS"])
+    assert "reports-recorded" not in RUNNER["REPORT_GAPS"], RUNNER["REPORT_GAPS"]
+    # The permission refusal names the grant, where an operator reads it.
+    assert "Input Monitoring" in RUNNER["__doc__"], "the runner must name the grant"
+
     # An observed-report file is accepted only where this trial wrote it, so no
-    # operator-supplied file can manufacture a pass.
+    # operator-supplied file can manufacture a pass - and the file this run's
+    # own capture step wrote is accepted through that same check.
     with tempfile.TemporaryDirectory(prefix="u3-hid-reports-") as temporary:
         trial = Path(temporary) / "trial"
         trial.mkdir()
@@ -442,7 +552,16 @@ def runner():
                  "evidence directory")
         rejected(lambda: RUNNER["checked_reports_path"](
             str(trial / ".." / "reports.txt"), trial), "evidence directory")
-    # The limitation belongs where an operator reads it.
+        assert RUNNER["captured_reports_path"]("reports-recorded", trial,
+                                               "reports.txt") == str(inside.resolve())
+        # Only a recorded sequence yields a path at all.
+        for outcome in ("no-reports", "permission-denied", "no-matching-device"):
+            assert RUNNER["captured_reports_path"](outcome, trial, "reports.txt") is None
+        rejected(lambda: RUNNER["captured_reports_path"]("reports-recorded", trial,
+                                                         "absent.txt"), "evidence directory")
+        rejected(lambda: RUNNER["captured_reports_path"]("reports-recorded", trial,
+                                                         "../reports.txt"), "evidence directory")
+    # The labels belong where an operator reads them.
     assert "reports-unobserved" in RUNNER["__doc__"], "the runner must state the limitation"
 
     # The one rule worth proving: a failing strict check never produces a confirm.
@@ -473,7 +592,142 @@ def runner():
     print("PASS HID trial runner refusals and proof-gated confirm")
 
 
+def compiled(temporary):
+    binary = Path(temporary) / "u2-hid-report-reader"
+    build = subprocess.run(
+        ["/usr/bin/xcrun", "swiftc", str(READER), "-o", str(binary)],
+        stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=600,
+        env=dict(os.environ, CLANG_MODULE_CACHE_PATH=str(Path(temporary) / "clang"),
+                 SWIFT_MODULE_CACHE_PATH=str(Path(temporary) / "swift")))
+    assert build.returncode == 0, build.stderr.decode("utf-8", "replace")
+    assert binary.is_file()
+    return binary
+
+
+def reader():
+    """The reader compiles, refuses what it cannot seize, and never falls back."""
+    source = READER.read_text()
+    # The whole point of the tool: reports are seized away from this Mac's HID
+    # stack, and there is no passive fallback to fall back to.
+    assert "kIOHIDOptionsTypeSeizeDevice" in source
+    assert "kIOHIDOptionsTypeNone" in source
+    # Nothing that reads an identifier is referenced at all, so none can reach
+    # the summary or the saved file; the reader's own output is checked below.
+    for forbidden in ("kIOHIDSerialNumberKey", "SerialNumber", "UniqueDeviceID",
+                      "kUSBSerialNumberString", "PairRecord"):
+        assert forbidden not in source, forbidden
+    # Matched by the boot keyboard's usage as well as the learned IDs, so the
+    # operator's own keyboard cannot be bound by accident.
+    for key in ("kIOHIDPrimaryUsagePageKey", "kIOHIDPrimaryUsageKey",
+                "kIOHIDVendorIDKey", "kIOHIDProductIDKey"):
+        assert key in source, key
+    assert not re.search(r"0x05[aA][cC]", source), "no device-specific identifier may be compiled in"
+    # The grant is tied to this binary's bytes, so the refusal says that a
+    # changed source needs the grant again rather than leaving it to be found.
+    assert "after-source-change=grant-it-again" in source, source[:0]
+
+    with tempfile.TemporaryDirectory(prefix="u3-hid-reader-") as temporary:
+        binary = compiled(temporary)
+        self_test = subprocess.run([str(binary), "--self-test"], stdout=subprocess.PIPE,
+                                   stderr=subprocess.PIPE, timeout=120)
+        assert self_test.returncode == 0, self_test.stdout + self_test.stderr
+        usage = subprocess.run([str(binary)], stdout=subprocess.PIPE,
+                               stderr=subprocess.PIPE, timeout=60)
+        assert usage.returncode == 64, usage.returncode
+        # Bound to nothing: no attached device carries this pair, so the reader
+        # must say so and stop at its deadline rather than seize anything.
+        out = Path(temporary) / "reports.txt"
+        bound = subprocess.run([str(binary), "0x%04x" % UNBOUND_VENDOR,
+                                "0x%04x" % UNBOUND_PRODUCT, "1", "4", str(out)],
+                               stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=120)
+        text = bound.stdout.decode("ascii", "replace")
+        label = REPORTS["READER_OUTCOMES"].get(bound.returncode)
+        # Either outcome is honest with no device: nothing matched, or this Mac
+        # has not granted the reader the permission it needs. Never a pass.
+        assert label in ("no-matching-device", "permission-denied"), (bound.returncode, text)
+        assert "outcome=%s" % label in text, text
+        assert "outcome=reports-recorded" not in text, text
+        assert not out.exists(), "nothing was seized, so nothing may be written"
+        if label == "permission-denied":
+            assert "input-monitoring" in text, text
+        CAPTURE["assert_identifier_free"](text)
+        for secret in (FAKE_SERIAL, FAKE_UDID, "SerialNumber", "UniqueDeviceID"):
+            assert secret not in text, secret
+
+    # Each outcome is its own, and none of them shares the success code: a
+    # tooling fault read as a hardware result would be a false negative.
+    codes = REPORTS["READER_OUTCOMES"]
+    assert len(set(codes.values())) == len(codes), codes
+    assert codes[0] == "reports-recorded"
+    for outcome in ("no-reports", "permission-denied", "no-matching-device",
+                    "several-matching-devices", "seize-refused"):
+        assert outcome in codes.values(), outcome
+    exits = REPORTS["EXIT_CODES"]
+    assert len(set(exits.values())) == len(exits), exits
+    assert exits["reports-recorded"] == 0
+    assert all(code != 0 for name, code in exits.items() if name != "reports-recorded")
+    assert set(codes.values()) | {"profile-unavailable"} == set(exits), (codes, exits)
+    print("PASS HID report reader compiles, refuses what it cannot seize, one outcome each")
+
+
+def report_capture():
+    """The wrapper takes the IDs from the learned profile and never hangs."""
+    assert REPORTS["identifiers"]({"vendor": VENDOR, "product": PRODUCT}) == (VENDOR, PRODUCT)
+    calls = []
+
+    def unavailable():
+        calls.append("fetch")
+        raise ValueError("broker has no learned device profile")
+
+    # No device, so no profile: a missing precondition, reported and not waited on.
+    assert REPORTS["identifiers"]({"vendor": None, "product": None},
+                                 fetch=unavailable) is None
+    assert calls == ["fetch"], calls
+
+    def learned():
+        return {"schemaVersion": 3, "usbVendorID": VENDOR, "usbProductID": PRODUCT,
+                "functions": ["stock"]}
+
+    assert REPORTS["identifiers"]({"vendor": None, "product": None},
+                                 fetch=learned) == (VENDOR, PRODUCT)
+
+    with tempfile.TemporaryDirectory(prefix="u3-hid-capture-") as temporary:
+        result = subprocess.run(
+            [sys.executable, str(HOST / "capture-u2-hid-reports.py"),
+             "--out-dir=%s" % temporary, "--vendor=0x%04x" % UNBOUND_VENDOR,
+             "--product=0x%04x" % UNBOUND_PRODUCT, "--deadline=1", "--max-reports=4"],
+            stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=900)
+        text = result.stdout.decode("ascii", "replace")
+        match = re.search(r"outcome=([a-z-]+)", text)
+        assert match, text
+        label = match.group(1)
+        assert label in ("no-matching-device", "permission-denied"), text
+        assert result.returncode == REPORTS["EXIT_CODES"][label], (result.returncode, text)
+        assert "outcome=reports-recorded" not in text, text
+        assert not list(Path(temporary).iterdir()), "nothing was seized, so no reports file"
+        CAPTURE["assert_identifier_free"](text)
+        # The binary the operator has to grant lives at a stable path in the
+        # ignored build tree, not in a temporary directory that gets reaped,
+        # and its name carries the source digest so a changed source is a
+        # visibly different artifact.
+        built = re.search(r"reader=(\S+)", text)
+        assert built, text
+        binary = Path(built.group(1))
+        assert binary.parent == REPORTS["BUILD"], binary
+        assert binary.is_file() and binary.name.startswith("u2-hid-report-reader-"), binary
+        digest = hashlib.sha256(READER.read_bytes()).hexdigest()
+        assert binary.name.endswith(digest[:16]), (binary, digest[:16])
+        assert REPORTS["reader_binary"]() == binary, "a second call reuses the same binary"
+    print("PASS HID report capture wrapper outcomes and missing precondition")
+
+
 if __name__ == "__main__":
-    comparator()
-    descriptors()
-    runner()
+    try:
+        comparator()
+        descriptors()
+        reader()
+        report_capture()
+        runner()
+    finally:
+        for directory in TEMPORARIES:
+            shutil.rmtree(directory, ignore_errors=True)

@@ -3,7 +3,7 @@
 
 Usage: --broker vNN --function NAME --controller REGISTRY_ID
        --canary-path /var/jb/... --canary-sha256 HEX --broker-sha256 HEX
-       --configuration N --stock-interfaces N [--reports FILE]
+       --configuration N --stock-interfaces N
 
 The expected binary digests are arguments rather than pins, because the canary
 is still changing; the trial refuses unless the Mac-built binaries and the copy
@@ -23,9 +23,21 @@ armed: `prepare`, then the canary, which connects to the broker and sends
 `publish-hid NAME`, because the broker refuses to publish with no worker
 registered, and that registration is also what makes the worker's death
 restore the original. The canary holds that one connection open across the
-publication and waits, bounded, for the appended interface to appear. The
-host-side enumeration capture is started while the lease is still held and the
-function is live, since releasing the lease tears the interface down again.
+publication and waits, bounded, for the appended interface to appear.
+
+The report capture is armed before `publish-hid`, not after: the device
+publishes itself as a real USB keyboard, so a trial that let the system bind it
+first would type its string into whatever window has focus on this Mac. Armed
+first, the reader is already waiting when the interface appears and seizes it
+before the canary types, which is a guarantee rather than a race. Its deadline
+therefore covers the publication and the canary's interface wait as well as the
+typing. A reader armed this early that still binds nothing means the interface
+never appeared at all, and is labelled as that rather than as an empty capture.
+
+The enumeration capture is then started while the lease is still held and the
+function is live, since releasing the lease tears the interface down again, and
+after the reports are collected, because the comparator reads the observed
+sequence when it starts.
 
 It then waits up to 120 s with no host action for USB to return, runs the
 strict external check, and sends `confirm <sha256(check output)>` only when
@@ -33,14 +45,18 @@ that check's own output is the proof - never on a successful canary write, a
 passing descriptor comparison or anything else. On any failure the journal is
 left alone and the broker's heal-status is reported.
 
-Limitation, reported and never papered over: no step here records the keyboard
-input reports the device sends. Reading a live keyboard's input reports on this
-Mac needs an OS privacy permission and may be impossible while the system owns
-the device, so a clean trial ends `hid-proof=inconclusive
-reason=reports-unobserved` with the descriptor evidence only, and exits
-non-zero. `--reports` is accepted only for a file this same trial produced in
-its own evidence directory; an operator-supplied path is refused, so an
-unprovenanced file cannot manufacture a pass.
+An observed-report file is accepted only where this same trial wrote it, in its
+own fresh evidence directory; an operator-supplied path is refused, so an
+unprovenanced file cannot manufacture a pass. `hid-proof=pass` needs the
+descriptors to have matched and the observed reports to have matched the
+press/release sequence the canary types; a comparison with no sequence at all
+is `hid-proof=inconclusive reason=reports-unobserved`, never a pass.
+
+Reading input reports on this Mac needs the Input Monitoring privacy grant, so
+a permission refusal is its own labelled outcome, as are an empty capture and a
+reader that bound no device or several. None of them is a HID result and none
+of them clears the journal: the trial refuses before `confirm`, leaving the
+original journalled and healable, and reports the broker's heal-status.
 
 The command surface is injected (`live_environment`), so the refusals, the
 publication ordering and the proof-gated confirm are testable with no device
@@ -71,6 +87,13 @@ USB_RETURN_SECONDS = 120
 LEASE_WAIT_SECONDS = 20
 CANARY_SECONDS = 90
 CAPTURE_SECONDS = 180
+# Larger than the typing alone, because the reader is armed before the
+# publication: its deadline has to cover the broker's publish reply, the
+# canary's own bounded wait for the appended interface to appear, and only then
+# the twelve reports. It still returns the moment the expected count arrives,
+# so a healthy run does not spend this; it is a bound, not a pause.
+REPORT_SECONDS = 90
+REPORTS_FILE = "reports.txt"
 # The canary says this as soon as the broker has made it the worker.
 LEASE_MARKER = b"U3_HID_CANARY lease=held"
 PREFIX = "U2_HID_TRIAL"
@@ -95,13 +118,38 @@ def hid_proof(outcome):
     return "inconclusive" if outcome == "reports-unobserved" else "fail"
 
 
+RECORDED = "reports-recorded"
+# Why no observed sequence reached the comparator, one label per cause.
+#
+# None of these is a result about the device. A permission refusal is a fault
+# on this Mac. Because the reader is armed before the publication, a reader
+# that bound nothing means the appended interface never appeared at all, which
+# is `reports-device-unbound` and never the empty-capture label; the empty
+# capture is the narrower statement that the reader held the device and nothing
+# arrived. Collapsing any of them would let one read as "the device sent
+# nothing".
+REPORT_GAPS = {"no-reports": "reports-empty",
+               "permission-denied": "reports-permission-denied",
+               "no-matching-device": "reports-device-unbound",
+               "several-matching-devices": "reports-device-ambiguous",
+               "profile-unavailable": "reports-precondition-missing",
+               "seize-refused": "reports-capture-rejected"}
+
+
+def reports_gap(outcome):
+    """The label for a capture that produced no sequence, or None if it did."""
+    if outcome == RECORDED:
+        return None
+    return REPORT_GAPS.get(outcome, "reports-capture-rejected")
+
+
 def checked_reports_path(value, trial):
     """Accept an observed-report file only if this trial produced it itself.
 
-    Nothing in this runner records reports, so an operator-supplied file is the
-    only way one could arrive - and an unprovenanced file would turn a red
-    trial green. The trial directory is fresh and randomly named, so requiring
-    the file to live in it refuses anything this run did not write.
+    The capture step below is the only thing that writes one, so any other path
+    arrived from outside - and an unprovenanced file would turn a red trial
+    green. The trial directory is fresh and randomly named, so requiring the
+    file to live in it refuses anything this run did not write.
     """
     if value is None:
         return None
@@ -110,6 +158,18 @@ def checked_reports_path(value, trial):
         raise ValueError("an observed-report file must be one this trial wrote in its "
                          "own evidence directory; no other file may produce a HID pass")
     return str(candidate)
+
+
+def captured_reports_path(outcome, trial, name):
+    """The capture step's own file, through the same provenance check as any other.
+
+    A path only exists where the reader says it recorded a sequence, so a
+    refusal, an empty capture or a reader that bound nothing hands the
+    comparator nothing to compare.
+    """
+    if outcome != RECORDED:
+        return None
+    return checked_reports_path(str(Path(trial) / name), trial)
 
 
 def main(options, env):
@@ -152,22 +212,47 @@ def main(options, env):
                     raise ValueError("the canary never reported the broker lease held "
                                      "within %ds; nothing was published"
                                      % LEASE_WAIT_SECONDS)
-                published = env["ask"]("publish-hid " + options["function"])
-                if published != "OK published-additive":
-                    raise ValueError("broker refused the additive publication (%s)"
-                                     % published)
+                # Armed before the publication, and this ordering is the whole
+                # safety argument: the device publishes itself as a real USB
+                # keyboard, so from the moment the interface appears until
+                # something seizes it, every report it sends is real keyboard
+                # input to whatever window has focus on this Mac. Starting the
+                # reader afterwards would leave a race between the system
+                # binding the new keyboard and the seize taking it away; armed
+                # first, the reader is already waiting when the interface
+                # appears and seizes it before the canary - which types only
+                # after its own bounded wait for that same interface finds it -
+                # can write anything. There is no interface to match yet, so
+                # waiting is all the reader does until the publication lands.
+                reader = env["start_reports"]("published")
+                try:
+                    published = env["ask"]("publish-hid " + options["function"])
+                    if published != "OK published-additive":
+                        raise ValueError("broker refused the additive publication (%s)"
+                                         % published)
+                finally:
+                    # Collected on every path, including a refused publication:
+                    # a reader left running holds a device seized. Bounded by
+                    # its own deadline, so this cannot wait indefinitely.
+                    reports = env["collect_reports"](reader)
             except BaseException:
                 env["collect_canary"](canary)
                 raise
-            # Started while the lease is held and the function is live: the
-            # canary's release tears the appended interface down again, so a
-            # capture that followed it would prove nothing.
-            capture = env["start_capture"]("published")
-            return published, env["collect_canary"](canary), env["collect_capture"](capture)
+            # The descriptor capture also has to run while the lease is held
+            # and the function is live - the canary's release tears the
+            # appended interface down again - and it has to start after the
+            # reports are collected, because the comparator reads the observed
+            # sequence when it starts. The reader returns as soon as the
+            # expected report count arrives, so both still fall inside the
+            # lease the canary has not yet given back.
+            capture = env["start_capture"]("published", reports[2])
+            return (published, env["collect_canary"](canary),
+                    env["collect_capture"](capture), reports)
 
-        (published, canary, capture), lifecycle = env["observe"](body)
+        (published, canary, capture, reports), lifecycle = env["observe"](body)
         env["evidence"]("lifecycle.ndjson", lifecycle[:16384])
         env["evidence"]("canary.txt", canary[1][:8192])
+        env["evidence"]("report-capture.txt", reports[1].encode("ascii")[:8192])
         env["evidence"]("enumeration.txt", capture[1].encode("ascii"))
         back = env["usb_present"]()
         waited = 0
@@ -179,9 +264,10 @@ def main(options, env):
         heal = env["ask"]("heal-status")
         env["evidence"]("heal-status.txt", heal.encode("ascii") + b"\n")
         proof = hid_proof(capture[0])
-        print("%s published=%s canary-exit=%d enumeration=%s hid-proof=%s "
-              "usb=%s heal=%s" % (PREFIX, published, canary[0], capture[0], proof,
-                                  "returned" if back else "absent", heal), flush=True)
+        gap = reports_gap(reports[0])
+        print("%s published=%s canary-exit=%d reports=%s enumeration=%s hid-proof=%s "
+              "usb=%s heal=%s" % (PREFIX, published, canary[0], reports[0], capture[0],
+                                  proof, "returned" if back else "absent", heal), flush=True)
         if not back:
             raise ValueError("USB did not return in %ds; journal retained, heal %s"
                              % (USB_RETURN_SECONDS, heal))
@@ -190,6 +276,13 @@ def main(options, env):
         env["evidence"]("postcheck.txt", post)
         if not ok:
             raise ValueError("strict external check failed; journal retained, heal %s" % heal)
+        if gap:
+            # No observed sequence, so there is no HID result to report and no
+            # completed trial to clear a journal for. Said with its own label
+            # and refused here, before the confirm: the original stays
+            # journalled and healable, which is the conservative direction.
+            raise ValueError("report capture produced no observed sequence (%s); "
+                             "journal retained, heal %s" % (gap, heal))
         # The check's own output is the proof. Nothing else may clear a journal.
         reply = env["ask"]("confirm " + hashlib.sha256(post).hexdigest())
         ok_after, after = env["strict"]("absent")
@@ -206,7 +299,7 @@ def main(options, env):
                 "no-report-sequence-was-recorded-on-this-Mac"
                 if capture[0] == "reports-unobserved" else "see-the-enumeration-evidence"))
         return {"confirmed": True, "enumeration": capture[0], "hid_proof": proof,
-                "canary_exit": canary[0]}
+                "reports": reports[0], "canary_exit": canary[0]}
     finally:
         env["stop_syslog"](syslog)
 
@@ -254,7 +347,12 @@ def live_environment(options):
                 tail = process.communicate(timeout=SUPPORT["WINDOW_SECONDS"] + 10)[0]
         return result, ready + tail
 
-    reports = checked_reports_path(options["reports"], trial)
+    # The capture step is the only producer of an observed sequence; an
+    # operator-supplied path cannot live in this run's fresh directory, so this
+    # refuses `--reports` rather than letting it reach the comparator.
+    if checked_reports_path(options["reports"], trial) is not None:
+        raise ValueError("the observed-report file is this trial's own capture; "
+                         "--reports may not be supplied")
 
     def start_canary():
         """The lease holder, left running: it is the broker's worker."""
@@ -289,13 +387,40 @@ def live_environment(options):
             rest = process.communicate(timeout=10)[0]
         return process.returncode, handle["output"] + (rest or b"")
 
-    def start_capture(stage):
+    def start_reports(stage):
+        """The seizing report reader: it takes the keyboard away from this Mac.
+
+        Until it has the device, the canary's keystrokes are real input to
+        whatever window has focus here, so this is started first and its
+        refusals are never worked around.
+        """
+        return subprocess.Popen(
+            [sys.executable, str(HOST / "capture-u2-hid-reports.py"),
+             "--out-dir=%s" % trial, "--name=%s-%s" % (stage, REPORTS_FILE),
+             "--deadline=%d" % REPORT_SECONDS],
+            stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
+
+    def collect_reports(process):
+        try:
+            out = process.communicate(timeout=REPORT_SECONDS + 90)[0]
+        except subprocess.TimeoutExpired:
+            process.kill()
+            out = process.communicate(timeout=10)[0]
+        text = (out or b"").decode("ascii", "replace")
+        match = re.search(r"outcome=([a-z-]+)", text)
+        outcome = match.group(1) if match else "rejected"
+        # Provenance unchanged: the file goes through the same check as any
+        # other, so only one this run wrote in its own directory can be used.
+        return outcome, text, captured_reports_path(outcome, trial,
+                                                    "published-" + REPORTS_FILE)
+
+    def start_capture(stage, observed):
         argv = [sys.executable, str(HOST / "capture-u2-hid-enumeration.py"),
                 "--configuration=%d" % options["configuration"],
                 "--stock-interfaces=%d" % options["stock_interfaces"],
                 "--out=%s" % (trial / ("enumeration-%s.txt" % stage))]
-        if reports:
-            argv.append("--reports=%s" % reports)
+        if observed:
+            argv.append("--reports=%s" % observed)
         return subprocess.Popen(argv, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
 
     def collect_capture(process):
@@ -332,6 +457,8 @@ def live_environment(options):
         "start_canary": start_canary,
         "await_lease": await_lease,
         "collect_canary": collect_canary,
+        "start_reports": start_reports,
+        "collect_reports": collect_reports,
         "start_capture": start_capture,
         "collect_capture": collect_capture,
         "usb_present": SUPPORT["usb_present"],
