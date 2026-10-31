@@ -23,9 +23,10 @@ import tempfile
 ROOT = Path(__file__).resolve().parents[5]
 BUILD = ROOT / "build/ipad-hardware"
 # Selectable broker builds. Old variants (v2-v11) are in git history.
-# The learned-profile build publishes only the journaled original; the
-# additive build can also publish that original plus one appended function
-# name. Both carry the same entitlements and the same restore path.
+# The learned-profile build has no appending command compiled in at all, so it
+# stays the conservative rollback target; the additive build can also publish
+# the journaled original plus one appended function. Both carry the same
+# entitlements and the same restore path, and their source digests differ.
 VARIANTS = {
     "--v12-learned-profile": "u2-native-noop-trial-v12-learned-profile",
     "--v13-additive-function": "u3-native-additive-function-v13",
@@ -66,6 +67,7 @@ def main():
     if len(sys.argv) != 2 or sys.argv[1] not in VARIANTS:
         raise ValueError("usage: " + " | ".join(sorted(VARIANTS)))
     output = BUILD / VARIANTS[sys.argv[1]]
+    additive_function = sys.argv[1] == "--v13-additive-function"
     explicit_cycle = True
     controller_clone = True
     post_clone = True
@@ -82,6 +84,7 @@ def main():
            for path in sources):
         raise ValueError("unsafe source")
     source_digest = hashlib.sha256(
+        (b"MAC2JB_U3_ADDITIVE_FUNCTION=1\0" if additive_function else b"") +
         (b"MAC2JB_U2_NO_INITIAL_CYCLE=1\0" if no_initial_cycle else b"") +
         (b"MAC2JB_U2_READY_GATE=1\0" if ready_gated else b"") +
         (b"MAC2JB_U2_SETTLED_RECOVERY=1\0" if settled_recovery else b"") +
@@ -109,6 +112,8 @@ def main():
             defines += ["-D", "MAC2JB_U2_POST_CLONE"]
         if settled_recovery:
             defines += ["-D", "MAC2JB_U2_SETTLED_RECOVERY"]
+        if additive_function:
+            defines += ["-D", "MAC2JB_U3_ADDITIVE_FUNCTION"]
         run(["/usr/bin/xcrun", "--sdk", "iphoneos", "swiftc",
              "-target", "arm64-apple-ios15.0", "-sdk", SDK,
              "-D", "MAC2JB_ENABLE_U2_NOOP_TRIAL",
@@ -144,6 +149,8 @@ def main():
         print("U2_NOOP_TRIAL_BINARY post-clone-normalization=enabled")
     if settled_recovery:
         print("U2_NOOP_TRIAL_BINARY settled-recovery=enabled")
+    print("U2_NOOP_TRIAL_BINARY appending-command=" +
+          ("compiled-in" if additive_function else "absent"))
     if ready_gated:
         print("U2_NOOP_TRIAL_BINARY readiness-gate=enabled")
     if no_initial_cycle:

@@ -37,7 +37,9 @@ def run(command, temporary, timeout=180):
 def mac_tests(temporary):
     binary = temporary / "function-shim-tests"
     build = run(["/usr/bin/xcrun", "clang", "-std=c11", "-Wall", "-Werror",
-                 str(SHIM), str(TESTS), "-framework", "IOKit",
+                 str(TESTS), "-framework", "IOKit",  # the test includes the shim source,
+         # so that it can build a session and record what each entry marshals;
+         # linking the shim as well would duplicate every symbol.
                  "-framework", "CoreFoundation", "-o", str(binary)], temporary)
     if build.returncode != 0:
         raise AssertionError("Mac shim tests failed to compile:\n" +

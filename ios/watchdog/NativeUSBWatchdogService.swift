@@ -105,6 +105,15 @@ final class NativeUSBWatchdogService {
             identity: identity, cycleBus: false)
         let recoveryController = controller
         #endif
+        // Only the build that can append a function needs to read which
+        // configuration the host selected; the other has no such command.
+        #if MAC2JB_U3_ADDITIVE_FUNCTION
+        let selectedConfigurationReader: (() throws -> Int)? = {
+            try controller.selectedConfiguration()
+        }
+        #else
+        let selectedConfigurationReader: (() throws -> Int)? = nil
+        #endif
         try self.init(
             publicationEnabled: publicationEnabled,
             stateDirectory: Self.stateDirectory, expectedOwner: 0,
@@ -119,7 +128,7 @@ final class NativeUSBWatchdogService {
                 try Self.waitForConfigured { try controller.isConfigured() }
             },
             controllerConfigured: { try controller.isConfigured() },
-            selectedConfiguration: { try controller.selectedConfiguration() },
+            selectedConfiguration: selectedConfigurationReader,
             unservedFunctions: { try controller.unservedFunctions() },
             restartOwner: { try USBFunctionOwnerRestarter.restart($0, allowed: profile.ownerProcesses) },
             healPolicy: profile.healPolicy(), deviceProfile: profile,
@@ -315,6 +324,7 @@ final class NativeUSBWatchdogService {
         // Publish the journaled original plus one named function, under the
         // same lease, worker and journal guards as publish-noop. The journal
         // keeps the unmodified original, so restore is unchanged.
+        #if MAC2JB_U3_ADDITIVE_FUNCTION
         if command.hasPrefix("publish-hid ") {
             let name = String(command.dropFirst("publish-hid ".count))
             guard publicationEnabled, worker >= 0, let selectedConfiguration else {
@@ -330,6 +340,7 @@ final class NativeUSBWatchdogService {
                                             configuration: try selectedConfiguration())
             return "published-additive"
         }
+        #endif
         if command == "restore" {
             guard let record = try currentRecord() else { return "already-clear" }
             if record.phase == .awaitingVerification {

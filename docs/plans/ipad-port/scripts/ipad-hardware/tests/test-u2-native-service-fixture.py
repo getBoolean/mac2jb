@@ -45,12 +45,16 @@ def fixture_description(label):
     return plistlib.dumps(fields, fmt=plistlib.FMT_BINARY, sort_keys=True)
 
 
-def build(binary, cache):
+def build(binary, cache, defines=()):
+    # defines are the broker's compile-time variant flags. The default is none,
+    # so every caller that passes nothing also proves the broker still builds
+    # without any optional capability compiled in.
     env = dict(os.environ, CLANG_MODULE_CACHE_PATH=str(cache / "clang"),
                SWIFT_MODULE_CACHE_PATH=str(cache / "swift"))
+    flags = [argument for define in defines for argument in ("-D", define)]
     result = subprocess.run(
         ["/usr/bin/xcrun", "swiftc", *(str(ROOT / p) for p in SOURCES),
-         "-o", str(binary)], stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+         *flags, "-o", str(binary)], stdout=subprocess.PIPE, stderr=subprocess.PIPE,
         timeout=60, env=env)
     if result.returncode != 0:
         raise AssertionError("native service fixture failed to compile")

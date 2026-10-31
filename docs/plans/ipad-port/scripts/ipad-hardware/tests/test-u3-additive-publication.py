@@ -347,12 +347,37 @@ def existing_name_refused(binary, parent):
         service.stop()
 
 
+def conservative_variant_has_no_appending_command(binary, parent):
+    """A broker built without the appending capability refuses the command.
+
+    The rollback target is meant to be the broker shape the hardware trials
+    passed, so the capability must be absent from the artifact rather than
+    merely unused. A build's file name cannot carry that guarantee; this can.
+    """
+    service, published = service_with_added_function(binary, parent, "conservative")
+    try:
+        require(service.command("prepare") == "OK prepared")
+        worker = watch(service)
+        reply = service.command(f"publish-hid {ADDED}")
+        require(reply == "ERR rejected",
+                "a broker without the appending command must refuse it: " + str(reply))
+        require(not published.exists(),
+                "a broker lacking the command still published an appended description")
+        require(service.count() == 0, "a refused command still called the controller")
+        require(journaled_original(service) == service.original)
+        worker.close()
+    finally:
+        service.stop()
+
+
 def main():
     with tempfile.TemporaryDirectory(prefix="mac2jb-u3-additive-", dir="/tmp") as temporary:
         root = Path(temporary)
         append_helper(root)
         binary = root / "native-service-fixture"
-        FIXTURE["build"](binary, root / "cache")
+        # The appending command exists only in the variant that carries it.
+        FIXTURE["build"](binary, root / "cache",
+                         defines=("MAC2JB_U3_ADDITIVE_FUNCTION",))
         for name, test in (("malformed", malformed_name_refused),
                            ("content", published_content),
                            ("restart", restart_restores),
@@ -364,13 +389,22 @@ def main():
             directory = root / ("case-" + name)
             directory.mkdir(mode=0o700)
             test(binary, directory)
+        # Same sources, no appending capability compiled in: the conservative
+        # rollback artifact must genuinely lack the command.
+        conservative = root / "native-service-fixture-conservative"
+        FIXTURE["build"](conservative, root / "cache-conservative")
+        require(conservative.read_bytes() != binary.read_bytes(),
+                "the two broker variants must not be identical binaries")
+        directory = root / "case-conservative"
+        directory.mkdir(mode=0o700)
+        conservative_variant_has_no_appending_command(conservative, directory)
     print("PASS additive publication: original plus one interface appended last "
           "in the selected configuration, journal byte-equal to the original, "
           "the exact original bytes put back on worker death, watchdog restart, "
           "lease expiry and an explicit restore, refusal without a lease, in "
           "the wrong phase, on an existing name and on a malformed name, both "
           "before any controller write and with nothing to undo, recovery "
-          "from a failed controller call, and a fallback that refuses to "
+          "from a failed controller call, a fallback that refuses to "
           "publish over a description the journal never recorded")
 
 
