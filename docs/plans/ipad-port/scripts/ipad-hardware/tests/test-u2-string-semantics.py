@@ -6,7 +6,7 @@ import runpy
 
 
 ROOT = Path(__file__).resolve().parents[6]
-COMPARE = runpy.run_path(str(ROOT / "scripts/ipad-hardware/host/u2-string-semantics.py"))["compare"]
+COMPARE = runpy.run_path(str(ROOT / "docs/plans/ipad-port/scripts/ipad-hardware/host/u2-string-semantics.py"))["compare"]
 
 
 def raw(config_string, interface_string, mac_string, endpoint_count=0):

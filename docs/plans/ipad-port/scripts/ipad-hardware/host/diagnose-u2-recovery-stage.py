@@ -20,7 +20,7 @@ import base64
 
 
 ROOT = Path(__file__).resolve().parents[6]
-HOST = ROOT / "scripts/ipad-hardware/host"
+HOST = ROOT / "docs/plans/ipad-port/scripts/ipad-hardware/host"
 GO = ROOT / "build/ipad-hardware/run-readonly-controller-property-keys-wifi"
 CHECK = runpy.run_path(str(HOST / "check-u2-external-current.py"))
 SNAPSHOT = runpy.run_path(str(HOST / "capture-u2-private-baseline.py"))

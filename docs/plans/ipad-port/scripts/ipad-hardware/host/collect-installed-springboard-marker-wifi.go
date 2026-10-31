@@ -31,7 +31,7 @@ const (
 	hostName    = "mac2jb-ipad-known-hosts"
 	keySHA      = "50cf47362f38ff6404979c120147e071bfe8beb924971a27b24210d2250c76dd"
 	hostSHA     = "1db3d7df81efc0ffafd7ce55bffff7b2efdf5b1ec86844278b436adf1b908b35"
-	payloadPath = "scripts/ipad-hardware/device/u1-readonly-installed-springboard-marker-archive.sh"
+	payloadPath = "docs/plans/ipad-port/scripts/ipad-hardware/device/u1-readonly-installed-springboard-marker-archive.sh"
 	payloadSHA  = "378e180d68da91a40bd85b4447d901f2a72bf8615fbc9628757a69dff5070a75"
 	outputPath  = "build/ipad-hardware/installed-springboard-marker-archive.tar"
 	maxBytes    = 16 * 1024 * 1024

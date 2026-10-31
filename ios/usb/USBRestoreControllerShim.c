@@ -178,6 +178,76 @@ done:
     return result;
 }
 
+MAC2JBUSBResult MAC2JBUSBCopyUnservedFunctions(
+    uint64_t expectedControllerRegistryID, char *names, size_t capacity
+) {
+    if (!names || capacity < 2 || expectedControllerRegistryID == 0) return MAC2JBUSBInvalidInput;
+    names[0] = 0;
+    CFMutableDictionaryRef matching = IOServiceMatching("IOUSBDeviceController");
+    if (!matching) return MAC2JBUSBControllerUnavailable;
+    io_iterator_t iterator = IO_OBJECT_NULL;
+    if (IOServiceGetMatchingServices(kIOMainPortDefault, matching, &iterator) != kIOReturnSuccess)
+        return MAC2JBUSBControllerUnavailable;
+    MAC2JBUSBResult result = MAC2JBUSBControllerUnavailable;
+    io_service_t service = IOIteratorNext(iterator);
+    io_service_t extra = service ? IOIteratorNext(iterator) : IO_OBJECT_NULL;
+    IOObjectRelease(iterator);
+    if (!service) return result;
+    if (extra) {
+        IOObjectRelease(extra);
+        IOObjectRelease(service);
+        return result;
+    }
+    uint64_t registryID = 0;
+    if (IORegistryEntryGetRegistryEntryID(service, &registryID) != kIOReturnSuccess ||
+        registryID != expectedControllerRegistryID) {
+        IOObjectRelease(service);
+        return MAC2JBUSBWrongController;
+    }
+    io_iterator_t children = IO_OBJECT_NULL;
+    if (IORegistryEntryGetChildIterator(service, kIOServicePlane, &children) != kIOReturnSuccess) {
+        IOObjectRelease(service);
+        return result;
+    }
+    size_t used = 0;
+    result = MAC2JBUSBSuccess;
+    io_registry_entry_t child;
+    while ((child = IOIteratorNext(children))) {
+        if (IOObjectConformsTo(child, "IOUSBDeviceInterface")) {
+            io_iterator_t clients = IO_OBJECT_NULL;
+            bool served = false;
+            if (IORegistryEntryGetChildIterator(child, kIOServicePlane, &clients) == kIOReturnSuccess) {
+                io_registry_entry_t client = IOIteratorNext(clients);
+                served = client != IO_OBJECT_NULL;
+                if (client) IOObjectRelease(client);
+                IOObjectRelease(clients);
+            }
+            if (!served) {
+                char function[96] = {0};
+                CFTypeRef value = IORegistryEntryCreateCFProperty(
+                    child, CFSTR("USBDeviceFunction"), kCFAllocatorDefault, 0);
+                if (value && CFGetTypeID(value) == CFStringGetTypeID())
+                    CFStringGetCString((CFStringRef)value, function, sizeof(function),
+                                       kCFStringEncodingUTF8);
+                if (value) CFRelease(value);
+                size_t length = strlen(function);
+                if (length == 0 || used + length + 2 > capacity) {
+                    result = MAC2JBUSBDescriptionMismatch;
+                } else {
+                    if (used) names[used++] = ',';
+                    memcpy(names + used, function, length);
+                    used += length;
+                    names[used] = 0;
+                }
+            }
+        }
+        IOObjectRelease(child);
+    }
+    IOObjectRelease(children);
+    IOObjectRelease(service);
+    return result;
+}
+
 void MAC2JBUSBFreeCapturedDescription(uint8_t *bytes) {
     free(bytes);
 }

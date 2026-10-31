@@ -34,7 +34,7 @@ const (
 	keySHA      = "50cf47362f38ff6404979c120147e071bfe8beb924971a27b24210d2250c76dd"
 	hostSHA     = "1db3d7df81efc0ffafd7ce55bffff7b2efdf5b1ec86844278b436adf1b908b35"
 	backupDir   = privateDir + "/backups/clienttruth-before-toolbox-2026-10-30"
-	payloadPath = "scripts/ipad-hardware/device/u1-springboard-r2-stage-install.py"
+	payloadPath = "docs/plans/ipad-port/scripts/ipad-hardware/device/u1-springboard-r2-stage-install.py"
 	payloadSHA  = "b84aa3ce623bfdf67a228b376dbcf782b77322e68d04f9b3cdfb593ad11e4630"
 )
 

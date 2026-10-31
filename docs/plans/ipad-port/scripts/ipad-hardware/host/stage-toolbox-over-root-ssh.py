@@ -18,8 +18,8 @@ HERE = Path(__file__).resolve().parent
 backup = runpy.run_path(str(HERE / "backup-clienttruth-over-root-ssh.py"))
 ROOT = backup["ROOT"]
 ARTIFACT = ROOT / "build/ipad-hardware/mac2jb-u1-stdout-toolbox.tipa"
-PREFLIGHT = ROOT / "scripts/ipad-hardware/device/u1-readonly-toolbox-install-preflight.py"
-VERIFY = ROOT / "scripts/ipad-hardware/device/u1-readonly-staged-toolbox-digest.py"
+PREFLIGHT = ROOT / "docs/plans/ipad-port/scripts/ipad-hardware/device/u1-readonly-toolbox-install-preflight.py"
+VERIFY = ROOT / "docs/plans/ipad-port/scripts/ipad-hardware/device/u1-readonly-staged-toolbox-digest.py"
 DEST = "/var/mobile/Media/.mac2jb-u1-stdout-toolbox.tipa"
 SHA256 = "c97a5d9f60a67329b3b1946e478e95f1afc903d51a7cb7902d8dbdc9a4309f13"
 EXPECTED = (b"TOOLBOX_PREFLIGHT trollstore=one\n"

@@ -13,8 +13,8 @@ import runpy
 
 
 ROOT = Path(__file__).resolve().parents[6]
-RAW = runpy.run_path(str(ROOT / "scripts/ipad-hardware/host/diagnose-u2-semantic-descriptors.py"))
-STRINGS = runpy.run_path(str(ROOT / "scripts/ipad-hardware/host/probe-u2-readonly-string-descriptors.py"))
+RAW = runpy.run_path(str(ROOT / "docs/plans/ipad-port/scripts/ipad-hardware/host/diagnose-u2-semantic-descriptors.py"))
+STRINGS = runpy.run_path(str(ROOT / "docs/plans/ipad-port/scripts/ipad-hardware/host/probe-u2-readonly-string-descriptors.py"))
 
 
 def references(descriptor):

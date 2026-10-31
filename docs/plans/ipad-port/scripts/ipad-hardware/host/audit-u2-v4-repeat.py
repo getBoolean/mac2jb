@@ -25,7 +25,7 @@ import sys
 
 
 ROOT = Path(__file__).resolve().parents[6]
-HOST = ROOT / "scripts/ipad-hardware/host"
+HOST = ROOT / "docs/plans/ipad-port/scripts/ipad-hardware/host"
 BUILD = ROOT / "build/ipad-hardware"
 TRIALS = BUILD / "u2-trials"
 V4 = TRIALS / "run-v4-1793374389603740000-0da211de"

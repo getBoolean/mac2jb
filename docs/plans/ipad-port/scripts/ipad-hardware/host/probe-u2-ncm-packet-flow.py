@@ -17,7 +17,7 @@ import subprocess
 
 
 ROOT = Path(__file__).resolve().parents[6]
-HOST = ROOT / "scripts/ipad-hardware/host"
+HOST = ROOT / "docs/plans/ipad-port/scripts/ipad-hardware/host"
 LINK = runpy.run_path(str(HOST / "check-u2-host-ncm-link.py"))
 CONTROL = runpy.run_path(str(HOST / "probe-u2-readonly-string-descriptors.py"))
 MAC = re.compile(r"(?:[0-9a-f]{1,2}:){5}[0-9a-f]{1,2}", re.I)

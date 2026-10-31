@@ -15,8 +15,8 @@ import subprocess
 
 
 ROOT = Path(__file__).resolve().parents[6]
-HOST = ROOT / "scripts/ipad-hardware/host"
-SOURCE = ROOT / "scripts/ipad-hardware/device/u2-readonly-trial-v3-status.py"
+HOST = ROOT / "docs/plans/ipad-port/scripts/ipad-hardware/host"
+SOURCE = ROOT / "docs/plans/ipad-port/scripts/ipad-hardware/device/u2-readonly-trial-v3-status.py"
 SOURCE_SHA256 = "eae1473dfd916d715bbc0dc95d9c84f5a8fdb63f94f6b25699f00e94bfce81b6"
 
 

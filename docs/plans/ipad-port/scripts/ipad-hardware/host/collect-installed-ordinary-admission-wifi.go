@@ -31,7 +31,7 @@ const (
 	hostName    = "mac2jb-ipad-known-hosts"
 	keySHA      = "50cf47362f38ff6404979c120147e071bfe8beb924971a27b24210d2250c76dd"
 	hostSHA     = "1db3d7df81efc0ffafd7ce55bffff7b2efdf5b1ec86844278b436adf1b908b35"
-	payloadPath = "scripts/ipad-hardware/device/u1-readonly-installed-ordinary-admission-archive.sh"
+	payloadPath = "docs/plans/ipad-port/scripts/ipad-hardware/device/u1-readonly-installed-ordinary-admission-archive.sh"
 	payloadSHA  = "6f89321f5a28820181a1e84c5ae4d459b3bacf7e359ac3f51f9bf883cf09f4e2"
 	outputPath  = "build/ipad-hardware/installed-ordinary-admission-archive.tar"
 	maxBytes    = 16 * 1024 * 1024

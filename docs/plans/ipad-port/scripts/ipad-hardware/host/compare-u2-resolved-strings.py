@@ -20,7 +20,7 @@ import subprocess
 
 
 ROOT = Path(__file__).resolve().parents[6]
-HOST = ROOT / "scripts/ipad-hardware/host"
+HOST = ROOT / "docs/plans/ipad-port/scripts/ipad-hardware/host"
 BASE = ROOT / "build/ipad-hardware/u2-baseline"
 PROBE = runpy.run_path(str(HOST / "probe-u2-readonly-string-descriptors.py"))
 SEMANTICS = runpy.run_path(str(HOST / "u2-string-semantics.py"))

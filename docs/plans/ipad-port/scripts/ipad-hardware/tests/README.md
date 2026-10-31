@@ -1,17 +1,17 @@
 # iPad hardware test scripts
 
-All Mac-local test harnesses for iPad hardware discovery and U1 safety tooling live in this directory. Operational host scripts remain one level up under `scripts/ipad-hardware/`; exact on-device payloads remain under `scripts/ipad-hardware/device/`.
+All Mac-local test harnesses for iPad hardware discovery and U1 safety tooling live in this directory. Operational host scripts remain one level up under `docs/plans/ipad-port/scripts/ipad-hardware/`; exact on-device payloads remain under `docs/plans/ipad-port/scripts/ipad-hardware/device/`.
 
 Run one harness from the repository root:
 
 ```sh
-python3 scripts/ipad-hardware/tests/test-ipad-trollstore-packaging.py
+python3 docs/plans/ipad-port/scripts/ipad-hardware/tests/test-ipad-trollstore-packaging.py
 ```
 
 Run every Python harness:
 
 ```sh
-for test_file in scripts/ipad-hardware/tests/test-ipad-*.py; do
+for test_file in docs/plans/ipad-port/scripts/ipad-hardware/tests/test-ipad-*.py; do
   python3 "$test_file" || exit
 done
 ```

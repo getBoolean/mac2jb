@@ -14,7 +14,7 @@ import time
 
 
 ROOT = Path(__file__).resolve().parents[6]
-PAYLOAD = ROOT / "scripts/ipad-hardware/device/u1-readonly-appsync-package-membership.sh"
+PAYLOAD = ROOT / "docs/plans/ipad-port/scripts/ipad-hardware/device/u1-readonly-appsync-package-membership.sh"
 
 
 def write_executable(path: Path, source: str) -> None:

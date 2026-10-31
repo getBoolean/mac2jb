@@ -16,8 +16,8 @@ import sys
 
 
 ROOT = Path(__file__).resolve().parents[6]
-HOST = ROOT / "scripts/ipad-hardware/host"
-SOURCE = ROOT / "scripts/ipad-hardware/device/u2-clean-v2-archived-trial.py"
+HOST = ROOT / "docs/plans/ipad-port/scripts/ipad-hardware/host"
+SOURCE = ROOT / "docs/plans/ipad-port/scripts/ipad-hardware/device/u2-clean-v2-archived-trial.py"
 SOURCE_SHA256 = "418545aafe3876ea657e8adc04676328e5ccf54bc68e60094c78c0c22b706d7c"
 ARCHIVE = runpy.run_path(str(HOST / "archive-u2-v2-old-boot-journal-wifi.py"))
 

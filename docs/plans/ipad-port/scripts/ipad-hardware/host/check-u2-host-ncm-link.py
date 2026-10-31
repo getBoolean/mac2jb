@@ -15,7 +15,7 @@ import subprocess
 
 
 ROOT = Path(__file__).resolve().parents[6]
-USB = runpy.run_path(str(ROOT / "scripts/ipad-hardware/host/diagnose-usb-recognition.py"))
+USB = runpy.run_path(str(ROOT / "docs/plans/ipad-port/scripts/ipad-hardware/host/diagnose-usb-recognition.py"))
 NAME = re.compile(r'"BSD Name" = "(en[0-9]{1,3})"')
 
 

@@ -14,7 +14,7 @@ import subprocess
 
 
 ROOT = Path(__file__).resolve().parents[6]
-HOST = ROOT / "scripts/ipad-hardware/host"
+HOST = ROOT / "docs/plans/ipad-port/scripts/ipad-hardware/host"
 BASE = ROOT / "build/ipad-hardware/u2-baseline"
 CAPTURES = (
     ("ipad-live-trust", "current.json", "capture-u2-private-baseline.py"),

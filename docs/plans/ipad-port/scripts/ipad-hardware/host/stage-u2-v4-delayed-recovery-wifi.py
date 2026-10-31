@@ -21,8 +21,8 @@ import sys
 
 
 ROOT = Path(__file__).resolve().parents[6]
-HOST = ROOT / "scripts/ipad-hardware/host"
-DEVICE = ROOT / "scripts/ipad-hardware/device"
+HOST = ROOT / "docs/plans/ipad-port/scripts/ipad-hardware/host"
+DEVICE = ROOT / "docs/plans/ipad-port/scripts/ipad-hardware/device"
 SOURCE = DEVICE / "u2-stage-v4-delayed-recovery.py"
 SOURCE_SHA = "d18c69f59300c257421c1360adf01c5b4b0f86e66a485357c581cf7deff93829"
 V7_STATUS = DEVICE / "u2-readonly-trial-v7-status.py"

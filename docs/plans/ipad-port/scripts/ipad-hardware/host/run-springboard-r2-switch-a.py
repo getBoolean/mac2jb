@@ -25,13 +25,13 @@ import tempfile
 
 ROOT = Path(__file__).resolve().parents[6]
 BUILD = ROOT / "build/ipad-hardware"
-RUNNER = ROOT / "scripts/ipad-hardware/host/run-springboard-r2-report-wifi.go"
-BUS = ROOT / "scripts/ipad-hardware/host/run-readonly-controller-property-keys-wifi.go"
-DIAG = ROOT / "scripts/ipad-hardware/host/diagnose-usb-recognition.py"
-VALIDATOR = ROOT / "scripts/ipad-hardware/validate-springboard-r2-report.py"
+RUNNER = ROOT / "docs/plans/ipad-port/scripts/ipad-hardware/host/run-springboard-r2-report-wifi.go"
+BUS = ROOT / "docs/plans/ipad-port/scripts/ipad-hardware/host/run-readonly-controller-property-keys-wifi.go"
+DIAG = ROOT / "docs/plans/ipad-port/scripts/ipad-hardware/host/diagnose-usb-recognition.py"
+VALIDATOR = ROOT / "docs/plans/ipad-port/scripts/ipad-hardware/validate-springboard-r2-report.py"
 PINS = {
-    RUNNER: "68243722bb93a2762161f3b8e30295e55c3b5479f586b532c9981dd2942475c3",
-    BUS: "23edcd4c78c2fb941885baad1fbe3a85566ca4c4466c87cc5f5b771a5451db39",
+    RUNNER: "32fe0eef9c330a2b970189419da996e6e90e2a914b4736d44c27ac0f53530ef2",
+    BUS: "e99d5a6e3ae3e78e22dffb887cdf4674c75e2052a528732fe80053e6fabd81b6",
     DIAG: "98323936396b1e56749e98aba8ec6dfba2d08cbac6d67f0c85de3165c81876ff",
     VALIDATOR: "00a6ca00cde30be22d3a6257fafdeb4e11c9f3e3e8d6a65e17dc51cd3d25cc3d",
 }

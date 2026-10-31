@@ -17,8 +17,8 @@ import subprocess
 
 
 ROOT = Path(__file__).resolve().parents[6]
-HOST = ROOT / "scripts/ipad-hardware/host"
-SOURCE = ROOT / "scripts/ipad-hardware/device/u2-clean-archived-trial.py"
+HOST = ROOT / "docs/plans/ipad-port/scripts/ipad-hardware/host"
+SOURCE = ROOT / "docs/plans/ipad-port/scripts/ipad-hardware/device/u2-clean-archived-trial.py"
 SOURCE_SHA256 = "9efb253550c3ffe6b1621ce47c93d0e20003610835a4ed25fdf7ac21667509a2"
 ARCHIVE = runpy.run_path(str(HOST / "archive-u2-old-boot-journal-wifi.py"))
 BACKUP = ROOT / "build/ipad-hardware/u2-oldboot-archive/restore-journal.oldboot.json"

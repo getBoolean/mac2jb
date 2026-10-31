@@ -14,8 +14,8 @@ import subprocess
 
 
 ROOT = Path(__file__).resolve().parents[6]
-WIRELESS = ROOT / "scripts/ipad-hardware/host/check-pinned-wireless-ssh.py"
-HELPER = ROOT / "scripts/ipad-hardware/host/backup-clienttruth-over-root-ssh.py"
+WIRELESS = ROOT / "docs/plans/ipad-port/scripts/ipad-hardware/host/check-pinned-wireless-ssh.py"
+HELPER = ROOT / "docs/plans/ipad-port/scripts/ipad-hardware/host/backup-clienttruth-over-root-ssh.py"
 PAYLOAD = b'''import base64,hashlib,json,os,stat\n\
 p="/var/jb/var/lib/mac2jb-u2-native/restore-journal.json"\n\
 try:\n\

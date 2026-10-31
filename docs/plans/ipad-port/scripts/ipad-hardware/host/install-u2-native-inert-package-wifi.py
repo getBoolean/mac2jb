@@ -21,10 +21,10 @@ import subprocess
 ROOT = Path(__file__).resolve().parents[6]
 PACKAGE = ROOT / "build/ipad-hardware/mac2jb-u2-native-watchdog_0.1.0_iphoneos-arm64.deb"
 PACKAGE_SHA256 = "6f328b46fcfd683a8b0c29c898663f5640e5ef53b39ccbe185adfd2320b307e3"
-DEVICE = ROOT / "scripts/ipad-hardware/device/u2-install-native-inert-package.py"
+DEVICE = ROOT / "docs/plans/ipad-port/scripts/ipad-hardware/device/u2-install-native-inert-package.py"
 DEVICE_SHA256 = "686757b546a197c558b919d83bc49858eefa240b8fce85482f3418f0753e875d"
-WIRELESS = ROOT / "scripts/ipad-hardware/host/check-pinned-wireless-ssh.py"
-HELPER = ROOT / "scripts/ipad-hardware/host/backup-clienttruth-over-root-ssh.py"
+WIRELESS = ROOT / "docs/plans/ipad-port/scripts/ipad-hardware/host/check-pinned-wireless-ssh.py"
+HELPER = ROOT / "docs/plans/ipad-port/scripts/ipad-hardware/host/backup-clienttruth-over-root-ssh.py"
 SUCCESS = b"U2_NATIVE_INSTALL package=attested service=ready publication=disabled stage=removed\n"
 
 

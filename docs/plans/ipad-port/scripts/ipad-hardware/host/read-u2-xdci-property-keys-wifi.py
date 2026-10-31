@@ -16,8 +16,8 @@ import subprocess
 
 
 ROOT = Path(__file__).resolve().parents[6]
-HOST = ROOT / "scripts/ipad-hardware/host"
-SOURCE = ROOT / "scripts/ipad-hardware/device/u2-readonly-xdci-property-keys.py"
+HOST = ROOT / "docs/plans/ipad-port/scripts/ipad-hardware/host"
+SOURCE = ROOT / "docs/plans/ipad-port/scripts/ipad-hardware/device/u2-readonly-xdci-property-keys.py"
 SOURCE_SHA256 = "010dc291b44c5116d695ff2a849828a4c1e56eaea72db1e1666cf917085f63b2"
 CLASSES = (
     "AppleT8112USBXDCI", "AppleARMIODevice", "AppleT811xIO",

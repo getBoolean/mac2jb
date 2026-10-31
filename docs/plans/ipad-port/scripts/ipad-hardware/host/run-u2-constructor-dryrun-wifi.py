@@ -17,13 +17,13 @@ import subprocess
 
 
 ROOT = Path(__file__).resolve().parents[6]
-DEVICE = ROOT / "scripts/ipad-hardware/device"
+DEVICE = ROOT / "docs/plans/ipad-port/scripts/ipad-hardware/device"
 SOURCES = (
     (DEVICE / "u2_target_snapshot.py", "b31079908483b290aeb7d23e7b9d7ed96af1b4b550e5e0124a026329ce9723ba"),
     (DEVICE / "u2_usb_controller.py", "08d564c58ec4d3466cfdcff03c6d706decb68859a45930a25a664e14980c873e"),
 )
-WIRELESS = ROOT / "scripts/ipad-hardware/host/check-pinned-wireless-ssh.py"
-HELPER = ROOT / "scripts/ipad-hardware/host/backup-clienttruth-over-root-ssh.py"
+WIRELESS = ROOT / "docs/plans/ipad-port/scripts/ipad-hardware/host/check-pinned-wireless-ssh.py"
+HELPER = ROOT / "docs/plans/ipad-port/scripts/ipad-hardware/host/backup-clienttruth-over-root-ssh.py"
 RESULT = re.compile(rb"U2_CONSTRUCTOR (?:in-memory-equal|rejected)\n\Z")
 
 

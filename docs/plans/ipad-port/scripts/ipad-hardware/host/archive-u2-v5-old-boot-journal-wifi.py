@@ -18,8 +18,8 @@ import subprocess
 import sys
 
 ROOT = Path(__file__).resolve().parents[6]
-HOST = ROOT / "scripts/ipad-hardware/host"
-SOURCE = ROOT / "scripts/ipad-hardware/device/u2-archive-v5-old-boot-journal.py"
+HOST = ROOT / "docs/plans/ipad-port/scripts/ipad-hardware/host"
+SOURCE = ROOT / "docs/plans/ipad-port/scripts/ipad-hardware/device/u2-archive-v5-old-boot-journal.py"
 SOURCE_SHA = "b21b2fb68a4c6bb18c8b48d596075943c2b754e3bfbc8f9a94646dc23fba00e3"
 CHECKER = HOST / "check-u2-post-v5-reboot.py"
 CHECKER_SHA = "a2d65fdf4d8d419e05badcc03fa42f858e12417464380e5d2418e5063aca24ef"

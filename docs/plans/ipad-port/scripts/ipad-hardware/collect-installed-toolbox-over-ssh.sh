@@ -37,7 +37,7 @@ readonly known_hosts_file='/Users/boolean/.ssh/mac2jb-ipad/mac2jb-ipad-known-hos
 readonly expected_identity_sha='50cf47362f38ff6404979c120147e071bfe8beb924971a27b24210d2250c76dd'
 readonly expected_known_hosts_sha='1db3d7df81efc0ffafd7ce55bffff7b2efdf5b1ec86844278b436adf1b908b35'
 readonly expected_payload_sha='97f8132e2ebcb2bd100040bc32cc91acf52b7496d301cfdb5f678b3c8216f7e8'
-readonly expected_validator_sha='4b82e513f5573c01867ef2747fac540583a1ca48ccb15880583595b06fd882f0'
+readonly expected_validator_sha='b25bfd33150151177aafff61351c5361ed93cbedb7fc40deb56e7364fed0715b'
 
 if [ "$#" -ne 0 ]; then
   command printf '%s\n' 'Usage: collect-installed-toolbox-over-ssh.sh' >&2

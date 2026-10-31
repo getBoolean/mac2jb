@@ -16,7 +16,7 @@ import subprocess
 
 
 ROOT = Path(__file__).resolve().parents[6]
-SOURCE = ROOT / "scripts/ipad-hardware/host/u2-readonly-raw-config-descriptors.c"
+SOURCE = ROOT / "docs/plans/ipad-port/scripts/ipad-hardware/host/u2-readonly-raw-config-descriptors.c"
 SOURCE_SHA256 = "04b8f168105670624a5e6e46b26695ed7ab5fb7768e8e28e001c1b1c62734841"
 BINARY = ROOT / "build/ipad-hardware/u2-readonly-raw-config-descriptors"
 BINARY_SHA256 = "f1d32a82872d28a670764fb44d49cbf4d3d04248bcbfeed456b24774768dd60e"

@@ -21,8 +21,8 @@ import sys
 
 
 ROOT = Path(__file__).resolve().parents[6]
-HOST = ROOT / "scripts/ipad-hardware/host"
-DEVICE = ROOT / "scripts/ipad-hardware/device"
+HOST = ROOT / "docs/plans/ipad-port/scripts/ipad-hardware/host"
+DEVICE = ROOT / "docs/plans/ipad-port/scripts/ipad-hardware/device"
 BINARY = ROOT / "build/ipad-hardware/u2-native-noop-trial-v7-ready-gated"
 BINARY_SHA256 = "87f0b112378b6e38b7d90f770aa20a047f26814170edaa2bd63388aec0b1c380"
 SOURCE = DEVICE / "u2-stage-native-noop-trial-v7.py"

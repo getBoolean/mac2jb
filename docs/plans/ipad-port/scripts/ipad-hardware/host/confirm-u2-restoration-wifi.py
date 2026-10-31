@@ -26,7 +26,7 @@ import time
 
 
 ROOT = Path(__file__).resolve().parents[6]
-HOST = ROOT / "scripts/ipad-hardware/host"
+HOST = ROOT / "docs/plans/ipad-port/scripts/ipad-hardware/host"
 CHECKER = HOST / "check-u2-external-current.py"
 CHECKER_SHA256 = "67336f70bfd9093a5e3b8466c1ccb27b5a02381b1beb8fd84eb5257a666dbfd3"
 JOURNAL = HOST / "run-u2-readonly-default-description-wifi.py"

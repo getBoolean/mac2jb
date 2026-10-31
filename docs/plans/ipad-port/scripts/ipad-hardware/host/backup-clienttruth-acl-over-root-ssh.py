@@ -20,7 +20,7 @@ import subprocess
 HERE = Path(__file__).resolve().parent
 backup = runpy.run_path(str(HERE / "backup-clienttruth-over-root-ssh.py"))
 ROOT = backup["ROOT"]
-SOURCE = ROOT / "scripts/ipad-hardware/device/u1-readonly-clienttruth-acl.py"
+SOURCE = ROOT / "docs/plans/ipad-port/scripts/ipad-hardware/device/u1-readonly-clienttruth-acl.py"
 ACL_FILE = backup["BACKUP_DIR"] / "acl.txt"
 
 

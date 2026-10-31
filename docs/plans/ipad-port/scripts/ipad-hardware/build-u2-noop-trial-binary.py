@@ -29,14 +29,20 @@ OUTPUT_V4 = BUILD / "u2-native-noop-trial-v4-clone"
 OUTPUT_V5 = BUILD / "u2-native-noop-trial-v5-postclone"
 OUTPUT_V6 = BUILD / "u2-native-noop-trial-v6-settled"
 OUTPUT_V7 = BUILD / "u2-native-noop-trial-v7-ready-gated"
+OUTPUT_V8 = BUILD / "u2-native-noop-trial-v8-wifi-restore"
+OUTPUT_V9 = BUILD / "u2-native-noop-trial-v9-auto-heal"
 OUTPUT_NO_INITIAL_CYCLE = BUILD / "u2-native-noop-trial-clone-no-initial-cycle"
-SDK = "/Applications/Xcode.app/Contents/Developer/Platforms/iPhoneOS.platform/Developer/SDKs/iPhoneOS27.1.sdk"
+# Resolve the installed iPhoneOS SDK instead of pinning an Xcode point release.
+SDK = subprocess.run(["/usr/bin/xcrun", "--sdk", "iphoneos", "--show-sdk-path"],
+                     stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True).stdout.strip()
 ENTITLEMENTS = ROOT / "ios/entitlements/probe-platform-setdescription.plist"
 SWIFT = [
     ROOT / "ios/usb/USBRestoreJournal.swift",
     ROOT / "ios/watchdog/USBRestoreCoordinator.swift",
     ROOT / "ios/watchdog/TargetUSBRestoreSnapshot.swift",
     ROOT / "ios/watchdog/TargetUSBRestoreController.swift",
+    ROOT / "ios/watchdog/USBFunctionRegistrationHealer.swift",
+    ROOT / "ios/watchdog/USBFunctionOwnerRestarter.swift",
     ROOT / "ios/watchdog/NativeUSBWatchdogService.swift",
     ROOT / "ios/watchdog/USBWatchdogMain.swift",
 ]
@@ -85,6 +91,20 @@ def main():
         settled_recovery = True
     elif len(sys.argv) == 2 and sys.argv[1] == "--v7-ready-gated":
         OUTPUT = OUTPUT_V7
+        explicit_cycle = True
+        controller_clone = True
+        post_clone = True
+        ready_gated = True
+    elif len(sys.argv) == 2 and sys.argv[1] == "--v8-wifi-restore":
+        # v7 flags unchanged; the source adds `restore-after-failure`.
+        OUTPUT = OUTPUT_V8
+        explicit_cycle = True
+        controller_clone = True
+        post_clone = True
+        ready_gated = True
+    elif len(sys.argv) == 2 and sys.argv[1] == "--v9-auto-heal":
+        # v8 flags; the source adds automatic function-registration healing.
+        OUTPUT = OUTPUT_V9
         explicit_cycle = True
         controller_clone = True
         post_clone = True

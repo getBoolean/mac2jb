@@ -11,8 +11,8 @@ import subprocess
 
 
 ROOT = Path(__file__).resolve().parents[6]
-HOST = ROOT / "scripts/ipad-hardware/host"
-SOURCE = ROOT / "scripts/ipad-hardware/device/u2-readonly-xdci-parent-power.py"
+HOST = ROOT / "docs/plans/ipad-port/scripts/ipad-hardware/host"
+SOURCE = ROOT / "docs/plans/ipad-port/scripts/ipad-hardware/device/u2-readonly-xdci-parent-power.py"
 SOURCE_SHA256 = "f8dc403b904e95bcef2970ae4fee1dc136f59b07212f3ee39d1437b62aa30763"
 RECEIPT = re.compile(rb"U2_XDCI_PARENT_POWER OnBus=(yes|no) SelectedConfiguration=(0|[1-9][0-9]{0,2}) CurrentPowerState=(0|[1-9][0-9]{0,4}) ChildProxyPowerState=(negative|above-range|0|[1-9][0-9]{0,4})\nU2_XDCI_PARENT_POWER TypeCSharesAncestor=(yes|no)\n\Z")
 REJECTION = re.compile(rb"U2_XDCI_PARENT_POWER rejected stage=(setup|match|xdci|ancestor|power-dictionary|power-current|power-child|typec)\n\Z")

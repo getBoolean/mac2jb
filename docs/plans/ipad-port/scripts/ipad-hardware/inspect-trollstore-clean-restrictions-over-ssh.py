@@ -31,7 +31,7 @@ project's documented honest local account and honest authenticated ``mobile``
 account with no concurrent same-UID pathname replacement; either account can
 already control its own SSH process or credentials outside this inspector.
 
-Exact invocation: ``python3 scripts/ipad-hardware/inspect-trollstore-clean-restrictions-over-ssh.py``
+Exact invocation: ``python3 docs/plans/ipad-port/scripts/ipad-hardware/inspect-trollstore-clean-restrictions-over-ssh.py``
 """
 
 from __future__ import annotations

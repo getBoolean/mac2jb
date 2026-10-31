@@ -23,7 +23,7 @@ import time
 
 
 REPO_ROOT = Path(__file__).resolve().parents[6]
-RUNNER = REPO_ROOT / "scripts/ipad-hardware/run-diagnostic-phase-batch.sh"
+RUNNER = REPO_ROOT / "docs/plans/ipad-port/scripts/ipad-hardware/run-diagnostic-phase-batch.sh"
 
 PHASE_STEPS = {
     "launch": [],

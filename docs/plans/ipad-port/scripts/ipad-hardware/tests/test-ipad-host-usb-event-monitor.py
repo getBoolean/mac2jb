@@ -15,7 +15,7 @@ import tempfile
 
 
 REPO_ROOT = Path(__file__).resolve().parents[6]
-SOURCE = REPO_ROOT / "scripts/ipad-hardware/host/u1-usb-event-monitor.swift"
+SOURCE = REPO_ROOT / "docs/plans/ipad-port/scripts/ipad-hardware/host/u1-usb-event-monitor.swift"
 SWIFTC = Path("/usr/bin/xcrun")
 HANDLED_SIGNALS = (signal.SIGHUP, signal.SIGINT, signal.SIGTERM)
 ACTIVE_PROCESS: subprocess.Popen[str] | None = None

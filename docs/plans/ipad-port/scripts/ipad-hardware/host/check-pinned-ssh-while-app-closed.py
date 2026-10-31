@@ -22,8 +22,8 @@ import time
 
 
 ROOT = Path(__file__).resolve().parents[6]
-HELPER = ROOT / "scripts/ipad-hardware/host/backup-clienttruth-over-root-ssh.py"
-TUNNEL = ROOT / "scripts/ipad-hardware/host/start-usb-ssh-tunnel.sh"
+HELPER = ROOT / "docs/plans/ipad-port/scripts/ipad-hardware/host/backup-clienttruth-over-root-ssh.py"
+TUNNEL = ROOT / "docs/plans/ipad-port/scripts/ipad-hardware/host/start-usb-ssh-tunnel.sh"
 
 
 def listener_present():

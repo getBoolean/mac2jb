@@ -10,7 +10,7 @@ import tempfile
 
 
 ROOT = Path(__file__).resolve().parents[6]
-HELPER = ROOT / "scripts/ipad-hardware/host/exact-link-no-replace.py"
+HELPER = ROOT / "docs/plans/ipad-port/scripts/ipad-hardware/host/exact-link-no-replace.py"
 
 
 def expect(condition: bool, message: str) -> None:

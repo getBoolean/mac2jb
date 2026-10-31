@@ -20,7 +20,7 @@ import subprocess
 HERE = Path(__file__).resolve().parent
 backup = runpy.run_path(str(HERE / "backup-clienttruth-over-root-ssh.py"))
 stage = runpy.run_path(str(HERE / "stage-toolbox-over-root-ssh.py"))
-SOURCE = backup["ROOT"] / "scripts/ipad-hardware/device/u1-install-verified-toolbox.py"
+SOURCE = backup["ROOT"] / "docs/plans/ipad-port/scripts/ipad-hardware/device/u1-install-verified-toolbox.py"
 STAGED_LINE = ("TOOLBOX_STAGE size=432334 sha256=" + stage["SHA256"] + "\n").encode()
 
 

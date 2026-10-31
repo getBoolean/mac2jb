@@ -11,8 +11,8 @@ import subprocess
 
 
 ROOT = Path(__file__).resolve().parents[6]
-HOST = ROOT / "scripts/ipad-hardware/host"
-SOURCE = ROOT / "scripts/ipad-hardware/device/u2-readonly-controller-state-keys.py"
+HOST = ROOT / "docs/plans/ipad-port/scripts/ipad-hardware/host"
+SOURCE = ROOT / "docs/plans/ipad-port/scripts/ipad-hardware/device/u2-readonly-controller-state-keys.py"
 SHA = "62ba8b1b4196007406adcc7ee52d5e5592913230175a7842ff1989e85cf34faa"
 KEY = re.compile(rb"CONTROLLER_STATE_KEY [A-Za-z0-9_. -]{1,100} type="
                  rb"(?:bool|integer|string|data|dictionary|array|other)\n")

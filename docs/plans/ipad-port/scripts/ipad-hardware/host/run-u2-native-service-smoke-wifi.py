@@ -21,10 +21,10 @@ import subprocess
 ROOT = Path(__file__).resolve().parents[6]
 BINARY = ROOT / "build/ipad-hardware/u2-native-watchdog"
 BINARY_SHA256 = "1c7530d5796c27ce50efb4dacd522302ffbd96bbb800513808a929d061baad14"
-DEVICE = ROOT / "scripts/ipad-hardware/device/u2-launchd-native-service-smoke.py"
+DEVICE = ROOT / "docs/plans/ipad-port/scripts/ipad-hardware/device/u2-launchd-native-service-smoke.py"
 DEVICE_SHA256 = "1980adb9f0e2d3d30a4c7dbe8e63e9b8739cb5724aff94974160caf6bbb06280"
-WIRELESS = ROOT / "scripts/ipad-hardware/host/check-pinned-wireless-ssh.py"
-HELPER = ROOT / "scripts/ipad-hardware/host/backup-clienttruth-over-root-ssh.py"
+WIRELESS = ROOT / "docs/plans/ipad-port/scripts/ipad-hardware/host/check-pinned-wireless-ssh.py"
+HELPER = ROOT / "docs/plans/ipad-port/scripts/ipad-hardware/host/backup-clienttruth-over-root-ssh.py"
 OUTPUT = re.compile(
     rb"U2_NATIVE_SERVICE status=ready prepare=denied journal=absent\n"
     rb"U2_NATIVE_SERVICE staged-files=removed\n\Z"

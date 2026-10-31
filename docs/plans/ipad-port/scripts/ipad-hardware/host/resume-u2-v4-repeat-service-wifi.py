@@ -17,8 +17,8 @@ import subprocess
 import sys
 
 ROOT = Path(__file__).resolve().parents[6]
-HOST = ROOT / "scripts/ipad-hardware/host"
-DEVICE = ROOT / "scripts/ipad-hardware/device"
+HOST = ROOT / "docs/plans/ipad-port/scripts/ipad-hardware/host"
+DEVICE = ROOT / "docs/plans/ipad-port/scripts/ipad-hardware/device"
 SOURCE = DEVICE / "u2-resume-v4-repeat-service.py"
 SOURCE_SHA256 = "34e72018a82e4c4ad13168d1d46c4aa1425a70d9fc24c6dd68638586d9c5bab2"
 AUDIT = runpy.run_path(str(HOST / "audit-u2-v4-repeat.py"))

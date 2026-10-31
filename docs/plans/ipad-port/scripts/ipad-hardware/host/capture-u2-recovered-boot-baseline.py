@@ -23,7 +23,7 @@ import subprocess
 
 
 ROOT = Path(__file__).resolve().parents[6]
-HOST = ROOT / "scripts/ipad-hardware/host"
+HOST = ROOT / "docs/plans/ipad-port/scripts/ipad-hardware/host"
 DEST = ROOT / "build/ipad-hardware/u2-recovered-boot-baseline"
 CHECK = runpy.run_path(str(HOST / "check-u2-external-current.py"))
 SNAPSHOT = runpy.run_path(str(HOST / "capture-u2-private-baseline.py"))

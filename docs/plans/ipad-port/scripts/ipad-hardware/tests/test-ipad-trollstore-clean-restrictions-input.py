@@ -14,7 +14,7 @@ import textwrap
 
 
 ROOT = Path(__file__).resolve().parents[6]
-PAYLOAD = ROOT / "scripts/ipad-hardware/device/u1-readonly-trollstore-clean-restrictions-input.sh"
+PAYLOAD = ROOT / "docs/plans/ipad-port/scripts/ipad-hardware/device/u1-readonly-trollstore-clean-restrictions-input.sh"
 MEMBER = "private/var/containers/Shared/SystemGroup/systemgroup.com.apple.configurationprofiles/Library/ConfigurationProfiles/ClientTruth.plist"
 
 

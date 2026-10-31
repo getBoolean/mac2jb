@@ -20,10 +20,10 @@ import subprocess
 
 
 ROOT = Path(__file__).resolve().parents[6]
-SOURCE = ROOT / "scripts/ipad-hardware/device/u1-readonly-controller-description-copy.py"
+SOURCE = ROOT / "docs/plans/ipad-port/scripts/ipad-hardware/device/u1-readonly-controller-description-copy.py"
 SOURCE_SHA256 = "b2470a242e1984b746bddf92cd15a1570766bdf6dd6fcbeadc3efb0c3b5f650a"
-WIRELESS = ROOT / "scripts/ipad-hardware/host/check-pinned-wireless-ssh.py"
-HELPER = ROOT / "scripts/ipad-hardware/host/backup-clienttruth-over-root-ssh.py"
+WIRELESS = ROOT / "docs/plans/ipad-port/scripts/ipad-hardware/host/check-pinned-wireless-ssh.py"
+HELPER = ROOT / "docs/plans/ipad-port/scripts/ipad-hardware/host/backup-clienttruth-over-root-ssh.py"
 BASE = ROOT / "build/ipad-hardware/u2-baseline/current.json"
 DEFAULT = ROOT / "build/ipad-hardware/controller-descriptions/default.bplist"
 MAGIC = b"MAC2JB-U1-DESC\0"

@@ -14,7 +14,7 @@ import time
 
 
 ROOT = Path(__file__).resolve().parents[6]
-PAYLOAD = ROOT / "scripts/ipad-hardware/device/u1-readonly-appsync-install-capabilities.sh"
+PAYLOAD = ROOT / "docs/plans/ipad-port/scripts/ipad-hardware/device/u1-readonly-appsync-install-capabilities.sh"
 PACKAGES = {
     "ai.akemi.appsyncunified": ("116.0", "iphoneos-arm64"),
     "ai.akemi.appinst": ("2.1.1", "iphoneos-arm64"),

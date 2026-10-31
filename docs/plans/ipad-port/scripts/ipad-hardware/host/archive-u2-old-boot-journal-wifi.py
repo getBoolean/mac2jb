@@ -22,8 +22,8 @@ import subprocess
 
 
 ROOT = Path(__file__).resolve().parents[6]
-HOST = ROOT / "scripts/ipad-hardware/host"
-SOURCE = ROOT / "scripts/ipad-hardware/device/u2-archive-old-boot-journal.py"
+HOST = ROOT / "docs/plans/ipad-port/scripts/ipad-hardware/host"
+SOURCE = ROOT / "docs/plans/ipad-port/scripts/ipad-hardware/device/u2-archive-old-boot-journal.py"
 SOURCE_SHA256 = "b750533d6ac957fc040c50b623495852f158af048d0d16dda702aad7c4e7e852"
 EXPECTED_JOURNAL = "77caed18edb899d919eddc6f65229464883b20091b0ae3849bf2af0743abda39"
 DEST = ROOT / "build/ipad-hardware/u2-oldboot-archive"

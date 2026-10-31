@@ -68,6 +68,11 @@ final class NativeUSBWatchdogService {
     private let leaseNanoseconds: UInt64
     private let snapshotProvider: () throws -> TargetUSBRestoreSnapshot
     private let validateInMemory: (Data) throws -> Void
+    private let controllerConfigured: (() throws -> Bool)?
+    private let unservedFunctions: (() throws -> Set<String>)?
+    private let restartOwner: ((String) throws -> Void)?
+    private let healPolicy: USBFunctionHealPolicy
+    private var lastHeal = "none"
     private var worker: Int32 = -1
     private var singleton: Int32 = -1
     private var listener: Int32 = -1
@@ -108,6 +113,9 @@ final class NativeUSBWatchdogService {
             beforeRecovery: {
                 try Self.waitForConfigured { try controller.isConfigured() }
             },
+            controllerConfigured: { try controller.isConfigured() },
+            unservedFunctions: { try controller.unservedFunctions() },
+            restartOwner: { try USBFunctionOwnerRestarter.restart($0) },
             leaseNanoseconds: Self.leaseNanoseconds)
     }
 
@@ -122,6 +130,10 @@ final class NativeUSBWatchdogService {
          verificationSnapshotProvider: @escaping () throws -> TargetUSBRestoreSnapshot,
          validateInMemory: @escaping (Data) throws -> Void,
          beforeRecovery: @escaping () throws -> Void,
+         controllerConfigured: (() throws -> Bool)? = nil,
+         unservedFunctions: (() throws -> Set<String>)? = nil,
+         restartOwner: ((String) throws -> Void)? = nil,
+         healPolicy: USBFunctionHealPolicy = USBFunctionHealPolicy(),
          leaseNanoseconds: UInt64) throws {
         guard geteuid() == expectedOwner else {
             throw NativeUSBWatchdogError.unsafeState
@@ -130,6 +142,10 @@ final class NativeUSBWatchdogService {
         self.stateDirectory = stateDirectory
         self.snapshotProvider = snapshotProvider
         self.validateInMemory = validateInMemory
+        self.controllerConfigured = controllerConfigured
+        self.unservedFunctions = unservedFunctions
+        self.restartOwner = restartOwner
+        self.healPolicy = healPolicy
         verifier = NativeExternalVerifier(snapshotProvider: verificationSnapshotProvider)
         journal = USBRestoreJournal(directory: stateDirectory, expectedOwner: expectedOwner)
         coordinator = USBRestoreCoordinator(
@@ -263,6 +279,30 @@ final class NativeUSBWatchdogService {
             try coordinator.recover()
             return "restore-issued"
         }
+        // Host-requested one-shot re-publication after the Mac observed that
+        // USB did not return (for example over pinned Wi-Fi SSH). Refused
+        // unless publication is enabled, a configured-state reader exists and
+        // the controller is not configured.
+        if command == "restore-after-failure" {
+            guard publicationEnabled, let controllerConfigured else {
+                throw NativeUSBWatchdogError.disabled
+            }
+            try coordinator.recoverAfterExternalFailure(
+                controllerConfigured: controllerConfigured)
+            return "restore-after-failure-issued " + autoHeal()
+        }
+        // Host-requested heal without an initial publication: restart owners
+        // and/or re-publish (bounded) until every function registers.
+        if command == "heal" {
+            guard publicationEnabled, let record = try currentRecord(),
+                  record.phase == .awaitingVerification || record.phase == .recoveryRequired else {
+                throw NativeUSBWatchdogError.invalidRequest
+            }
+            return autoHeal()
+        }
+        if command == "heal-status" {
+            return "last-heal " + lastHeal
+        }
         if command.hasPrefix("confirm ") {
             let proof = String(command.dropFirst("confirm ".count))
             guard USBRestoreRecipe.isDigest(proof) else {
@@ -286,9 +326,51 @@ final class NativeUSBWatchdogService {
             settleBeforeRecovery(record.phase)
             try coordinator.recover()
         } catch {
-            // The journal remains for recovery on the next launch.
+            // The first publication did not enumerate (readiness gate timed
+            // out, journal recoveryRequired). Heal automatically; the journal
+            // remains for recovery on the next launch if healing gives up.
+            _ = autoHeal()
         }
         _ = neutral  // U3 will verify the actual neutral HID report.
+    }
+
+    // Bounded automatic recovery (see USBFunctionRegistrationHealer). Never
+    // confirms or clears the journal. Returns and records a one-line summary.
+    @discardableResult
+    private func autoHeal() -> String {
+        guard publicationEnabled, let controllerConfigured, let unservedFunctions,
+              let restartOwner else {
+            lastHeal = "unavailable"
+            return lastHeal
+        }
+        struct Probe: USBFunctionHealProbe {
+            let configured: () throws -> Bool
+            let unserved: () throws -> Set<String>
+            let publish: () throws -> Void
+            let restart: (String) throws -> Void
+            func controllerConfigured() throws -> Bool { try configured() }
+            func unservedFunctions() throws -> Set<String> { try unserved() }
+            func republish() throws { try publish() }
+            func restartOwner(_ label: String) throws { try restart(label) }
+            func sleep(seconds: Double) { Thread.sleep(forTimeInterval: seconds) }
+        }
+        let coordinator = self.coordinator
+        let probe = Probe(configured: controllerConfigured, unserved: unservedFunctions,
+                          publish: { try coordinator.recoverAfterExternalFailure(
+                              controllerConfigured: controllerConfigured) },
+                          restart: restartOwner)
+        do {
+            let outcome = try USBFunctionRegistrationHealer(probe: probe, policy: healPolicy).heal()
+            if case .configured = outcome, let record = try? currentRecord(),
+               record.phase == .recoveryRequired {
+                try coordinator.acceptConfiguredOriginal(controllerConfigured: controllerConfigured)
+            }
+            lastHeal = outcome.summary
+        } catch {
+            lastHeal = "heal-error"
+        }
+        NSLog("mac2jb-u2 %@", lastHeal)
+        return lastHeal
     }
 
     private func takeSingleton() throws {

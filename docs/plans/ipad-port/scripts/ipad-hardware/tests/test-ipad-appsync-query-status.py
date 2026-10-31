@@ -14,7 +14,7 @@ import time
 
 
 ROOT = Path(__file__).resolve().parents[6]
-PAYLOAD = ROOT / "scripts/ipad-hardware/device/u1-readonly-appsync-query-status.sh"
+PAYLOAD = ROOT / "docs/plans/ipad-port/scripts/ipad-hardware/device/u1-readonly-appsync-query-status.sh"
 PACKAGE_ORDER = (
     "ai.akemi.appsyncunified",
     "ai.akemi.appinst",

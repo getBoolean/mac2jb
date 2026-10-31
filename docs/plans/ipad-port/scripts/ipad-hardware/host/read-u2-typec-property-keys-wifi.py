@@ -15,8 +15,8 @@ import subprocess
 
 
 ROOT = Path(__file__).resolve().parents[6]
-HOST = ROOT / "scripts/ipad-hardware/host"
-SOURCE = ROOT / "scripts/ipad-hardware/device/u2-readonly-typec-property-keys.py"
+HOST = ROOT / "docs/plans/ipad-port/scripts/ipad-hardware/host"
+SOURCE = ROOT / "docs/plans/ipad-port/scripts/ipad-hardware/device/u2-readonly-typec-property-keys.py"
 SOURCE_SHA256 = "3294b2c38dc48825f454330db0e4c8539d82d5a6cf71426172b30ba93b44854a"
 CLASSES = (
     "AppleTCControllerType10", "IOAccessoryUSBConnectShim",

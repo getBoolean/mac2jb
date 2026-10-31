@@ -25,8 +25,8 @@ import time
 
 
 ROOT = Path(__file__).resolve().parents[6]
-HOST = ROOT / "scripts/ipad-hardware/host"
-DEVICE = ROOT / "scripts/ipad-hardware/device"
+HOST = ROOT / "docs/plans/ipad-port/scripts/ipad-hardware/host"
+DEVICE = ROOT / "docs/plans/ipad-port/scripts/ipad-hardware/device"
 TUNNEL = HOST / "start-usb-ssh-tunnel.sh"
 REFERENCE = ROOT / "build/ipad-hardware/u2-recovered-boot-baseline/snapshot.json"
 SNAPSHOT = DEVICE / "u2_target_snapshot.py"

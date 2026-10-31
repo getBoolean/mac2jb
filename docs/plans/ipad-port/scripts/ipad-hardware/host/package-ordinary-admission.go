@@ -334,7 +334,7 @@ func run() error {
 	if _, err := os.Stat(output); !os.IsNotExist(err) {
 		return errors.New("output already exists or cannot be checked")
 	}
-	if err := command("/bin/bash", "scripts/ipad-hardware/collect-inventory.sh", "audit-stdout-only"); err != nil {
+	if err := command("/bin/bash", "docs/plans/ipad-port/scripts/ipad-hardware/collect-inventory.sh", "audit-stdout-only"); err != nil {
 		return err
 	}
 	data, err := os.ReadFile(input)
@@ -421,7 +421,7 @@ func runDebug() error {
 	if _, err := os.Stat(debugOutput); !os.IsNotExist(err) {
 		return errors.New("debug output already exists or cannot be checked")
 	}
-	if err := command("/bin/bash", "scripts/ipad-hardware/collect-inventory.sh", "audit-stdout-only"); err != nil {
+	if err := command("/bin/bash", "docs/plans/ipad-port/scripts/ipad-hardware/collect-inventory.sh", "audit-stdout-only"); err != nil {
 		return err
 	}
 	data, err := os.ReadFile(input)

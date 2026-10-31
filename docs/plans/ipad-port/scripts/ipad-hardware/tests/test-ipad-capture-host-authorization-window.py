@@ -23,7 +23,7 @@ import time
 
 
 REPO_ROOT = Path(__file__).resolve().parents[6]
-SOURCE = REPO_ROOT / "scripts/ipad-hardware/run-capture-host-authorization-window.py"
+SOURCE = REPO_ROOT / "docs/plans/ipad-port/scripts/ipad-hardware/run-capture-host-authorization-window.py"
 POWER = "operator-not-observed"
 OUTPUT_NAME = f"host-lifecycle-capture-host-a-{POWER}"
 REJECTED_NAME = f"rejected-{OUTPUT_NAME}"
@@ -41,7 +41,7 @@ def write_executable(path: Path, source: str) -> None:
 
 def fixture(base: Path, scenario: str = "success") -> dict[str, Path]:
     root = Path(tempfile.mkdtemp(dir=base))
-    script_directory = root / "scripts/ipad-hardware"
+    script_directory = root / "docs/plans/ipad-port/scripts/ipad-hardware"
     host_directory = script_directory / "host"
     build_directory = root / "build/ipad-hardware"
     host_directory.mkdir(parents=True)
@@ -70,7 +70,7 @@ root = Path({str(root)!r})
 scenario = (root / "scenario").read_text().strip()
 resource.setrlimit(resource.RLIMIT_FSIZE, (4 * 1024 * 1024, 4 * 1024 * 1024))
 if sys.argv[1:2] == ["--internal-attestation"]:
-    if Path(os.environ.get("MAC2JB_SCRIPT_DIRECTORY", "")).resolve() != (root / "scripts/ipad-hardware").resolve():
+    if Path(os.environ.get("MAC2JB_SCRIPT_DIRECTORY", "")).resolve() != (root / "docs/plans/ipad-port/scripts/ipad-hardware").resolve():
         raise SystemExit(65)
     raise SystemExit(0)
 saved_arguments = sys.argv
@@ -86,7 +86,7 @@ finally:
 with (root / "contact.log").open("a") as stream:
     stream.write("runner\\n")
 if scenario == "runner-path-unavailable":
-    original_runner = root / "scripts/ipad-hardware/run-installed-toolbox-authorization-batch.py"
+    original_runner = root / "docs/plans/ipad-port/scripts/ipad-hardware/run-installed-toolbox-authorization-batch.py"
     deadline = time.monotonic() + 2
     while time.monotonic() < deadline:
         if stat.S_IMODE(original_runner.stat().st_mode) == 0o755:
@@ -157,7 +157,7 @@ ready = {{
 }}
 print(json.dumps(ready, sort_keys=True), flush=True)
 if scenario == "runner-path-unavailable":
-    runner = root / "scripts/ipad-hardware/run-installed-toolbox-authorization-batch.py"
+    runner = root / "docs/plans/ipad-port/scripts/ipad-hardware/run-installed-toolbox-authorization-batch.py"
     runner.chmod(0)
     deadline = time.monotonic() + 2
     try:

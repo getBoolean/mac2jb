@@ -24,8 +24,8 @@ import time
 
 
 ROOT = Path(__file__).resolve().parents[6]
-HOST = ROOT / "scripts/ipad-hardware/host"
-DEVICE = ROOT / "scripts/ipad-hardware/device"
+HOST = ROOT / "docs/plans/ipad-port/scripts/ipad-hardware/host"
+DEVICE = ROOT / "docs/plans/ipad-port/scripts/ipad-hardware/device"
 BUILD = ROOT / "build/ipad-hardware"
 TRIALS = BUILD / "u2-trials"
 SOURCE = DEVICE / "u2-one-delayed-restore-v4.py"

@@ -20,7 +20,7 @@ import subprocess
 
 
 ROOT = Path(__file__).resolve().parents[6]
-DIAGNOSTIC = ROOT / "scripts/ipad-hardware/host/diagnose-usb-recognition.py"
+DIAGNOSTIC = ROOT / "docs/plans/ipad-port/scripts/ipad-hardware/host/diagnose-usb-recognition.py"
 DESTINATION = ROOT / "build/ipad-hardware/u2-baseline"
 TARGET = DESTINATION / "host-usb-scalars.json"
 FIELDS = (

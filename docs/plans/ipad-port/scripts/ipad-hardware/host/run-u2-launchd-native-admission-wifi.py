@@ -21,10 +21,10 @@ import subprocess
 ROOT = Path(__file__).resolve().parents[6]
 BINARY = ROOT / "build/ipad-hardware/u2-native-admission-smoke"
 BINARY_SHA256 = "459d1e3f4f0f9c1792920f6dcdd548fecb94753de0d36c1af5e2b6e2b0e2c83c"
-DEVICE = ROOT / "scripts/ipad-hardware/device/u2-launchd-native-admission.py"
+DEVICE = ROOT / "docs/plans/ipad-port/scripts/ipad-hardware/device/u2-launchd-native-admission.py"
 DEVICE_SHA256 = "c096b042904adae00f67b57deedbdad9caa70f2b3cd5998526d84e9c8e8e62d4"
-WIRELESS = ROOT / "scripts/ipad-hardware/host/check-pinned-wireless-ssh.py"
-HELPER = ROOT / "scripts/ipad-hardware/host/backup-clienttruth-over-root-ssh.py"
+WIRELESS = ROOT / "docs/plans/ipad-port/scripts/ipad-hardware/host/check-pinned-wireless-ssh.py"
+HELPER = ROOT / "docs/plans/ipad-port/scripts/ipad-hardware/host/backup-clienttruth-over-root-ssh.py"
 OUTPUT = re.compile(
     rb"U2_LAUNCHD_ADMISSION (?:alive|not-admitted)\n"
     rb"U2_LAUNCHD_ADMISSION staged-files=removed\n\Z"

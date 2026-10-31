@@ -12,9 +12,9 @@ import tempfile
 
 
 ROOT = Path(__file__).resolve().parents[6]
-RUNNER = ROOT / "scripts/ipad-hardware/host/pin-current-usb-ssh-host.sh"
-LINK_HELPER = ROOT / "scripts/ipad-hardware/host/exact-link-no-replace.py"
-CANONICAL_HELPER = ROOT / "scripts/ipad-hardware/host/canonicalize-usb-known-hosts.py"
+RUNNER = ROOT / "docs/plans/ipad-port/scripts/ipad-hardware/host/pin-current-usb-ssh-host.sh"
+LINK_HELPER = ROOT / "docs/plans/ipad-port/scripts/ipad-hardware/host/exact-link-no-replace.py"
+CANONICAL_HELPER = ROOT / "docs/plans/ipad-port/scripts/ipad-hardware/host/canonicalize-usb-known-hosts.py"
 ED25519 = b"[127.0.0.1]:2222 ssh-ed25519 AAAAC3NzaFixtureEd25519\n"
 ECDSA = b"[127.0.0.1]:2222 ecdsa-sha2-nistp256 AAAAE2VjZHNhFixtureEcdsa==\n"
 PIN = ED25519

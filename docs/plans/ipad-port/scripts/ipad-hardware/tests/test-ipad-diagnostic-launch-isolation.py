@@ -21,7 +21,7 @@ import time
 
 
 REPO_ROOT = Path(__file__).resolve().parents[6]
-RUNNER = REPO_ROOT / "scripts/ipad-hardware/run-diagnostic-launch-isolation.sh"
+RUNNER = REPO_ROOT / "docs/plans/ipad-port/scripts/ipad-hardware/run-diagnostic-launch-isolation.sh"
 STAGES = [
     "shell",
     "env-select",

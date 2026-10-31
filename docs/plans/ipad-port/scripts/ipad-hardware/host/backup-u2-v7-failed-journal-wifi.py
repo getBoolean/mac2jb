@@ -17,8 +17,8 @@ import stat
 import subprocess
 
 ROOT = Path(__file__).resolve().parents[6]
-HOST = ROOT / "scripts/ipad-hardware/host"
-SOURCE = ROOT / "scripts/ipad-hardware/device/u2-readonly-copy-v7-failed-journal.py"
+HOST = ROOT / "docs/plans/ipad-port/scripts/ipad-hardware/host"
+SOURCE = ROOT / "docs/plans/ipad-port/scripts/ipad-hardware/device/u2-readonly-copy-v7-failed-journal.py"
 CHECKER = runpy.run_path(str(HOST / "check-u2-v7-current.py"))
 RECOVERY = runpy.run_path(str(HOST / "diagnose-u2-recovery-stage.py"))
 DEST = ROOT / "build/ipad-hardware/u2-v7-journal-backup"

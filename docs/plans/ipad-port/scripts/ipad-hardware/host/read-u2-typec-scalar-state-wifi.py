@@ -15,8 +15,8 @@ import subprocess
 
 
 ROOT = Path(__file__).resolve().parents[6]
-HOST = ROOT / "scripts/ipad-hardware/host"
-SOURCE = ROOT / "scripts/ipad-hardware/device/u2-readonly-typec-scalar-state.py"
+HOST = ROOT / "docs/plans/ipad-port/scripts/ipad-hardware/host"
+SOURCE = ROOT / "docs/plans/ipad-port/scripts/ipad-hardware/device/u2-readonly-typec-scalar-state.py"
 SOURCE_SHA256 = "519b572e73b410f548b313cad1f799a69db3d324a6dc361dfd03cfce08a56547"
 FIELDS = (
     ("AppleTCControllerType10", (

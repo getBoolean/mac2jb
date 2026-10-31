@@ -26,7 +26,7 @@ import subprocess
 
 
 ROOT = Path(__file__).resolve().parents[6]
-HELPER = ROOT / "scripts/ipad-hardware/host/backup-clienttruth-over-root-ssh.py"
+HELPER = ROOT / "docs/plans/ipad-port/scripts/ipad-hardware/host/backup-clienttruth-over-root-ssh.py"
 ADDRESS_FILE = Path("/Users/boolean/.ssh/mac2jb-ipad/wifi-ipv4")
 HOST_KEY_ALIAS = "[127.0.0.1]:2222"
 PRIVATE_NETWORKS = tuple(ipaddress.IPv4Network(value) for value in

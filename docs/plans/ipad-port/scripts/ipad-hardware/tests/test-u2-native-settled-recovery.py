@@ -16,7 +16,7 @@ import time
 
 
 ROOT = Path(__file__).resolve().parents[6]
-FIXTURE = runpy.run_path(str(ROOT / "scripts/ipad-hardware/tests/test-u2-native-service-fixture.py"))
+FIXTURE = runpy.run_path(str(ROOT / "docs/plans/ipad-port/scripts/ipad-hardware/tests/test-u2-native-service-fixture.py"))
 
 
 def main():

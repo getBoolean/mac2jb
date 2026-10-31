@@ -21,7 +21,7 @@ import time
 
 
 ROOT = Path(__file__).resolve().parents[6]
-VALIDATOR = ROOT / "scripts/ipad-hardware/validate-installed-toolbox-archive.py"
+VALIDATOR = ROOT / "docs/plans/ipad-port/scripts/ipad-hardware/validate-installed-toolbox-archive.py"
 UNSIGNED = ROOT / "build/ipad-hardware/mac2jb-ios-probe-stdout-unsigned"
 PREFIX = (
     "var/containers/Bundle/Application/"

@@ -29,11 +29,11 @@ PROFILES = {
         "MAC2JBU1R2SetDescription", "0424a37259f8c873d474dcd1965ccdcc386f0d39814f408869432f2aa235d65d",
     ),
 }
-BASE_PATH = ROOT / "scripts/ipad-hardware/validate-installed-toolbox-archive.py"
+BASE_PATH = ROOT / "docs/plans/ipad-port/scripts/ipad-hardware/validate-installed-toolbox-archive.py"
 BASE_SHA = "f972938f0bd81228c63893325b35a81f1066f030f0b453832d93c0539bb56a72"
-TROLL_PATH = ROOT / "scripts/ipad-hardware/validate-installed-toolbox-trollstore.py"
-TROLL_SHA = "4b82e513f5573c01867ef2747fac540583a1ca48ccb15880583595b06fd882f0"
-ORDINARY_PATH = ROOT / "scripts/ipad-hardware/validate-installed-ordinary-admission.py"
+TROLL_PATH = ROOT / "docs/plans/ipad-port/scripts/ipad-hardware/validate-installed-toolbox-trollstore.py"
+TROLL_SHA = "b25bfd33150151177aafff61351c5361ed93cbedb7fc40deb56e7364fed0715b"
+ORDINARY_PATH = ROOT / "docs/plans/ipad-port/scripts/ipad-hardware/validate-installed-ordinary-admission.py"
 ORDINARY_SHA = "dd6cf2507e224f3b12b17af6d3cf985a5d9b0a052d53f78ee90caaa9dee13906"
 
 

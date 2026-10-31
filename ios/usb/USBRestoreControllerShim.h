@@ -59,6 +59,13 @@ MAC2JBUSBResult MAC2JBUSBCaptureControllerRegistryID(uint64_t *controllerRegistr
 MAC2JBUSBResult MAC2JBUSBCopyConfiguredState(
     uint64_t expectedControllerRegistryID, bool *configured
 );
+// Read-only: write a comma-separated list of USBDeviceFunction names whose
+// IOUSBDeviceInterface nub under the exact controller has no IOService client
+// (the registry signature of a function that failed to register after a
+// description swap). Empty string when every nub is served.
+MAC2JBUSBResult MAC2JBUSBCopyUnservedFunctions(
+    uint64_t expectedControllerRegistryID, char *names, size_t capacity
+);
 void MAC2JBUSBFreeCapturedDescription(uint8_t *bytes);
 
 #endif

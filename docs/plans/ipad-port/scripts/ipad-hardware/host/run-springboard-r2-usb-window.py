@@ -29,10 +29,10 @@ import time
 
 ROOT = Path(__file__).resolve().parents[6]
 BUILD = ROOT / "build/ipad-hardware"
-MONITOR = ROOT / "scripts/ipad-hardware/host/u1-usb-event-monitor.swift"
-WINDOW = ROOT / "scripts/ipad-hardware/run-capture-host-authorization-window.py"
-RUNNER = ROOT / "scripts/ipad-hardware/host/run-springboard-r2-report-wifi.go"
-VALIDATOR = ROOT / "scripts/ipad-hardware/validate-springboard-r2-report.py"
+MONITOR = ROOT / "docs/plans/ipad-port/scripts/ipad-hardware/host/u1-usb-event-monitor.swift"
+WINDOW = ROOT / "docs/plans/ipad-port/scripts/ipad-hardware/run-capture-host-authorization-window.py"
+RUNNER = ROOT / "docs/plans/ipad-port/scripts/ipad-hardware/host/run-springboard-r2-report-wifi.go"
+VALIDATOR = ROOT / "docs/plans/ipad-port/scripts/ipad-hardware/validate-springboard-r2-report.py"
 PINS = {
     MONITOR: "da900b13b41435fc13f7e596f1ed76c88079ad04edd8733440d2a75406079199",
     WINDOW: "365d18f7bc29fbab827537e3cbdde7a69e6501e679b738c26cd84c97b848d456",

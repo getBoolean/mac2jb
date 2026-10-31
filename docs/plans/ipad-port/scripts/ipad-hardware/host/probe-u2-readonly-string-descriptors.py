@@ -18,7 +18,7 @@ import sys
 
 
 ROOT = Path(__file__).resolve().parents[6]
-HOST = ROOT / "scripts/ipad-hardware/host"
+HOST = ROOT / "docs/plans/ipad-port/scripts/ipad-hardware/host"
 SOURCE = HOST / "u2-readonly-string-descriptors.c"
 SOURCE_SHA256 = "523f0442ec9ac79bbaa39818fdbe46f6b90c9a1fdd300a647450f4bb51489254"
 BINARY = ROOT / "build/ipad-hardware/u2-readonly-string-descriptors"

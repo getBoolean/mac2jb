@@ -16,9 +16,9 @@ import time
 
 
 ROOT = Path(__file__).resolve().parents[6]
-RUNNER = ROOT / "scripts/ipad-hardware/collect-installed-toolbox-over-ssh.sh"
-PAYLOAD = ROOT / "scripts/ipad-hardware/device/u1-readonly-installed-toolbox-archive.sh"
-VALIDATOR = ROOT / "scripts/ipad-hardware/validate-installed-toolbox-archive.py"
+RUNNER = ROOT / "docs/plans/ipad-port/scripts/ipad-hardware/collect-installed-toolbox-over-ssh.sh"
+PAYLOAD = ROOT / "docs/plans/ipad-port/scripts/ipad-hardware/device/u1-readonly-installed-toolbox-archive.sh"
+VALIDATOR = ROOT / "docs/plans/ipad-port/scripts/ipad-hardware/validate-installed-toolbox-archive.py"
 
 
 def sha256(path: Path) -> str:
@@ -65,7 +65,7 @@ def fake_codesign_source(marker: Path, child_pid: Path) -> str:
 
 
 def prepare(root: Path, scenario: str) -> dict[str, Path]:
-    script_dir = root / "scripts/ipad-hardware"
+    script_dir = root / "docs/plans/ipad-port/scripts/ipad-hardware"
     device_dir = script_dir / "device"
     device_dir.mkdir(parents=True)
     payload = device_dir / PAYLOAD.name

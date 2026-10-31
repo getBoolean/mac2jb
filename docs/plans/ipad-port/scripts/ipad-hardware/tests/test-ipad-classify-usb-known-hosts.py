@@ -10,7 +10,7 @@ import tempfile
 
 
 ROOT = Path(__file__).resolve().parents[6]
-HELPER = ROOT / "scripts/ipad-hardware/host/classify-usb-known-hosts.py"
+HELPER = ROOT / "docs/plans/ipad-port/scripts/ipad-hardware/host/classify-usb-known-hosts.py"
 STANDARD = b"[127.0.0.1]:2222 ssh-ed25519 AAAAC3NzaFixtureEd25519\n"
 
 

@@ -22,8 +22,8 @@ import sys
 
 
 ROOT = Path(__file__).resolve().parents[6]
-HOST = ROOT / "scripts/ipad-hardware/host"
-SOURCE = ROOT / "scripts/ipad-hardware/device/u2-archive-v2-old-boot-journal.py"
+HOST = ROOT / "docs/plans/ipad-port/scripts/ipad-hardware/host"
+SOURCE = ROOT / "docs/plans/ipad-port/scripts/ipad-hardware/device/u2-archive-v2-old-boot-journal.py"
 SOURCE_SHA256 = "5d5a177e2990aa426a556dd0f102716329993522b11fe57fc856501b71f880ce"
 COPY_HELPER_SHA256 = "9d80538c8c2cea0038cc52f46b8cbff6beb53b9132f75a04519b9354a73cb4df"
 CHECKER = HOST / "check-u2-post-v2-reboot.py"

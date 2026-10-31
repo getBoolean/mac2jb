@@ -31,7 +31,7 @@ const (
 	hostName   = "mac2jb-ipad-known-hosts"
 	keySHA     = "50cf47362f38ff6404979c120147e071bfe8beb924971a27b24210d2250c76dd"
 	hostSHA    = "1db3d7df81efc0ffafd7ce55bffff7b2efdf5b1ec86844278b436adf1b908b35"
-	stagePath  = "scripts/ipad-hardware/device/u1-stage-admission-smoke.py"
+	stagePath  = "docs/plans/ipad-port/scripts/ipad-hardware/device/u1-stage-admission-smoke.py"
 	stageSHA   = "105c919635e0b0fe937849a51e0ce1404dc488dbad511a998a074d41c12e55d3"
 	binPath    = "build/ipad-hardware/u1-admission-smoke-unsigned"
 	binSHA     = "9d4750ca37548b30653c4550b1307b5fc5da5a65e9ec0cadeaaf23f002e231e0"

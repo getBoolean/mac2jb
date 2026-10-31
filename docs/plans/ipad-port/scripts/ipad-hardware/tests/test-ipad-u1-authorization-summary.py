@@ -24,8 +24,8 @@ import types
 
 
 REPO_ROOT = Path(__file__).resolve().parents[6]
-SCRIPT = REPO_ROOT / "scripts/ipad-hardware/summarize-u1-authorization-batch.py"
-FIXTURE_SOURCE = REPO_ROOT / "scripts/ipad-hardware/tests/test-ipad-probe-stdout-validator.py"
+SCRIPT = REPO_ROOT / "docs/plans/ipad-port/scripts/ipad-hardware/summarize-u1-authorization-batch.py"
+FIXTURE_SOURCE = REPO_ROOT / "docs/plans/ipad-port/scripts/ipad-hardware/tests/test-ipad-probe-stdout-validator.py"
 VARIANTS = (
     "baseline",
     "setdescription",

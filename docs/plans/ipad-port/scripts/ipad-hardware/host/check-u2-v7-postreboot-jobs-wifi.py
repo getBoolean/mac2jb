@@ -9,8 +9,8 @@ import stat
 import subprocess
 
 ROOT = Path(__file__).resolve().parents[6]
-HOST = ROOT / "scripts/ipad-hardware/host"
-SOURCE = ROOT / "scripts/ipad-hardware/device/u2-readonly-v7-postreboot-jobs.py"
+HOST = ROOT / "docs/plans/ipad-port/scripts/ipad-hardware/host"
+SOURCE = ROOT / "docs/plans/ipad-port/scripts/ipad-hardware/device/u2-readonly-v7-postreboot-jobs.py"
 SOURCE_SHA256 = "dcd7e838876b3cf456e32237c05d0cc20e3ce6bd0f6516fc5b9692c0b0cb5776"
 STAGE = runpy.run_path(str(HOST / "stage-u2-noop-trial-v4-wifi.py"))
 LINE = (rb"U2_V7_POSTREBOOT_JOBS round=([12]) "

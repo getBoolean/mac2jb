@@ -11,8 +11,8 @@ import subprocess
 
 
 ROOT = Path(__file__).resolve().parents[6]
-HOST = ROOT / "scripts/ipad-hardware/host"
-SOURCE = ROOT / "scripts/ipad-hardware/device/u2-readonly-v5-transition-state.py"
+HOST = ROOT / "docs/plans/ipad-port/scripts/ipad-hardware/host"
+SOURCE = ROOT / "docs/plans/ipad-port/scripts/ipad-hardware/device/u2-readonly-v5-transition-state.py"
 SOURCE_SHA256 = "8f4e83553ee9e3b7c7c2c26668967e2b9b59524b233d07cd78e1bf5cae563967"
 PATTERN = re.compile(
     rb"U2_V5_TRANSITION_STATE old-job=(?:yes|no) new-job=(?:yes|no) "

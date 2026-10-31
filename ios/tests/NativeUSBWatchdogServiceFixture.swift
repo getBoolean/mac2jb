@@ -41,6 +41,10 @@ struct TargetUSBRestoreController: USBRestoreController {
     func isConfigured() throws -> Bool {
         throw FixtureFailure()
     }
+
+    func unservedFunctions() throws -> Set<String> {
+        throw FixtureFailure()
+    }
 }
 
 private struct FileBackedController: USBRestoreController {
@@ -78,6 +82,9 @@ enum NativeUSBWatchdogServiceFixture {
                                             liveDescription: live)
         }
         let readinessPath = ProcessInfo.processInfo.environment["MAC2JB_U2_FIXTURE_READINESS_FILE"]
+        let unservedPath = ProcessInfo.processInfo.environment["MAC2JB_U2_FIXTURE_UNSERVED_QUEUE"]
+        let restartPath = ProcessInfo.processInfo.environment["MAC2JB_U2_FIXTURE_RESTART_LOG"]
+        let healOnRestart = ProcessInfo.processInfo.environment["MAC2JB_U2_FIXTURE_HEAL_ON_RESTART"] == "1"
         let service = try NativeUSBWatchdogService(
             publicationEnabled: true, stateDirectory: state,
             expectedOwner: geteuid(), currentIdentity: identity,
@@ -95,7 +102,31 @@ enum NativeUSBWatchdogServiceFixture {
                             Data("1".utf8)
                     }
                 }
-            }, leaseNanoseconds: 1_000_000_000)
+            }, controllerConfigured: {
+                guard let readinessPath else { return false }
+                return try Data(contentsOf: URL(fileURLWithPath: readinessPath)) ==
+                    Data("1".utf8)
+            }, unservedFunctions: unservedPath.map { path in {
+                // Line N of the queue = unserved functions after publication N
+                // (publication count = bytes in the event file).
+                let lines = try String(contentsOfFile: path, encoding: .utf8)
+                    .split(separator: "\n", omittingEmptySubsequences: false).map(String.init)
+                let published = (try? Data(contentsOf: URL(fileURLWithPath: events)).count) ?? 0
+                let line = lines[min(max(published - 1, 0), lines.count - 1)]
+                return Set(line.split(separator: ",").map(String.init))
+            } }, restartOwner: unservedPath.map { _ in { label in
+                let log = (restartPath ?? "/dev/null")
+                let fd = open(log, O_WRONLY | O_APPEND | O_CREAT, 0o600)
+                if fd >= 0 { _ = label.withCString { write(fd, $0, strlen($0)) }; _ = write(fd, "\n", 1); _ = close(fd) }
+                if healOnRestart, let readinessPath {
+                    try Data("1".utf8).write(to: URL(fileURLWithPath: readinessPath))
+                }
+            } }, healPolicy: {
+                var policy = USBFunctionHealPolicy()
+                policy.settleSeconds = 1
+                policy.pollSeconds = 0.1
+                return policy
+            }(), leaseNanoseconds: 1_000_000_000)
         try service.run()
     }
 }

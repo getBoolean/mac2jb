@@ -16,8 +16,8 @@ import stat
 import subprocess
 
 ROOT = Path(__file__).resolve().parents[6]
-HOST = ROOT / "scripts/ipad-hardware/host"
-SOURCE = ROOT / "scripts/ipad-hardware/device/u2-readonly-copy-v5-failed-journal.py"
+HOST = ROOT / "docs/plans/ipad-port/scripts/ipad-hardware/host"
+SOURCE = ROOT / "docs/plans/ipad-port/scripts/ipad-hardware/device/u2-readonly-copy-v5-failed-journal.py"
 RECOVERY = HOST / "check-u2-post-v5-reboot.py"
 DEST = ROOT / "build/ipad-hardware/u2-v5-oldboot-archive"
 FILE = DEST / "restore-journal.oldboot-v5.json"

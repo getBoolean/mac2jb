@@ -24,7 +24,7 @@ import tempfile
 import time
 
 ROOT = Path(__file__).resolve().parents[6]
-HOST = ROOT / "scripts/ipad-hardware/host"
+HOST = ROOT / "docs/plans/ipad-port/scripts/ipad-hardware/host"
 BUILD = ROOT / "build/ipad-hardware"
 TRIALS = BUILD / "u2-trials"
 BASE = BUILD / "u2-v4-repeat-baseline"

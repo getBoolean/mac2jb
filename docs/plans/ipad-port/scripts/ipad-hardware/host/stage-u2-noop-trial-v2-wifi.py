@@ -20,8 +20,8 @@ import subprocess
 
 
 ROOT = Path(__file__).resolve().parents[6]
-HOST = ROOT / "scripts/ipad-hardware/host"
-DEVICE = ROOT / "scripts/ipad-hardware/device"
+HOST = ROOT / "docs/plans/ipad-port/scripts/ipad-hardware/host"
+DEVICE = ROOT / "docs/plans/ipad-port/scripts/ipad-hardware/device"
 BINARY = ROOT / "build/ipad-hardware/u2-native-noop-trial-v2"
 BINARY_SHA256 = "7e85c5f94ee2a6715e6c52179370f4594aa2f986f3feefda07b544750a290df6"
 SOURCE = DEVICE / "u2-stage-native-noop-trial-v2.py"

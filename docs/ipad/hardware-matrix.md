@@ -55,8 +55,8 @@ The redacted observations and command execution status for the physical target a
 Build and test the four signed probe variants on an Apple-silicon Mac:
 
 ```sh
-bash scripts/ipad-hardware/collect-inventory.sh test
-bash scripts/ipad-hardware/collect-inventory.sh build
+bash docs/plans/ipad-port/scripts/ipad-hardware/collect-inventory.sh test
+bash docs/plans/ipad-port/scripts/ipad-hardware/collect-inventory.sh build
 ```
 
 The build writes ignored artifacts to `build/ipad-hardware/`:
@@ -79,10 +79,10 @@ An already-installed AppSync Unified/appinst pair was evaluated as an alternativ
 After executable admission is resolved, the planned complete generic-capture-host sequence is:
 
 ```sh
-sh scripts/ipad-hardware/collect-installed-toolbox-over-ssh.sh
-python3 scripts/ipad-hardware/run-capture-host-authorization-window.py \
+sh docs/plans/ipad-port/scripts/ipad-hardware/collect-installed-toolbox-over-ssh.sh
+python3 docs/plans/ipad-port/scripts/ipad-hardware/run-capture-host-authorization-window.py \
   a operator-observed-vbus-charging
-python3 scripts/ipad-hardware/summarize-u1-authorization-batch.py \
+python3 docs/plans/ipad-port/scripts/ipad-hardware/summarize-u1-authorization-batch.py \
   build/ipad-hardware/probe-capture-capture-host-a-operator-observed-vbus-charging
 ```
 
@@ -90,7 +90,7 @@ The TrollStore-aware collector accepted installed code identity, CodeDirectory p
 
 The summarizer is host-only and read-only. It revalidates the exact eight local reports and emits redacted service counts, linked/unresolved function counts, raw `IOReturn` classifications, private-readback outcomes, and evidence digests. Current reports and the batch manifest are not signed, so the summary explicitly reports `unauthenticated-local-self-consistency-check`; it assists matrix transcription but does not prove that two runs occurred or independently satisfy U1. Preserve the private raw batch directory and corroborating host capture outside Git.
 
-The reviewed generic-host observer source is `scripts/ipad-hardware/host/u1-usb-event-monitor.swift`; the reviewed interval orchestrator is `scripts/ipad-hardware/run-capture-host-authorization-window.py`. The observer passively subscribes to host-side `IOUSBHostDevice` arrival/termination notifications and checks final registry presence; it neither opens a USB user client nor contacts the iPad. The orchestrator binds the exact batch manifest and reports inside the ready/summary interval, publishes accepted evidence only after the full event-free window, and preserves lifecycle failures only under an `accepted: false` rejected-evidence path. Output must remain private because the hashed host location is correlatable. Do not treat `lifecycleObservationPassed` as universal bus-reset proof: it covers only the explicit lifecycle scope.
+The reviewed generic-host observer source is `docs/plans/ipad-port/scripts/ipad-hardware/host/u1-usb-event-monitor.swift`; the reviewed interval orchestrator is `docs/plans/ipad-port/scripts/ipad-hardware/run-capture-host-authorization-window.py`. The observer passively subscribes to host-side `IOUSBHostDevice` arrival/termination notifications and checks final registry presence; it neither opens a USB user client nor contacts the iPad. The orchestrator binds the exact batch manifest and reports inside the ready/summary interval, publishes accepted evidence only after the full event-free window, and preserves lifecycle failures only under an `accepted: false` rejected-evidence path. Output must remain private because the hashed host location is correlatable. Do not treat `lifecycleObservationPassed` as universal bus-reset proof: it covers only the explicit lifecycle scope.
 
 The connected target is the M2 iPad Pro 12.9-inch (6th generation), `iPad14,5` / `J620AP` / `T8112`, with a `thunderbolt-usb4` port family. Do not reuse its capability record for another ProductType or OS build.
 
@@ -135,7 +135,7 @@ The batch rejects unequal consecutive `topologyFingerprint` values before publis
 
 ### Evidence references for the U1 decision
 
-All paths below are under ignored, owner-only `build/ipad-hardware/`; the Markdown matrix contains no raw device identifiers. The named validators are in `scripts/ipad-hardware/` and can recheck the retained files without contacting the iPad.
+All paths below are under ignored, owner-only `build/ipad-hardware/`; the Markdown matrix contains no raw device identifiers. The named validators are in `docs/plans/ipad-port/scripts/ipad-hardware/` and can recheck the retained files without contacting the iPad.
 
 | Evidence | Private path or artifact group | Independent check |
 |---|---|---|

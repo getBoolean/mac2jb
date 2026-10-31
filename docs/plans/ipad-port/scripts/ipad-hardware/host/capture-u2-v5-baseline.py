@@ -20,7 +20,7 @@ import subprocess
 
 
 ROOT = Path(__file__).resolve().parents[6]
-HOST = ROOT / "scripts/ipad-hardware/host"
+HOST = ROOT / "docs/plans/ipad-port/scripts/ipad-hardware/host"
 DEST = ROOT / "build/ipad-hardware/u2-v5-baseline"
 C = runpy.run_path(str(HOST / "check-u2-v4-current.py"))
 

@@ -1,6 +1,6 @@
 # Agent workflow
 
-For iPad port hardware work, use the repository skill at `.agents/skills/ipad-port-headless/SKILL.md`. It contains the pinned connection CLIs, current device stop point, evidence paths, and cleanup constraints. Read the latest entries in `docs/ipad/target-device-findings.md` and `docs/ipad/usb-recovery.md` before acting on the device.
+For iPad port hardware work, use the repository skill at `.agents/skills/ipad-port-headless/SKILL.md`. It contains durable procedure, rules, and CLI usage only. The current device state is the **Current state** block at the top of `docs/ipad/target-device-findings.md`; read it and `docs/ipad/usb-recovery.md` before acting on the device. **Never add status updates, trial results, or stop points to the skill.** After a device action, replace the findings Current state block and add dated history to the docs instead.
 
 When an investigation stalls after checking the available evidence, ask a **fresh agent** for an independent second opinion before repeating an experiment or concluding that the issue has no solution. Give the agent the current objective, repo paths, observed results, and safety constraints, but no inherited analysis or preferred diagnosis. Ask it to look for missed evidence, test competing explanations, and identify the smallest discriminating next check.
 

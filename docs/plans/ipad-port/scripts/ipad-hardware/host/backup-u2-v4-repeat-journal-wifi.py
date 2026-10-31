@@ -17,8 +17,8 @@ import stat
 import subprocess
 
 ROOT = Path(__file__).resolve().parents[6]
-HOST = ROOT / "scripts/ipad-hardware/host"
-SOURCE = ROOT / "scripts/ipad-hardware/device/u2-readonly-copy-v4-repeat-journal.py"
+HOST = ROOT / "docs/plans/ipad-port/scripts/ipad-hardware/host"
+SOURCE = ROOT / "docs/plans/ipad-port/scripts/ipad-hardware/device/u2-readonly-copy-v4-repeat-journal.py"
 SOURCE_SHA = "f7be9d76efa4257aed0adac45431468b94f8f6d83d1a44504e778fabf1717087"
 CHECKER = runpy.run_path(str(HOST / "check-u2-v7-current.py"))
 BASE = ROOT / "build/ipad-hardware/u2-v4-repeat-baseline"

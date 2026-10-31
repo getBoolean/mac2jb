@@ -12,8 +12,8 @@ import tempfile
 
 
 ROOT = Path(__file__).resolve().parents[6]
-RUNNER = ROOT / "scripts/ipad-hardware/host/classify-current-usb-ssh-host.sh"
-CLASSIFIER = ROOT / "scripts/ipad-hardware/host/classify-usb-known-hosts.py"
+RUNNER = ROOT / "docs/plans/ipad-port/scripts/ipad-hardware/host/classify-current-usb-ssh-host.sh"
+CLASSIFIER = ROOT / "docs/plans/ipad-port/scripts/ipad-hardware/host/classify-usb-known-hosts.py"
 STANDARD = b"[127.0.0.1]:2222 ssh-ed25519 AAAAC3NzaFixtureEd25519\n"
 STANDARD_OUTPUT = (
     b"capture-status: classified\n"

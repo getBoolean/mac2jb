@@ -18,7 +18,7 @@ import tempfile
 
 
 ROOT = Path(__file__).resolve().parents[5]
-DEVICE = ROOT / "scripts/ipad-hardware/device"
+DEVICE = ROOT / "docs/plans/ipad-port/scripts/ipad-hardware/device"
 BUILD = ROOT / "build/ipad-hardware"
 OUTPUT = BUILD / "mac2jb-u2-watchdog_0.1.0_all.deb"
 MODULES = (

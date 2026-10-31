@@ -27,7 +27,7 @@ import sys
 
 
 ROOT = Path(__file__).resolve().parents[6]
-HOST = ROOT / "scripts/ipad-hardware/host"
+HOST = ROOT / "docs/plans/ipad-port/scripts/ipad-hardware/host"
 BASE = ROOT / "build/ipad-hardware/u2-v4-baseline"
 MANIFEST_SHA256 = "b80ccbcc1ae28919a28f0353c0b8fd2bebb8c05c7a96c8d7f29814d67908170d"
 PROBE = runpy.run_path(str(HOST / "probe-u2-readonly-string-descriptors.py"))

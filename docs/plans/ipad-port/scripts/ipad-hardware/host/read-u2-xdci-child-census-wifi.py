@@ -11,8 +11,8 @@ import subprocess
 
 
 ROOT = Path(__file__).resolve().parents[6]
-HOST = ROOT / "scripts/ipad-hardware/host"
-SOURCE = ROOT / "scripts/ipad-hardware/device/u2-readonly-xdci-child-census.py"
+HOST = ROOT / "docs/plans/ipad-port/scripts/ipad-hardware/host"
+SOURCE = ROOT / "docs/plans/ipad-port/scripts/ipad-hardware/device/u2-readonly-xdci-child-census.py"
 SOURCE_SHA256 = "8a0191a05af9aa56d789dfb5bd18cbb5fe7d4e4f1ba8e44ac70bb6d977c79674"
 CLASS = rb"[A-Za-z][A-Za-z0-9_]{0,99}"
 EDGE = re.compile(rb"U2_XDCI_EDGE depth=([1-5]) provider=(" + CLASS +

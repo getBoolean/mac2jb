@@ -16,10 +16,10 @@ import subprocess
 
 
 ROOT = Path(__file__).resolve().parents[6]
-SOURCE = ROOT / "scripts/ipad-hardware/device/u1-readonly-power-source-state.py"
+SOURCE = ROOT / "docs/plans/ipad-port/scripts/ipad-hardware/device/u1-readonly-power-source-state.py"
 SOURCE_SHA256 = "c0ab521efcdfa52b96ac8a1c4e6a8d3cd76a4aad145a32c7528a176fe1d7f677"
-WIRELESS = ROOT / "scripts/ipad-hardware/host/check-pinned-wireless-ssh.py"
-HELPER = ROOT / "scripts/ipad-hardware/host/backup-clienttruth-over-root-ssh.py"
+WIRELESS = ROOT / "docs/plans/ipad-port/scripts/ipad-hardware/host/check-pinned-wireless-ssh.py"
+HELPER = ROOT / "docs/plans/ipad-port/scripts/ipad-hardware/host/backup-clienttruth-over-root-ssh.py"
 RESULT = re.compile(rb"POWER_SOURCE query=ok external=(?:yes|no) "
                     rb"charging=(?:yes|no) full=(?:yes|no)\n\Z")
 

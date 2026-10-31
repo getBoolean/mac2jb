@@ -20,8 +20,8 @@ import time
 
 
 ROOT = Path(__file__).resolve().parents[6]
-PAYLOAD = ROOT / "scripts/ipad-hardware/device/u1-readonly-app-plist-archive.sh"
-RUNNER = ROOT / "scripts/ipad-hardware/collect-app-versions-over-ssh.sh"
+PAYLOAD = ROOT / "docs/plans/ipad-port/scripts/ipad-hardware/device/u1-readonly-app-plist-archive.sh"
+RUNNER = ROOT / "docs/plans/ipad-port/scripts/ipad-hardware/collect-app-versions-over-ssh.sh"
 EXPECTED = (
     "dopamine-app: version=2.4.5 build=1 bundle-family=standard\n"
     "trollstore-app: version=2.1.0 build=210 bundle-family=stealth\n"

@@ -32,9 +32,9 @@ const (
 	hostName        = "mac2jb-ipad-known-hosts"
 	keySHA          = "50cf47362f38ff6404979c120147e071bfe8beb924971a27b24210d2250c76dd"
 	hostSHA         = "1db3d7df81efc0ffafd7ce55bffff7b2efdf5b1ec86844278b436adf1b908b35"
-	payloadPath     = "scripts/ipad-hardware/device/u1-readonly-stock-configuration.py"
+	payloadPath     = "docs/plans/ipad-port/scripts/ipad-hardware/device/u1-readonly-stock-configuration.py"
 	payloadSHA      = "93ac89b9c9f5db53f229fec0122f4c411f8ac893e15042627ed4b836b625fdfa"
-	descPayloadPath = "scripts/ipad-hardware/device/u1-readonly-controller-description-copy.py"
+	descPayloadPath = "docs/plans/ipad-port/scripts/ipad-hardware/device/u1-readonly-controller-description-copy.py"
 	descPayloadSHA  = "b2470a242e1984b746bddf92cd15a1570766bdf6dd6fcbeadc3efb0c3b5f650a"
 	stockPath       = "/System/Library/AppleUSBDevice/USBDeviceConfiguration.plist"
 	maxBytes        = 2 * 1024 * 1024

@@ -16,7 +16,7 @@ import subprocess
 
 
 ROOT = Path(__file__).resolve().parents[6]
-HOST = ROOT / "scripts/ipad-hardware/host"
+HOST = ROOT / "docs/plans/ipad-port/scripts/ipad-hardware/host"
 C = runpy.run_path(str(HOST / "check-u2-v3-current.py"))
 JOURNAL_SHA256 = "b8e66632f52f59ac13d389f650e71840d90226096bbe0945aeb881562ee7fe3d"
 

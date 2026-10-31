@@ -12,9 +12,9 @@ import tempfile
 
 
 ROOT = Path(__file__).resolve().parents[6]
-RESTORER = ROOT / "scripts/ipad-hardware/host/restore-pinned-known-hosts.sh"
-HELPER = ROOT / "scripts/ipad-hardware/host/exact-link-no-replace.py"
-RECONSTRUCT_HELPER = ROOT / "scripts/ipad-hardware/host/reconstruct-pinned-known-hosts.py"
+RESTORER = ROOT / "docs/plans/ipad-port/scripts/ipad-hardware/host/restore-pinned-known-hosts.sh"
+HELPER = ROOT / "docs/plans/ipad-port/scripts/ipad-hardware/host/exact-link-no-replace.py"
+RECONSTRUCT_HELPER = ROOT / "docs/plans/ipad-port/scripts/ipad-hardware/host/reconstruct-pinned-known-hosts.py"
 PIN = b"[127.0.0.1]:2222 ssh-ed25519 AAAAC3NzaFixtureHostKey\n"
 
 

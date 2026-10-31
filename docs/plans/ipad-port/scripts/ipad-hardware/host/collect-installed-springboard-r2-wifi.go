@@ -35,8 +35,8 @@ const (
 type profile struct{ payload, sha, output string }
 
 var profiles = map[string]profile{
-	"baseline":       {"scripts/ipad-hardware/device/u1-readonly-installed-springboard-r2-baseline-archive.sh", "77aa8d9d5c7958756cf5a0e2d4e5cc91984bc490ec94578e17ded9d80eed48af", "build/ipad-hardware/installed-springboard-r2-baseline-archive.tar"},
-	"setdescription": {"scripts/ipad-hardware/device/u1-readonly-installed-springboard-r2-setdescription-archive.sh", "eea2f20290047edb33d9fb81feff5fb46a161c25ea84b8f27ac948e655ea4a57", "build/ipad-hardware/installed-springboard-r2-setdescription-archive.tar"},
+	"baseline":       {"docs/plans/ipad-port/scripts/ipad-hardware/device/u1-readonly-installed-springboard-r2-baseline-archive.sh", "77aa8d9d5c7958756cf5a0e2d4e5cc91984bc490ec94578e17ded9d80eed48af", "build/ipad-hardware/installed-springboard-r2-baseline-archive.tar"},
+	"setdescription": {"docs/plans/ipad-port/scripts/ipad-hardware/device/u1-readonly-installed-springboard-r2-setdescription-archive.sh", "eea2f20290047edb33d9fb81feff5fb46a161c25ea84b8f27ac948e655ea4a57", "build/ipad-hardware/installed-springboard-r2-setdescription-archive.tar"},
 }
 
 // The iPad has a rootless shell layout; /bin/sh is not assumed to exist.

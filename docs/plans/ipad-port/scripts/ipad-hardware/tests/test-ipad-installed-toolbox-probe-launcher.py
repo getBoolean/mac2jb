@@ -13,7 +13,7 @@ import textwrap
 
 
 ROOT = Path(__file__).resolve().parents[6]
-PAYLOAD = ROOT / "scripts/ipad-hardware/device/u1-readonly-run-installed-toolbox-probe.sh"
+PAYLOAD = ROOT / "docs/plans/ipad-port/scripts/ipad-hardware/device/u1-readonly-run-installed-toolbox-probe.sh"
 EXECUTABLES = {
     "baseline": "mac2jb-u1-baseline",
     "setdescription": "Probes/mac2jb-u1-setdescription",

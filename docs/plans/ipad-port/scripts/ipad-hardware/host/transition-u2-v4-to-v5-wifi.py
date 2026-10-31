@@ -18,10 +18,10 @@ import sys
 
 
 ROOT = Path(__file__).resolve().parents[6]
-HOST = ROOT / "scripts/ipad-hardware/host"
+HOST = ROOT / "docs/plans/ipad-port/scripts/ipad-hardware/host"
 BINARY = ROOT / "build/ipad-hardware/u2-native-noop-trial-v5-postclone"
 BINARY_SHA256 = "54e29b7635bae3a700366100333aa10849321c69e23ac90d26f41240bce83387"
-SOURCE = ROOT / "scripts/ipad-hardware/device/u2-transition-v4-to-v5.py"
+SOURCE = ROOT / "docs/plans/ipad-port/scripts/ipad-hardware/device/u2-transition-v4-to-v5.py"
 SOURCE_SHA256 = "8167d340b0e635b1c7e365e09b7a948d9c0e44fa99ac9c59aa48b0ebeb1cc356"
 CHECKER = HOST / "check-u2-v4-current.py"
 CHECKER_SHA256 = "f0b6cfbe7aca08cb10fc4dcce68d39ca0fe77cd3880cb802a3a6a8531cf9b3f1"

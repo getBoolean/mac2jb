@@ -20,7 +20,7 @@ import time
 
 
 ROOT = Path(__file__).resolve().parents[6]
-INSPECTOR = ROOT / "scripts/ipad-hardware/inspect-trollstore-clean-restrictions-over-ssh.py"
+INSPECTOR = ROOT / "docs/plans/ipad-port/scripts/ipad-hardware/inspect-trollstore-clean-restrictions-over-ssh.py"
 PAYLOAD = b"#!/bin/sh\nexit 0\n"
 IDENTITY = b"fixture-identity\n"
 KNOWN_HOSTS = b"fixture-known-hosts\n"
@@ -162,8 +162,8 @@ def replace_constant(source: str, name: str, value: str) -> str:
 
 def prepare(root: Path, scenario: str) -> dict[str, Path]:
     repo = root / "repo"
-    inspector = repo / "scripts/ipad-hardware/inspect-trollstore-clean-restrictions-over-ssh.py"
-    payload = repo / "scripts/ipad-hardware/device/u1-readonly-trollstore-clean-restrictions-input.sh"
+    inspector = repo / "docs/plans/ipad-port/scripts/ipad-hardware/inspect-trollstore-clean-restrictions-over-ssh.py"
+    payload = repo / "docs/plans/ipad-port/scripts/ipad-hardware/device/u1-readonly-trollstore-clean-restrictions-input.sh"
     identity = root / "identity"
     known_hosts = root / "known-hosts"
     contacts = root / "contacts"

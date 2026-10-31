@@ -17,7 +17,7 @@ import subprocess
 
 
 ROOT = Path(__file__).resolve().parents[6]
-HOST = ROOT / "scripts/ipad-hardware/host"
+HOST = ROOT / "docs/plans/ipad-port/scripts/ipad-hardware/host"
 CHECK = runpy.run_path(str(HOST / "check-u2-external-current.py"))
 EXPECTED_JOURNAL = "77caed18edb899d919eddc6f65229464883b20091b0ae3849bf2af0743abda39"
 

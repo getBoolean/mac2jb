@@ -14,8 +14,8 @@ import stat
 import subprocess
 
 ROOT = Path(__file__).resolve().parents[6]
-HOST = ROOT / "scripts/ipad-hardware/host"
-SOURCE = ROOT / "scripts/ipad-hardware/device/u2-readonly-description-interface-relation.py"
+HOST = ROOT / "docs/plans/ipad-port/scripts/ipad-hardware/host"
+SOURCE = ROOT / "docs/plans/ipad-port/scripts/ipad-hardware/device/u2-readonly-description-interface-relation.py"
 SOURCE_SHA = "1b28c65c29be0fed1e06b4c6cb1437ce397dd512407ba5fd5d33525a52b0d63e"
 CHECKER = HOST / "check-u2-post-v5-reboot.py"
 EXPECTED = (b"U2_POST_V5_REBOOT boot=new live=original configs=5 resolved-strings=23 "

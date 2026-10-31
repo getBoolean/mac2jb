@@ -22,8 +22,8 @@ ROOT = Path(__file__).resolve().parents[6]
 BINARY = ROOT / "build/ipad-hardware/u2-native-admission-smoke"
 DIGEST = "459d1e3f4f0f9c1792920f6dcdd548fecb94753de0d36c1af5e2b6e2b0e2c83c"
 STAGE = "/var/mobile/Media/.mac2jb-u2-native-admission-459d1e3f4f0f"
-WIRELESS = ROOT / "scripts/ipad-hardware/host/check-pinned-wireless-ssh.py"
-HELPER = ROOT / "scripts/ipad-hardware/host/backup-clienttruth-over-root-ssh.py"
+WIRELESS = ROOT / "docs/plans/ipad-port/scripts/ipad-hardware/host/check-pinned-wireless-ssh.py"
+HELPER = ROOT / "docs/plans/ipad-port/scripts/ipad-hardware/host/backup-clienttruth-over-root-ssh.py"
 PYTHON = "/var/jb/usr/bin/python3 -I -S -B -c "
 
 

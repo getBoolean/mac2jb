@@ -16,7 +16,7 @@ import time
 
 
 ROOT = Path(__file__).resolve().parents[6]
-DIAGNOSTIC = ROOT / "scripts/ipad-hardware/diagnose-ipad-ssh-transport.py"
+DIAGNOSTIC = ROOT / "docs/plans/ipad-port/scripts/ipad-hardware/diagnose-ipad-ssh-transport.py"
 IDENTITY = b"fixture-identity\n"
 KNOWN_HOSTS = b"fixture-known-hosts\n"
 
@@ -85,7 +85,7 @@ def fake_ssh_source(scenario: str, contacts: Path, child_pid: Path) -> str:
 
 def prepare(root: Path, scenario: str) -> dict[str, Path]:
     repo = root / "repo"
-    diagnostic = repo / "scripts/ipad-hardware/diagnose-ipad-ssh-transport.py"
+    diagnostic = repo / "docs/plans/ipad-port/scripts/ipad-hardware/diagnose-ipad-ssh-transport.py"
     identity = root / "identity"
     known_hosts = root / "known-hosts"
     fake_ssh = root / "ssh"

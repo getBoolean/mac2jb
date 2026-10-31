@@ -21,7 +21,7 @@ import time
 
 
 ROOT = Path(__file__).resolve().parents[6]
-RUNNER = ROOT / "scripts/ipad-hardware/run-installed-toolbox-authorization-batch.py"
+RUNNER = ROOT / "docs/plans/ipad-port/scripts/ipad-hardware/run-installed-toolbox-authorization-batch.py"
 OUTPUT_NAME = "probe-capture-capture-host-a-operator-not-observed"
 VARIANTS = {
     "baseline": "mac2jb-u1-baseline",
@@ -232,7 +232,7 @@ def replace_constant(source: str, name: str, value: str) -> str:
 
 def prepare(root: Path, scenario: str) -> dict[str, Path]:
     repo = root / "repo"
-    script_dir = repo / "scripts/ipad-hardware"
+    script_dir = repo / "docs/plans/ipad-port/scripts/ipad-hardware"
     build = repo / "build/ipad-hardware"
     script_dir.mkdir(parents=True)
     build.mkdir(parents=True)

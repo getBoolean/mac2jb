@@ -15,7 +15,7 @@ import time
 
 
 ROOT = Path(__file__).resolve().parents[6]
-RUNNER = ROOT / "scripts/ipad-hardware/collect-installed-app-versions.sh"
+RUNNER = ROOT / "docs/plans/ipad-port/scripts/ipad-hardware/collect-installed-app-versions.sh"
 
 
 def write_executable(path: Path, body: str) -> None:

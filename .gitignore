@@ -48,3 +48,15 @@ mac2jb-active-connect.txt
 *.kate-swp
 
 /runs/
+
+# iPad hardware evidence: device syslogs, crash reports, USB lifecycle traces,
+# restore journals/kits and private baselines. Keep these under the ignored
+# build/ipad-hardware/ tree; never commit them anywhere.
+syslog.txt
+*.syslog
+*.ips
+lifecycle.ndjson
+restore-journal*.json
+u2-wifi-restore-kit/
+u2-function-census/
+u2-trials/

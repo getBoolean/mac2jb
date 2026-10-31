@@ -16,8 +16,8 @@ import subprocess
 import sys
 
 ROOT = Path(__file__).resolve().parents[6]
-HOST = ROOT / "scripts/ipad-hardware/host"
-SOURCE = ROOT / "scripts/ipad-hardware/device/u2-clean-v4-v5-archived-trials.py"
+HOST = ROOT / "docs/plans/ipad-port/scripts/ipad-hardware/host"
+SOURCE = ROOT / "docs/plans/ipad-port/scripts/ipad-hardware/device/u2-clean-v4-v5-archived-trials.py"
 SOURCE_SHA = "e3fe4be8283faaf90f07394c53a06997dc28de6454957b6e24e9b5c975ed430d"
 ARCHIVE = runpy.run_path(str(HOST / "archive-u2-v5-old-boot-journal-wifi.py"))
 STAGE = "initial"

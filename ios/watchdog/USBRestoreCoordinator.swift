@@ -145,6 +145,53 @@ struct USBRestoreCoordinator {
         }
     }
 
+    // Operator-requested re-publication after the host has observed that USB
+    // did not return. The readiness gate cannot apply: it waits for a first
+    // enumeration that has already failed. The controller must read as not
+    // configured, so a working connection is never republished. The journal
+    // still ends in awaitingVerification and needs independent host proof.
+    func recoverAfterExternalFailure(controllerConfigured: () throws -> Bool) throws {
+        var current = try journal.read()
+        try current.recipe.validateAgainst(currentIdentity)
+        guard current.phase == .awaitingVerification || current.phase == .recoveryRequired else {
+            throw USBRestoreCoordinatorError.recoveryRequired
+        }
+        guard try !controllerConfigured() else {
+            throw USBRestoreCoordinatorError.recoveryRequired
+        }
+        if current.phase == .awaitingVerification {
+            try journal.transition(from: current, to: changed(current, .recoveryRequired))
+            current = try journal.read()
+        }
+        try journal.transition(from: current, to: changed(current, .restoring))
+        do {
+            try recoveryController.publish(current.recipe.originalDescription)
+            let restoring = try journal.read()
+            try journal.transition(from: restoring,
+                                   to: changed(restoring, .awaitingVerification))
+        } catch {
+            if let latest = try? journal.read(), latest.phase == .restoring {
+                try? journal.transition(from: latest, to: changed(latest, .recoveryRequired))
+            }
+            throw error
+        }
+    }
+
+    // After an automatic heal brought the controller on bus without a further
+    // publication, the description on the bus is the journaled original (the
+    // no-op published exactly it). Record that as awaiting external proof;
+    // never confirms. Refused unless the controller reads configured.
+    func acceptConfiguredOriginal(controllerConfigured: () throws -> Bool) throws {
+        let current = try journal.read()
+        try current.recipe.validateAgainst(currentIdentity)
+        guard current.phase == .recoveryRequired, try controllerConfigured() else {
+            throw USBRestoreCoordinatorError.recoveryRequired
+        }
+        try journal.transition(from: current, to: changed(current, .restoring))
+        let restoring = try journal.read()
+        try journal.transition(from: restoring, to: changed(restoring, .awaitingVerification))
+    }
+
     // The watchdog may restore without a host connection. The journal stays
     // pending until an independent observer can prove the original state.
     func confirmExternalRestore() throws {

@@ -6,7 +6,7 @@ import runpy
 
 
 ROOT = Path(__file__).resolve().parents[6]
-PROBE = runpy.run_path(str(ROOT / "scripts/ipad-hardware/host/probe-u2-readonly-string-descriptors.py"))
+PROBE = runpy.run_path(str(ROOT / "docs/plans/ipad-port/scripts/ipad-hardware/host/probe-u2-readonly-string-descriptors.py"))
 
 
 def rejects(parser, data):

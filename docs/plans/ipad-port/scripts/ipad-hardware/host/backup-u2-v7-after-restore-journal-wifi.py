@@ -17,8 +17,8 @@ import stat
 import subprocess
 
 ROOT = Path(__file__).resolve().parents[6]
-HOST = ROOT / "scripts/ipad-hardware/host"
-SOURCE = ROOT / "scripts/ipad-hardware/device/u2-readonly-copy-v7-after-restore-journal.py"
+HOST = ROOT / "docs/plans/ipad-port/scripts/ipad-hardware/host"
+SOURCE = ROOT / "docs/plans/ipad-port/scripts/ipad-hardware/device/u2-readonly-copy-v7-after-restore-journal.py"
 SOURCE_SHA = "0d5bdc2f0ef0eb3dcd00c702b936ad4827da13fdc2bed8f1810f2479ac6a9c08"
 CHECKER = runpy.run_path(str(HOST / "check-u2-v7-current.py"))
 RECOVERY = runpy.run_path(str(HOST / "diagnose-u2-recovery-stage.py"))

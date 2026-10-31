@@ -15,7 +15,7 @@ import sys
 
 
 ROOT = Path(__file__).resolve().parents[5]
-BASE_PATH = ROOT / "scripts/ipad-hardware/validate-probe-stdout.py"
+BASE_PATH = ROOT / "docs/plans/ipad-port/scripts/ipad-hardware/validate-probe-stdout.py"
 BASE_SHA = "7afa3421436d1598809f81c06629792cb41830b668e03f913c841adfe75455a9"
 
 

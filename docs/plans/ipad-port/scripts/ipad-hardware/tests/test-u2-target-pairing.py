@@ -6,7 +6,7 @@ import runpy
 
 
 ROOT = Path(__file__).resolve().parents[6]
-HOST = ROOT / "scripts/ipad-hardware/host"
+HOST = ROOT / "docs/plans/ipad-port/scripts/ipad-hardware/host"
 BASELINE = runpy.run_path(str(HOST / "capture-u2-private-baseline.py"))
 CHECKER = runpy.run_path(str(HOST / "check-u2-v7-current.py"))
 USB = b"0123456789abcdef0123456789abcdef01234567"

@@ -15,8 +15,8 @@ import subprocess
 
 
 ROOT = Path(__file__).resolve().parents[6]
-HOST = ROOT / "scripts/ipad-hardware/host"
-SOURCE = ROOT / "scripts/ipad-hardware/device/u2-readonly-usb-role-classes.py"
+HOST = ROOT / "docs/plans/ipad-port/scripts/ipad-hardware/host"
+SOURCE = ROOT / "docs/plans/ipad-port/scripts/ipad-hardware/device/u2-readonly-usb-role-classes.py"
 SOURCE_SHA256 = "92a6afdd723aba4ca65b17c54406dc2be6b247bb6081bb10093a1c10587bf0f7"
 HEADER = re.compile(rb"U2_ROLE_CLASSES scanned=([0-9]{1,4}) matches=([0-9]{1,4}) pairs=([0-9]{1,2})\n")
 LINE = re.compile(rb"U2_ROLE_CLASS class=([A-Za-z][A-Za-z0-9_]{0,99}) parent=([A-Za-z][A-Za-z0-9_]{0,99}|None) count=([0-9]{1,4})\n")

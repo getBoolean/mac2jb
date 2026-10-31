@@ -11,8 +11,8 @@ import subprocess
 
 
 ROOT = Path(__file__).resolve().parents[6]
-HOST = ROOT / "scripts/ipad-hardware/host"
-SOURCE = ROOT / "scripts/ipad-hardware/device/u2-readonly-v5-journal-timing.py"
+HOST = ROOT / "docs/plans/ipad-port/scripts/ipad-hardware/host"
+SOURCE = ROOT / "docs/plans/ipad-port/scripts/ipad-hardware/device/u2-readonly-v5-journal-timing.py"
 SOURCE_SHA256 = "ee8791d8f9a7831b2e4dcb87c44be3bc5bd2e47b01f5edbbcb97ae3b3fb351c1"
 PATTERN = re.compile(
     rb"U2_V5_JOURNAL_TIMING mtime-ns=[0-9]{18,20} "

@@ -25,7 +25,7 @@ import subprocess
 
 
 ROOT = Path(__file__).resolve().parents[6]
-DEVICE_SCRIPT = ROOT / "scripts/ipad-hardware/device/u1-readonly-clienttruth-backup-metadata.py"
+DEVICE_SCRIPT = ROOT / "docs/plans/ipad-port/scripts/ipad-hardware/device/u1-readonly-clienttruth-backup-metadata.py"
 KEY_DIR = Path("/Users/boolean/.ssh/mac2jb-ipad")
 IDENTITY = KEY_DIR / "mac2jb-ipad-probe-ed25519"
 KNOWN_HOSTS = KEY_DIR / "mac2jb-ipad-known-hosts"

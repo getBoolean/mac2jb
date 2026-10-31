@@ -10,8 +10,8 @@ import subprocess
 
 
 ROOT = Path(__file__).resolve().parents[6]
-HOST = ROOT / "scripts/ipad-hardware/host"
-SOURCE = ROOT / "scripts/ipad-hardware/device/u2-readonly-usb-service-candidates.py"
+HOST = ROOT / "docs/plans/ipad-port/scripts/ipad-hardware/host"
+SOURCE = ROOT / "docs/plans/ipad-port/scripts/ipad-hardware/device/u2-readonly-usb-service-candidates.py"
 SHA = "f04fee4151ebf25a5ef079edc91ac7f7292eac4a770e3fbb16ba8e8d274ff695"
 LINE = re.compile(rb"U2_USB_(?:SERVICE|PROCESS) [A-Za-z0-9_.-]{1,110}\n")
 

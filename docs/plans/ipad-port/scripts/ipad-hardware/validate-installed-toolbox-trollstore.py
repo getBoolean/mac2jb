@@ -28,7 +28,7 @@ import zipfile
 
 
 ROOT = Path("/Volumes/WD_SN770_1T/dev/GitHub/mac2jb")
-BASE_PATH = ROOT / "scripts/ipad-hardware/validate-installed-toolbox-archive.py"
+BASE_PATH = ROOT / "docs/plans/ipad-port/scripts/ipad-hardware/validate-installed-toolbox-archive.py"
 BASE_SHA = "f972938f0bd81228c63893325b35a81f1066f030f0b453832d93c0539bb56a72"
 PACKAGE = ROOT / "build/ipad-hardware/mac2jb-u1-stdout-toolbox.tipa"
 PACKAGE_SHA = "c97a5d9f60a67329b3b1946e478e95f1afc903d51a7cb7902d8dbdc9a4309f13"

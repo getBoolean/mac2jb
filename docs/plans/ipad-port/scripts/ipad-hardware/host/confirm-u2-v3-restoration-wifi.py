@@ -22,12 +22,12 @@ import time
 
 
 ROOT = Path(__file__).resolve().parents[6]
-HOST = ROOT / "scripts/ipad-hardware/host"
+HOST = ROOT / "docs/plans/ipad-port/scripts/ipad-hardware/host"
 CHECKER = HOST / "check-u2-v3-current.py"
 CHECKER_SHA256 = "c90396d4631cfe28e010f29a2157e0391c36e855cd65db349e4c265c39d0d269"
 PACKET = HOST / "probe-u2-ncm-packet-flow.py"
 PACKET_SHA256 = "832fb6d2cac032c88a7d31910c7761fcaa132319a209f541a0828af0764a5b21"
-CLIENT = ROOT / "scripts/ipad-hardware/device/u2-confirm-native-restoration-v3.py"
+CLIENT = ROOT / "docs/plans/ipad-port/scripts/ipad-hardware/device/u2-confirm-native-restoration-v3.py"
 CLIENT_SHA256 = "48aae520d71a56d4fa824e7a8d97d13a27bc5a576fc0550973e4f1af3da0c51b"
 MANIFEST_SHA256 = "e4da9a2f2679de5d8822c28d19e0fa3b50e99a037b99ad47012c1eb31611c425"
 TRIALS = ROOT / "build/ipad-hardware/u2-trials"

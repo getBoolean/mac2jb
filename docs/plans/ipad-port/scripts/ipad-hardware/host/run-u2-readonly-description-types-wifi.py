@@ -15,10 +15,10 @@ import subprocess
 
 
 ROOT = Path(__file__).resolve().parents[6]
-SOURCE = ROOT / "scripts/ipad-hardware/device/u1-readonly-controller-description-types.py"
+SOURCE = ROOT / "docs/plans/ipad-port/scripts/ipad-hardware/device/u1-readonly-controller-description-types.py"
 SOURCE_SHA256 = "00f254119c926c8649fbeb7dadf15e0fc048762b4cfd5c1fab38566300afc253"
-WIRELESS = ROOT / "scripts/ipad-hardware/host/check-pinned-wireless-ssh.py"
-HELPER = ROOT / "scripts/ipad-hardware/host/backup-clienttruth-over-root-ssh.py"
+WIRELESS = ROOT / "docs/plans/ipad-port/scripts/ipad-hardware/host/check-pinned-wireless-ssh.py"
+HELPER = ROOT / "docs/plans/ipad-port/scripts/ipad-hardware/host/backup-clienttruth-over-root-ssh.py"
 RESULT = re.compile(rb"DESCRIPTION_TYPES query=ok default=(?:dict|array|data|string):[0-9]{1,4} "
                     rb"live=(?:dict|array|data|string):[0-9]{1,4}\n\Z")
 

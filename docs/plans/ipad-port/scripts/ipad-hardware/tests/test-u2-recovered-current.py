@@ -12,7 +12,7 @@ import runpy
 
 
 ROOT = Path(__file__).resolve().parents[6]
-CHECK = runpy.run_path(str(ROOT / "scripts/ipad-hardware/host/check-u2-recovered-current.py"))
+CHECK = runpy.run_path(str(ROOT / "docs/plans/ipad-port/scripts/ipad-hardware/host/check-u2-recovered-current.py"))
 
 
 def rejected(action):

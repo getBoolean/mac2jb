@@ -11,7 +11,7 @@ import tempfile
 
 
 ROOT = Path(__file__).resolve().parents[6]
-HELPER = ROOT / "scripts/ipad-hardware/host/reconstruct-pinned-known-hosts.py"
+HELPER = ROOT / "docs/plans/ipad-port/scripts/ipad-hardware/host/reconstruct-pinned-known-hosts.py"
 ED25519 = b"[127.0.0.1]:2222 ssh-ed25519 AAAAC3NzaFixtureEd25519\n"
 ECDSA = b"[127.0.0.1]:2222 ecdsa-sha2-nistp256 AAAAE2VjZHNhFixtureEcdsa==\n"
 RSA = b"[127.0.0.1]:2222 ssh-rsa AAAAB3NzaFixtureRsa\n"

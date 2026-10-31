@@ -17,10 +17,10 @@ import subprocess
 
 
 ROOT = Path(__file__).resolve().parents[6]
-PAYLOAD = ROOT / "scripts/ipad-hardware/device/u2-clean-service-smoke.py"
+PAYLOAD = ROOT / "docs/plans/ipad-port/scripts/ipad-hardware/device/u2-clean-service-smoke.py"
 PAYLOAD_SHA256 = "8e7cc99a6b8b32011a0a9e58eb24ddebbcc39b5537c9c8947a291365070288de"
-WIRELESS = ROOT / "scripts/ipad-hardware/host/check-pinned-wireless-ssh.py"
-HELPER = ROOT / "scripts/ipad-hardware/host/backup-clienttruth-over-root-ssh.py"
+WIRELESS = ROOT / "docs/plans/ipad-port/scripts/ipad-hardware/host/check-pinned-wireless-ssh.py"
+HELPER = ROOT / "docs/plans/ipad-port/scripts/ipad-hardware/host/backup-clienttruth-over-root-ssh.py"
 
 
 def main():

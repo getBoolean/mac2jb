@@ -40,6 +40,17 @@ struct TargetUSBRestoreController: USBRestoreController {
         return configured
     }
 
+    // Read-only: functions whose interface nub has no client (failed to register).
+    func unservedFunctions() throws -> Set<String> {
+        var buffer = [CChar](repeating: 0, count: 1024)
+        let result = MAC2JBUSBCopyUnservedFunctions(controllerRegistryID, &buffer, buffer.count)
+        guard result == MAC2JBUSBSuccess else {
+            throw TargetUSBRestoreError.operation(result, 0, 0)
+        }
+        let names = String(cString: buffer)
+        return Set(names.split(separator: ",").map(String.init))
+    }
+
     private func invoke(_ description: Data, publish: Bool) throws {
         var setStatus: Int32 = 0
         var busStatus: Int32 = 0

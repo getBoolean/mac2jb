@@ -18,7 +18,7 @@ import subprocess
 
 ROOT = Path(__file__).resolve().parents[6]
 HERE = Path(__file__).resolve().parent
-PAYLOAD = ROOT / "scripts/ipad-hardware/device/u1-readonly-toolbox-trust-membership.py"
+PAYLOAD = ROOT / "docs/plans/ipad-port/scripts/ipad-hardware/device/u1-readonly-toolbox-trust-membership.py"
 PAYLOAD_SHA = "bea6ccfcdcf1e5c83dfdd15390f3fe76fcbdee3c55e3e3f447a2b6c66d6a1a28"
 MANIFEST = ROOT / "build/ipad-hardware/installed-toolbox-attestation/attestation-manifest.json"
 NAMES = ("mac2jb-u1-baseline", "mac2jb-u1-setdescription",

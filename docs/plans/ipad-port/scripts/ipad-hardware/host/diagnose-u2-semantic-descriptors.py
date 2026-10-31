@@ -17,7 +17,7 @@ import stat
 
 
 ROOT = Path(__file__).resolve().parents[6]
-HOST = ROOT / "scripts/ipad-hardware/host"
+HOST = ROOT / "docs/plans/ipad-port/scripts/ipad-hardware/host"
 BASE = ROOT / "build/ipad-hardware/u2-baseline"
 RAW_SHA256 = "bffeea0b79d6c571b0164b2a2b84f8939148e45b51a63591cb0ad2bec15a599f"
 INTERFACES_SHA256 = "226d9551f3f65a28213b1b0c1888414b9760fea7da9ed6d25942731ff4c0b8c5"

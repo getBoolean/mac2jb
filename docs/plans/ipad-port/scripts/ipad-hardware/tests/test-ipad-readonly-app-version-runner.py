@@ -15,14 +15,14 @@ import time
 
 
 ROOT = Path(__file__).resolve().parents[6]
-RUNNER = ROOT / "scripts/ipad-hardware/run-approved-readonly-device-probe.sh"
-PAYLOAD = ROOT / "scripts/ipad-hardware/device/u1-readonly-app-versions.sh"
-CAPABILITY_PAYLOAD = ROOT / "scripts/ipad-hardware/device/u1-readonly-app-version-capabilities.sh"
-ARCHIVE_CAPABILITY_PAYLOAD = ROOT / "scripts/ipad-hardware/device/u1-readonly-app-archive-capabilities.sh"
-ARCHIVE_VARIANT_PAYLOAD = ROOT / "scripts/ipad-hardware/device/u1-readonly-app-archive-variants.sh"
-APPSYNC_CAPABILITY_PAYLOAD = ROOT / "scripts/ipad-hardware/device/u1-readonly-appsync-install-capabilities.sh"
-APPSYNC_QUERY_STATUS_PAYLOAD = ROOT / "scripts/ipad-hardware/device/u1-readonly-appsync-query-status.sh"
-APPSYNC_MEMBERSHIP_PAYLOAD = ROOT / "scripts/ipad-hardware/device/u1-readonly-appsync-package-membership.sh"
+RUNNER = ROOT / "docs/plans/ipad-port/scripts/ipad-hardware/run-approved-readonly-device-probe.sh"
+PAYLOAD = ROOT / "docs/plans/ipad-port/scripts/ipad-hardware/device/u1-readonly-app-versions.sh"
+CAPABILITY_PAYLOAD = ROOT / "docs/plans/ipad-port/scripts/ipad-hardware/device/u1-readonly-app-version-capabilities.sh"
+ARCHIVE_CAPABILITY_PAYLOAD = ROOT / "docs/plans/ipad-port/scripts/ipad-hardware/device/u1-readonly-app-archive-capabilities.sh"
+ARCHIVE_VARIANT_PAYLOAD = ROOT / "docs/plans/ipad-port/scripts/ipad-hardware/device/u1-readonly-app-archive-variants.sh"
+APPSYNC_CAPABILITY_PAYLOAD = ROOT / "docs/plans/ipad-port/scripts/ipad-hardware/device/u1-readonly-appsync-install-capabilities.sh"
+APPSYNC_QUERY_STATUS_PAYLOAD = ROOT / "docs/plans/ipad-port/scripts/ipad-hardware/device/u1-readonly-appsync-query-status.sh"
+APPSYNC_MEMBERSHIP_PAYLOAD = ROOT / "docs/plans/ipad-port/scripts/ipad-hardware/device/u1-readonly-appsync-package-membership.sh"
 STANDARD_BODY = (
     "dopamine-app: version=2.4.5 build=1 bundle-family=standard\n"
     "trollstore-app: version=2.1.0 build=210 bundle-family=stealth\n"

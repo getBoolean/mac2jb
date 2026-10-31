@@ -27,7 +27,7 @@ and no concurrent same-UID pathname replacement.
 
 Exact invocation: ``/usr/bin/env -i PATH=/usr/bin:/bin:/usr/sbin:/sbin
 LC_ALL=C TMPDIR=/tmp /usr/bin/python3 -I -S -B
-scripts/ipad-hardware/diagnose-ipad-ssh-transport.py``
+docs/plans/ipad-port/scripts/ipad-hardware/diagnose-ipad-ssh-transport.py``
 """
 
 from __future__ import annotations

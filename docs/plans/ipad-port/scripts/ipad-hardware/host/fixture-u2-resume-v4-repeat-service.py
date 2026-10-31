@@ -14,7 +14,7 @@ from types import SimpleNamespace
 from unittest import mock
 
 ROOT = Path(__file__).resolve().parents[6]
-DEVICE = ROOT / "scripts/ipad-hardware/device/u2-resume-v4-repeat-service.py"
+DEVICE = ROOT / "docs/plans/ipad-port/scripts/ipad-hardware/device/u2-resume-v4-repeat-service.py"
 
 
 def main():

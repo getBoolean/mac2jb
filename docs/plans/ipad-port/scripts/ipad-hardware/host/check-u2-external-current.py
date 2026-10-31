@@ -19,7 +19,7 @@ import sys
 
 
 ROOT = Path(__file__).resolve().parents[6]
-HOST = ROOT / "scripts/ipad-hardware/host"
+HOST = ROOT / "docs/plans/ipad-port/scripts/ipad-hardware/host"
 BASE = ROOT / "build/ipad-hardware/u2-baseline"
 HASHES = {
     "current.json": "39afcfbce83334cec6facc72f2bfadc40c0eae30591acd217fd68ad5422f4883",

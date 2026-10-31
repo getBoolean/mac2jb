@@ -13,7 +13,7 @@ from unittest import mock
 
 
 ROOT = Path(__file__).resolve().parents[6]
-MODULE = runpy.run_path(str(ROOT / "scripts/ipad-hardware/device/u2_restore_journal.py"))
+MODULE = runpy.run_path(str(ROOT / "docs/plans/ipad-port/scripts/ipad-hardware/device/u2_restore_journal.py"))
 RestoreJournal = MODULE["RestoreJournal"]
 JournalError = MODULE["JournalError"]
 

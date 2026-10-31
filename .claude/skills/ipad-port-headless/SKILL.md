@@ -1,6 +1,6 @@
 ---
 name: ipad-port-headless
-description: Connect to the mac2jb target iPad over pinned Wi-Fi SSH or USB and carry out repository-backed iPad port development, probes, attestation, and cleanup without requiring someone at the device. Use for this project's iPad hardware work, not for unrelated iOS devices.
+description: Use when doing any mac2jb iPad hardware work - connecting to the target M2 iPad over Wi-Fi SSH or USB, running device probes or host checks, U1/U2/U3 gate work, USB description publication or restore trials, recovering lost USB data, attestation, staging, or device cleanup. Not for other iOS devices.
 ---
 
 # Headless mac2jb iPad work

@@ -18,7 +18,7 @@ import tempfile
 
 
 ROOT = Path(__file__).resolve().parents[6]
-VALIDATOR = ROOT / "scripts/ipad-hardware/validate-probe-stdout.py"
+VALIDATOR = ROOT / "docs/plans/ipad-port/scripts/ipad-hardware/validate-probe-stdout.py"
 PYTHON = "/usr/bin/python3"
 VARIANTS = {"baseline", "setdescription", "controller-client", "interface-client"}
 POWERS = {
