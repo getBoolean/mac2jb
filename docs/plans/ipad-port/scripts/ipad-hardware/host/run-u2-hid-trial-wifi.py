@@ -374,6 +374,13 @@ def main(options, env):
                 if renewal["state"] is not None:
                     state, renewal["state"] = renewal["state"], None
                     renewal["log"] = env["stop_renewal"](state)
+                    # Written here rather than with the other evidence, because
+                    # the failure paths never reach that point: the first run
+                    # of this rig aborted on a refused bus cycle and left no
+                    # record of what the broker had said to any renewal, which
+                    # was the one thing needed to explain the abort.
+                    env["evidence"]("lease-renewal.txt",
+                                    renewal["log"].encode("ascii", "replace")[:8192])
 
             canary = env["start_canary"]()
             try:
@@ -465,8 +472,9 @@ def main(options, env):
 
         ((published, cycled, canary, capture, reports, back, witness, after,
           renewal_log), lifecycle) = env["observe"](body)
+        # lease-renewal.txt is already written by finish_renewal, so that the
+        # failure paths record it too; renewal_log is kept for the summary line.
         env["evidence"]("lifecycle.ndjson", lifecycle[:16384])
-        env["evidence"]("lease-renewal.txt", renewal_log.encode("ascii", "replace")[:8192])
         env["evidence"]("canary.txt", canary[1][:8192])
         env["evidence"]("report-capture.txt", reports[1].encode("ascii")[:8192])
         env["evidence"]("enumeration.txt", capture[1].encode("ascii"))
@@ -492,11 +500,17 @@ def main(options, env):
         # A mode that writes no reports cannot have a capture gap: there was
         # never a sequence to miss. Its result is its own, reported below.
         gap = reports_gap(reports[0]) if typing else None
+        # The renewal tally is on the summary line because a publication that
+        # was not kept alive explains every downstream result, and reading it
+        # out of the evidence directory afterwards is a step too late.
         print("%s mode=%s published=%s cycle=%s canary-exit=%d reports=%s "
-              "enumeration=%s hid-proof=%s usb=%s publication-after-read=%s heal=%s"
+              "enumeration=%s hid-proof=%s usb=%s publication-after-read=%s "
+              "lease=%s heal=%s"
               % (PREFIX, options["mode"], published, cycled, canary[0], reports[0],
                  enumeration, proof, "returned" if back else "absent",
-                 "live" if live_after else "gone", heal), flush=True)
+                 "live" if live_after else "gone",
+                 renewal_log.strip().splitlines()[-1] if renewal_log.strip() else "none",
+                 heal), flush=True)
         if not back:
             raise ValueError("USB did not return in %ds; journal retained, heal %s"
                              % (USB_RETURN_SECONDS, heal))
