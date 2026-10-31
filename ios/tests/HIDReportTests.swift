@@ -176,6 +176,33 @@ enum HIDReportTests {
                     !summary.neutralDelivered,
                     "a disconnect stops retrying within the bound: \(summary)")
 
+        // A signal during the report loop stops it at the next write rather
+        // than after the list is exhausted, and is still a controlled exit:
+        // one neutral report goes out while the lease is held.
+        sink = RecordingSink()
+        lease = FakeLease(heldChecks: .max)
+        var writesBeforeStop = 0
+        var run = HIDCanaryRun(sink: sink, lease: lease, reports: [valid, valid, valid])
+        run.shouldStop = { writesBeforeStop >= 1 }
+        let interrupted = run.run()
+        writesBeforeStop = 0
+        try require(interrupted.stop == .completed && interrupted.reportsWritten == 3,
+                    "a predicate that never fires must not change the outcome: \(interrupted)")
+        sink = RecordingSink()
+        lease = FakeLease(heldChecks: .max)
+        var seen = 0
+        run = HIDCanaryRun(sink: sink, lease: lease, reports: [valid, valid, valid])
+        run.shouldStop = { seen += 1; return seen > 2 }
+        let signalled = run.run()
+        try require(signalled.stop == .interrupted,
+                    "a signal during the loop must report an interrupt: \(signalled)")
+        try require(signalled.reportsWritten < 3,
+                    "an interrupt must stop before the list is exhausted: \(signalled)")
+        try require(signalled.neutralAttempts == 1 && signalled.neutralDelivered,
+                    "an interrupt is a controlled exit, so exactly one neutral report: \(signalled)")
+        try require(signalled.leaseReleased && lease.released,
+                    "the lease must be given up after an interrupt: \(signalled)")
+
         // 10. An invalid report is refused before it reaches the sink.
         sink = RecordingSink()
         lease = FakeLease(heldChecks: .max)
@@ -227,6 +254,6 @@ enum HIDReportTests {
                     "a host that is not enumerated reads as a disconnect")
         try require(transport(0, 8, staged: false).write(valid) == .failed,
                     "a payload that cannot be staged is never submitted")
-        print("PASS HID canary report, plan and exit-path tests (12 scenarios)")
+        print("PASS HID canary report, plan and exit-path tests (13 scenarios)")
     }
 }

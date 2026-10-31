@@ -31,10 +31,31 @@ struct TargetUSBRestoreController: USBRestoreController {
         try invoke(description, publish: true)
     }
 
+    // After a successful additive publication the live description carries the
+    // appended function, so the clone can only be proven equal to the journaled
+    // original once that one name comes off. The shim refuses unless it is the
+    // last interface of that configuration, so no other interface can be lost.
+    func publish(_ description: Data, strippingFunction function: String,
+                 configuration: Int) throws {
+        try invoke(description, publish: true,
+                   strippingFunction: function, configuration: configuration)
+    }
+
     // The clone is proven byte-equal to the journaled original inside the shim
     // before the one named function is appended last in the given
     // configuration, so this still starts from exactly what restore puts back.
     func publishAppending(_ description: Data, function: String, configuration: Int) throws {
+        try appending(description, function: function,
+                      configuration: configuration, publish: true)
+    }
+
+    func validateAppending(_ description: Data, function: String, configuration: Int) throws {
+        try appending(description, function: function,
+                      configuration: configuration, publish: false)
+    }
+
+    private func appending(_ description: Data, function: String,
+                           configuration: Int, publish: Bool) throws {
         guard let number = Int32(exactly: configuration), number > 0 else {
             throw TargetUSBRestoreError.operation(MAC2JBUSBFunctionRejected, 0, 0)
         }
@@ -43,8 +64,8 @@ struct TargetUSBRestoreController: USBRestoreController {
         let result = description.withUnsafeBytes { bytes in
             MAC2JBUSBCloneAppendFunctionOrPublish(
                 bytes.bindMemory(to: UInt8.self).baseAddress, description.count,
-                controllerRegistryID, function, number, true, cycleBus,
-                &setStatus, &busStatus)
+                controllerRegistryID, function, number, publish,
+                publish && cycleBus, &setStatus, &busStatus)
         }
         guard result == MAC2JBUSBSuccess else {
             throw TargetUSBRestoreError.operation(result, setStatus, busStatus)
@@ -81,7 +102,15 @@ struct TargetUSBRestoreController: USBRestoreController {
         return Set(names.split(separator: ",").map(String.init))
     }
 
-    private func invoke(_ description: Data, publish: Bool) throws {
+    private func invoke(_ description: Data, publish: Bool,
+                        strippingFunction function: String? = nil,
+                        configuration: Int = 0) throws {
+        // Only the clone path can strip: the reconstruct path never sees the
+        // live description at all.
+        let number = Int32(exactly: configuration) ?? 0
+        guard function == nil || (useControllerClone && number > 0) else {
+            throw TargetUSBRestoreError.operation(MAC2JBUSBFunctionRejected, 0, 0)
+        }
         var setStatus: Int32 = 0
         var busStatus: Int32 = 0
         let result = description.withUnsafeBytes { bytes in
@@ -89,11 +118,17 @@ struct TargetUSBRestoreController: USBRestoreController {
             if useControllerClone {
                 return MAC2JBUSBCloneOrPublish(
                     pointer, description.count, controllerRegistryID,
+                    function, number,
                     publish, publish && cycleBus, &setStatus, &busStatus)
             }
             return MAC2JBUSBReconstructOrPublish(
                 pointer, description.count, controllerRegistryID,
                 publish, publish && cycleBus, &setStatus, &busStatus)
+        }
+        // A refused strip is reported as its own error: it is the one failure
+        // the caller can answer by restoring the original unchanged instead.
+        if function != nil, result == MAC2JBUSBFunctionRejected {
+            throw USBRestoreCoordinatorError.appendedFunctionRejected
         }
         guard result == MAC2JBUSBSuccess else {
             throw TargetUSBRestoreError.operation(result, setStatus, busStatus)

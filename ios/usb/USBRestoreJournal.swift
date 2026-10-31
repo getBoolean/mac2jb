@@ -67,14 +67,56 @@ struct USBRestoreRecord: Codable, Equatable {
     let phase: USBRestorePhase
     let leaseDeadlineUptime: UInt64
     let externalVerificationSHA256: String?
+    // The one function a successful additive publication appended to the live
+    // description, and the 1-based configuration it went into. Restore has to
+    // state both, because the description on the bus carries the function and
+    // the backend refuses to publish a clone that is not the journaled
+    // original. They live on the record, not the recipe: the recipe is the
+    // immutable restore target that host tools parse. Both are absent again
+    // once the original is back, and absent entirely for a record written
+    // before additive publication existed.
+    let appendedFunctionName: String?
+    let appendedFunctionConfiguration: Int?
+
+    init(recipe: USBRestoreRecipe, phase: USBRestorePhase,
+         leaseDeadlineUptime: UInt64, externalVerificationSHA256: String?,
+         appendedFunctionName: String? = nil,
+         appendedFunctionConfiguration: Int? = nil) {
+        self.recipe = recipe
+        self.phase = phase
+        self.leaseDeadlineUptime = leaseDeadlineUptime
+        self.externalVerificationSHA256 = externalVerificationSHA256
+        self.appendedFunctionName = appendedFunctionName
+        self.appendedFunctionConfiguration = appendedFunctionConfiguration
+    }
 
     func validate() throws {
         try recipe.validate()
         guard leaseDeadlineUptime > 0,
               externalVerificationSHA256.map(USBRestoreRecipe.isDigest) ?? true,
-              (phase == .restored) == (externalVerificationSHA256 != nil) else {
+              (phase == .restored) == (externalVerificationSHA256 != nil),
+              (appendedFunctionName != nil) == (appendedFunctionConfiguration != nil),
+              appendedFunctionName.map(Self.isFunctionName) ?? true,
+              appendedFunctionConfiguration.map({ (1...255).contains($0) }) ?? true,
+              // A phase that means the original is back on the bus cannot still
+              // owe a strip.
+              appendedFunctionName == nil ||
+                  (phase != .restored && phase != .awaitingVerification) else {
             throw USBRestoreJournalError.invalidRecipe
         }
+    }
+
+    // ^[A-Za-z0-9][A-Za-z0-9_.-]{0,31}$ , the single Swift mirror of the rule
+    // in USBFunctionName.h. A name one side accepts and the other rejects
+    // publishes a function that can never be found or stripped again.
+    static func isFunctionName(_ name: String) -> Bool {
+        guard (1...32).contains(name.utf8.count) else { return false }
+        for (index, byte) in name.utf8.enumerated() {
+            if (65...90).contains(byte) || (97...122).contains(byte) ||
+                (48...57).contains(byte) { continue }
+            guard index > 0, byte == 95 || byte == 46 || byte == 45 else { return false }
+        }
+        return true
     }
 }
 

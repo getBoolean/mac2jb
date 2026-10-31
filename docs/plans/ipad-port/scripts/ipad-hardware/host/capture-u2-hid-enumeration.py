@@ -47,6 +47,9 @@ INTERFACE_TRIPLE = (3, 1, 1)
 ENDPOINT_TRANSFER_TYPE = 3   # interrupt
 ENDPOINT_MAX_PACKET = 8
 ENDPOINT_INTERVAL = 10
+# Shortest valid length by descriptor type (interface, endpoint); the checks
+# below index into these fields, so a shorter one must be refused up front.
+DESCRIPTOR_MINIMUM = {4: 9, 5: 7}
 # bLength, HID, bcdHID 1.11, country 0, one descriptor, type 0x22, then the
 # report descriptor's length little-endian: 65, not the example's 93.
 HID_DESCRIPTOR = bytes.fromhex("092111010001224100")
@@ -114,7 +117,16 @@ def interface_groups(raw):
     position = 9
     while position < len(raw):
         size = raw[position]
+        # A device-supplied length is untrusted: a header-less or overrunning
+        # descriptor is reported with its offset, never indexed past or looped on.
+        if size < 2 or position + size > len(raw):
+            raise ValueError("malformed-descriptor offset=%d length=%d buffer=%d"
+                             % (position, size, len(raw)))
         descriptor = raw[position:position + size]
+        minimum = DESCRIPTOR_MINIMUM.get(descriptor[1], 2)
+        if size < minimum:
+            raise ValueError("malformed-descriptor offset=%d type=%d length=%d minimum=%d"
+                             % (position, descriptor[1], size, minimum))
         if descriptor[1] == 4:
             groups.append({"interface": descriptor, "endpoints": [], "class": [], "other": []})
         elif groups:
@@ -207,7 +219,7 @@ def compare_reports(observed, expected):
     """The first divergence by index, named as a wrong, extra or missing report."""
     for index in range(min(len(observed), len(expected))):
         if observed[index] != expected[index]:
-            kind = "extra"
+            kind = "wrong"
             if observed[index:index + 1] == expected[index + 1:index + 2]:
                 kind = "missing"
             elif observed[index + 1:index + 2] == expected[index:index + 1]:

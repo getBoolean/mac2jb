@@ -5,6 +5,14 @@ import Foundation
 // are injected so the fault path can be exercised without a USB mutation.
 protocol USBRestoreController {
     func publish(_ description: Data) throws
+    // Publish the journaled original after an additive publication: the live
+    // description still carries the appended function, so the restore names the
+    // one function the backend must strip before it can prove the description
+    // it is about to publish is the journaled original.
+    func publish(_ description: Data, strippingFunction: String, configuration: Int) throws
+    // Build and check the appended description without writing the controller
+    // or the bus, so a refused name or configuration costs nothing.
+    func validateAppending(_ description: Data, function: String, configuration: Int) throws
     // Publish the journaled original with one named function appended last in
     // the given configuration. The appended description is built from live
     // controller state inside the controller backend, so it never exists as
@@ -13,8 +21,17 @@ protocol USBRestoreController {
 }
 
 extension USBRestoreController {
-    // Only the device controller backend can build an appended description.
-    // Every other conformer refuses rather than publishing something unchecked.
+    // Only the device controller backend can build an appended description or
+    // take one apart again. Every other conformer refuses rather than
+    // publishing something unchecked.
+    func publish(_ description: Data, strippingFunction: String, configuration: Int) throws {
+        throw USBRestoreCoordinatorError.additivePublicationUnsupported
+    }
+
+    func validateAppending(_ description: Data, function: String, configuration: Int) throws {
+        throw USBRestoreCoordinatorError.additivePublicationUnsupported
+    }
+
     func publishAppending(_ description: Data, function: String, configuration: Int) throws {
         throw USBRestoreCoordinatorError.additivePublicationUnsupported
     }
@@ -33,6 +50,10 @@ protocol USBMonotonicClock {
 enum USBRestoreCoordinatorError: Error {
     case leaseExpired, plannedDescriptionMismatch, recoveryRequired
     case additivePublicationUnsupported
+    // The backend would not take the recorded appended function off the live
+    // description: it is not the last interface of that configuration, or it
+    // is not there at all because the publication never reached the bus.
+    case appendedFunctionRejected
 }
 
 struct USBRestoreCoordinator {
@@ -116,7 +137,22 @@ struct USBRestoreCoordinator {
               clock.uptimeNanoseconds < prepared.leaseDeadlineUptime else {
             throw USBRestoreCoordinatorError.leaseExpired
         }
-        try journal.transition(from: prepared, to: changed(prepared, .published))
+        // A name or configuration the backend refuses writes nothing, so it
+        // must be refused before the durable phase change: a published record
+        // forces a full restore swap, and that swap re-runs the function
+        // registration race the no-op trials characterised.
+        try controller.validateAppending(prepared.recipe.originalDescription,
+                                        function: function,
+                                        configuration: configuration)
+        // The appended function is recorded in the same durable write that
+        // moves the phase to published, so a watchdog that dies either side of
+        // the controller call still knows what restore has to strip.
+        try journal.transition(from: prepared, to: USBRestoreRecord(
+            recipe: prepared.recipe, phase: .published,
+            leaseDeadlineUptime: prepared.leaseDeadlineUptime,
+            externalVerificationSHA256: nil,
+            appendedFunctionName: function,
+            appendedFunctionConfiguration: configuration))
         do {
             try controller.publishAppending(prepared.recipe.originalDescription,
                                             function: function,
@@ -124,6 +160,34 @@ struct USBRestoreCoordinator {
         } catch {
             try? recover()
             throw error
+        }
+    }
+
+    // Restore the journaled original, stating the one appended function when
+    // the record carries one. A record with no appended function publishes
+    // exactly as it always has.
+    //
+    // One bounded fallback, no loop: the function is recorded before the
+    // controller call, so a call that failed with nothing written leaves a
+    // record naming a function the bus does not have, and the strip is refused.
+    // Publishing the original unchanged then recovers, and it recovers whether
+    // or not a failed write can ever have partially applied, which nothing here
+    // can know. It cannot lose an interface either: a plain publication is
+    // refused unless the live description already is the journaled original.
+    private func restoreOriginal(_ record: USBRestoreRecord) throws {
+        guard let function = record.appendedFunctionName,
+              let configuration = record.appendedFunctionConfiguration else {
+            try recoveryController.publish(record.recipe.originalDescription)
+            return
+        }
+        do {
+            try recoveryController.publish(record.recipe.originalDescription,
+                                           strippingFunction: function,
+                                           configuration: configuration)
+        } catch USBRestoreCoordinatorError.appendedFunctionRejected {
+            NSLog("mac2jb restore: appended function not on the bus, retrying without it")
+            try recoveryController.publish(record.recipe.originalDescription)
+            NSLog("mac2jb restore: published the journaled original unchanged")
         }
     }
 
@@ -172,7 +236,7 @@ struct USBRestoreCoordinator {
             throw error
         }
         do {
-            try recoveryController.publish(current.recipe.originalDescription)
+            try restoreOriginal(current)
             let restoring = try journal.read()
             try journal.transition(from: restoring,
                                    to: changed(restoring, .awaitingVerification))
@@ -204,7 +268,7 @@ struct USBRestoreCoordinator {
         }
         try journal.transition(from: current, to: changed(current, .restoring))
         do {
-            try recoveryController.publish(current.recipe.originalDescription)
+            try restoreOriginal(current)
             let restoring = try journal.read()
             try journal.transition(from: restoring,
                                    to: changed(restoring, .awaitingVerification))
@@ -223,7 +287,12 @@ struct USBRestoreCoordinator {
     func acceptConfiguredOriginal(controllerConfigured: () throws -> Bool) throws {
         let current = try journal.read()
         try current.recipe.validateAgainst(currentIdentity)
-        guard current.phase == .recoveryRequired, try controllerConfigured() else {
+        // A record that still names an appended function has not had the
+        // original put back: healing may have brought the bus up carrying that
+        // function. Refusing keeps the name in the journal for a real restore
+        // instead of forgetting it and claiming the original is back.
+        guard current.phase == .recoveryRequired, current.appendedFunctionName == nil,
+              try controllerConfigured() else {
             throw USBRestoreCoordinatorError.recoveryRequired
         }
         try journal.transition(from: current, to: changed(current, .restoring))
@@ -260,10 +329,16 @@ struct USBRestoreCoordinator {
     }
 
     private func changed(_ record: USBRestoreRecord, _ phase: USBRestorePhase) -> USBRestoreRecord {
-        USBRestoreRecord(
+        // awaitingVerification is only ever reached with the journaled original
+        // back on the bus, so nothing is left to strip. Every other phase keeps
+        // the appended function: a restart in between still has to restore.
+        let restored = phase == .awaitingVerification
+        return USBRestoreRecord(
             recipe: record.recipe, phase: phase,
             leaseDeadlineUptime: record.leaseDeadlineUptime,
-            externalVerificationSHA256: nil
+            externalVerificationSHA256: nil,
+            appendedFunctionName: restored ? nil : record.appendedFunctionName,
+            appendedFunctionConfiguration: restored ? nil : record.appendedFunctionConfiguration
         )
     }
 }

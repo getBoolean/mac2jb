@@ -6,10 +6,16 @@ is compiled and run against a synthetic description, with no IOKit controller
 and no publication. Then the Swift watchdog fixture is driven over its socket:
 `publish-hid` must emit the journaled original with one interface appended last
 in the host-selected configuration, keep the journal byte-equal to the original,
-restore that original on worker death, watchdog restart and lease expiry, and
-refuse a request without a lease, in the wrong journal phase, with an
-already-present name, or with a malformed name (the last before any controller
-call). No iPad is contacted and nothing calls SetDescription.
+and restore that original on worker death, watchdog restart, lease expiry and an
+explicit restore request. The fake controller keeps the description it was last
+given, so every restore case compares the bytes actually put back with the
+journaled original instead of only counting events. It must also refuse a
+request without a lease, in the wrong journal phase, with an already-present
+name, or with a malformed name, and a refused name must leave the journal
+unpublished so no restore swap is needed at all. A publication whose controller
+call fails must still restore, and the fallback that makes that work must not
+be able to publish over a description the journal never recorded. No iPad is
+contacted and nothing calls SetDescription.
 """
 
 import base64
@@ -81,9 +87,12 @@ def append_helper(root):
 def service_with_added_function(binary, parent, name, extra=None):
     directory = parent / name
     directory.mkdir(mode=0o700)
-    appended = directory / "appended.bplist"
+    # The description the fake controller currently has on the bus. It is
+    # written by every publication, including a restore, so a restore that put
+    # back the wrong bytes is visible here.
+    published = directory / "published.bplist"
     env = dict(os.environ,
-               MAC2JB_U3_FIXTURE_APPENDED_FILE=str(appended),
+               MAC2JB_U3_FIXTURE_APPENDED_FILE=str(published),
                MAC2JB_U3_FIXTURE_SELECTED_CONFIGURATION=str(SELECTED_CONFIGURATION))
     env.update(extra or {})
     service = FIXTURE["Service"](binary, directory, env=env)
@@ -91,7 +100,20 @@ def service_with_added_function(binary, parent, name, extra=None):
     # already carries interfaces, so order preservation is observable.
     service.live.write_bytes(description())
     service.original = service.live.read_bytes()
-    return service, appended
+    return service, published
+
+
+def require_original_restored(service, published):
+    """The bytes on the bus are the journaled original, with nothing appended."""
+    require(published.is_file(), "nothing was ever published")
+    restored = published.read_bytes()
+    require(restored == journaled_original(service),
+            "the restored description is not the journaled original")
+    require(restored == service.original,
+            "the restored description is not byte-equal to the original")
+    for entry in plistlib.loads(restored)["ConfigurationDescriptors"]:
+        require(ADDED not in entry.get("Interfaces", []),
+                "an appended interface survived the restore")
 
 
 def journaled_original(service):
@@ -113,7 +135,7 @@ def watch(service):
 
 
 def malformed_name_refused(binary, parent):
-    service, appended = service_with_added_function(binary, parent, "malformed")
+    service, published = service_with_added_function(binary, parent, "malformed")
     try:
         require(service.command("prepare") == "OK prepared")
         worker = watch(service)
@@ -123,7 +145,7 @@ def malformed_name_refused(binary, parent):
             require(service.command(f"publish-hid {bad}") == "ERR rejected",
                     "malformed name accepted: " + repr(bad))
         require(service.count() == 0, "a malformed name reached the controller")
-        require(not appended.exists())
+        require(not published.exists())
         # The lease then expires with the record still prepared, so recovery
         # needs no controller call at all: nothing was ever published.
         service.phase("awaitingVerification")
@@ -135,7 +157,7 @@ def malformed_name_refused(binary, parent):
 
 
 def published_content(binary, parent):
-    service, appended = service_with_added_function(binary, parent, "content")
+    service, published = service_with_added_function(binary, parent, "content")
     try:
         # No prepared record: there is no lease to publish under.
         require(service.command(f"publish-hid {ADDED}") == "ERR rejected",
@@ -145,9 +167,9 @@ def published_content(binary, parent):
         worker = watch(service)
         require(service.command(f"publish-hid {ADDED}") == "OK published-additive")
         require(service.count() == 1)
-        require(appended.is_file(), "no appended description was published")
+        require(published.is_file(), "no appended description was published")
 
-        actual = plistlib.loads(appended.read_bytes())
+        actual = plistlib.loads(published.read_bytes())
         require(actual == expected_appended(service.original),
                 "published description is not the original plus one interface")
         interfaces = actual["ConfigurationDescriptors"][SELECTED_CONFIGURATION - 1]["Interfaces"]
@@ -179,7 +201,7 @@ def published_content(binary, parent):
         worker.close()
         service.phase("awaitingVerification")
         require(service.count() == 2, "worker death did not restore")
-        require(journaled_original(service) == service.original)
+        require_original_restored(service, published)
         require(service.command(f"publish-hid {ADDED}") == "ERR rejected",
                 "published while awaiting verification")
         require(service.count() == 2)
@@ -188,7 +210,7 @@ def published_content(binary, parent):
 
 
 def restart_restores(binary, parent):
-    service, appended = service_with_added_function(binary, parent, "restart")
+    service, published = service_with_added_function(binary, parent, "restart")
     try:
         require(service.command("prepare") == "OK prepared")
         worker = watch(service)
@@ -200,13 +222,13 @@ def restart_restores(binary, parent):
         service.start()
         service.phase("awaitingVerification")
         require(service.count() == 2, "watchdog restart did not restore")
-        require(journaled_original(service) == service.original)
+        require_original_restored(service, published)
     finally:
         service.stop()
 
 
 def lease_expiry_restores(binary, parent):
-    service, appended = service_with_added_function(binary, parent, "lease")
+    service, published = service_with_added_function(binary, parent, "lease")
     try:
         require(service.command("prepare") == "OK prepared")
         worker = watch(service)
@@ -215,25 +237,110 @@ def lease_expiry_restores(binary, parent):
         # The worker stays open; only the lease deadline can end this.
         service.phase("awaitingVerification")
         require(service.count() == 2, "lease expiry did not restore")
-        require(journaled_original(service) == service.original)
+        require_original_restored(service, published)
+        worker.close()
+    finally:
+        service.stop()
+
+
+def explicit_restore_after_additive(binary, parent):
+    """A successful additive publication must still be restorable.
+
+    The fake controller refuses a publication whose description does not match
+    what it already has on the bus, exactly as the controller backend refuses a
+    clone that is not the journaled original. So a restore that ignores the
+    function it appended is rejected here and the journal ends in
+    recoveryRequired instead of awaitingVerification.
+    """
+    service, published = service_with_added_function(binary, parent, "restore")
+    try:
+        require(service.command("prepare") == "OK prepared")
+        worker = watch(service)
+        require(service.command(f"publish-hid {ADDED}") == "OK published-additive")
+        require(service.count() == 1)
+        require(plistlib.loads(published.read_bytes()) ==
+                expected_appended(service.original))
+        require(service.command("restore") == "OK restore-issued",
+                "an additive publication could not be restored")
+        service.phase("awaitingVerification")
+        require(service.count() == 2)
+        require_original_restored(service, published)
+        worker.close()
+    finally:
+        service.stop()
+
+
+def failed_controller_call_still_restores(binary, parent):
+    """A publication whose controller call fails must still be restorable.
+
+    The dry run passes, so the journal is already published and carries the
+    function it meant to append, but the controller wrote nothing: the live
+    description has no appended function and the strip is refused. The restore
+    then falls back to publishing the original unchanged, so the device never
+    ends up stuck with a journal it cannot act on.
+    """
+    service, published = service_with_added_function(
+        binary, parent, "failed-call",
+        extra={"MAC2JB_FIXTURE_FAIL_APPENDING_PUBLISH": "1"})
+    try:
+        require(service.command("prepare") == "OK prepared")
+        worker = watch(service)
+        require(service.command(f"publish-hid {ADDED}") == "ERR rejected",
+                "a failed controller call was reported as published")
+        # The failure path restored immediately, and the restore had to publish
+        # the original without a strip.
+        service.phase("awaitingVerification")
+        require(service.count() == 1, "the failed publication was not restored")
+        require_original_restored(service, published)
+        worker.close()
+    finally:
+        service.stop()
+
+
+def retry_never_drops_an_interface(binary, parent):
+    """The fallback cannot become a way to publish something unjournaled.
+
+    The live description is replaced with one carrying an interface the journal
+    never recorded. The strip is refused because the recorded name is not
+    there, and the plain publish that follows is refused too, because the
+    description on the bus is not the journaled original. Nothing is written
+    and the journal keeps the appended function for a deliberate decision.
+    """
+    service, published = service_with_added_function(binary, parent, "no-drop")
+    try:
+        require(service.command("prepare") == "OK prepared")
+        worker = watch(service)
+        require(service.command(f"publish-hid {ADDED}") == "OK published-additive")
+        require(service.count() == 1)
+        foreign = plistlib.loads(service.original)
+        foreign["ConfigurationDescriptors"][SELECTED_CONFIGURATION - 1][
+            "Interfaces"].append("Foreign")
+        published.write_bytes(plistlib.dumps(foreign, fmt=plistlib.FMT_BINARY))
+        require(service.command("restore") == "ERR rejected",
+                "a description the journal never recorded was republished over")
+        service.phase("recoveryRequired")
+        require(service.count() == 1, "the refused restore still wrote the controller")
+        require(plistlib.loads(published.read_bytes()) == foreign,
+                "an interface was dropped by the fallback")
         worker.close()
     finally:
         service.stop()
 
 
 def existing_name_refused(binary, parent):
-    service, appended = service_with_added_function(binary, parent, "duplicate")
+    service, published = service_with_added_function(binary, parent, "duplicate")
     try:
         require(service.command("prepare") == "OK prepared")
         worker = watch(service)
         present = EXISTING_INTERFACES[SELECTED_CONFIGURATION][0]
         require(service.command("publish-hid " + present) == "ERR rejected",
                 "an already-present name was published")
-        require(not appended.exists(), "an appended description was published anyway")
-        # The refusal came from the publication path, so the coordinator
-        # restored the original exactly once.
+        require(not published.exists(), "an appended description was published anyway")
+        # The name is checked against the live description before the journal
+        # moves to published, so the refusal leaves nothing to undo: the lease
+        # then expires on a prepared record, which needs no controller call.
         service.phase("awaitingVerification")
-        require(service.count() == 1, "the original was not restored once")
+        require(service.count() == 0, "a refused name still swapped the description")
         require(journaled_original(service) == service.original)
         worker.close()
     finally:
@@ -250,15 +357,21 @@ def main():
                            ("content", published_content),
                            ("restart", restart_restores),
                            ("lease", lease_expiry_restores),
+                           ("restore", explicit_restore_after_additive),
+                           ("failed-call", failed_controller_call_still_restores),
+                           ("no-drop", retry_never_drops_an_interface),
                            ("duplicate", existing_name_refused)):
             directory = root / ("case-" + name)
             directory.mkdir(mode=0o700)
             test(binary, directory)
     print("PASS additive publication: original plus one interface appended last "
           "in the selected configuration, journal byte-equal to the original, "
-          "restore on worker death, watchdog restart and lease expiry, refusal "
-          "without a lease, in the wrong phase, on an existing name, and on a "
-          "malformed name before any controller call")
+          "the exact original bytes put back on worker death, watchdog restart, "
+          "lease expiry and an explicit restore, refusal without a lease, in "
+          "the wrong phase, on an existing name and on a malformed name, both "
+          "before any controller write and with nothing to undo, recovery "
+          "from a failed controller call, and a fallback that refuses to "
+          "publish over a description the journal never recorded")
 
 
 if __name__ == "__main__":

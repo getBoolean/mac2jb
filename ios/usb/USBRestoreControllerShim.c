@@ -82,9 +82,53 @@ static bool append_function(CFMutableDictionaryRef info, CFStringRef name,
     return appended;
 }
 
-MAC2JBUSBResult MAC2JBUSBAppendFunctionToDescriptionData(
+// Undo one append: drop the given name from the given configuration's
+// Interfaces array and change nothing else. The name must be the last element,
+// which is where append_function put it. Refusing any other position is what
+// keeps a restore from quietly dropping an interface the stock device had.
+static bool remove_appended_function(CFMutableDictionaryRef info, CFStringRef name,
+                                     int32_t configurationNumber) {
+    if (!info || !name || configurationNumber < 1 || configurationNumber > 255) return false;
+    CFIndex target = (CFIndex)configurationNumber - 1;
+    CFTypeRef value = CFDictionaryGetValue(info, CFSTR("ConfigurationDescriptors"));
+    if (!value || CFGetTypeID(value) != CFArrayGetTypeID()) return false;
+    CFArrayRef configurations = (CFArrayRef)value;
+    if (target >= CFArrayGetCount(configurations)) return false;
+    CFTypeRef entry = CFArrayGetValueAtIndex(configurations, target);
+    if (!entry || CFGetTypeID(entry) != CFDictionaryGetTypeID()) return false;
+    CFDictionaryRef configuration = (CFDictionaryRef)entry;
+    CFTypeRef names = CFDictionaryGetValue(configuration, CFSTR("Interfaces"));
+    if (!names || CFGetTypeID(names) != CFArrayGetTypeID()) return false;
+    CFIndex nameCount = CFArrayGetCount((CFArrayRef)names);
+    if (nameCount < 1) return false;
+    CFTypeRef last = CFArrayGetValueAtIndex((CFArrayRef)names, nameCount - 1);
+    if (!last || CFGetTypeID(last) != CFStringGetTypeID() || !CFEqual(last, name)) return false;
+    // Same immutable-container handling as append_function.
+    CFMutableArrayRef newNames = CFArrayCreateMutableCopy(kCFAllocatorDefault, 0,
+                                                          (CFArrayRef)names);
+    CFMutableDictionaryRef newConfiguration = CFDictionaryCreateMutableCopy(
+        kCFAllocatorDefault, 0, configuration);
+    CFMutableArrayRef newConfigurations = CFArrayCreateMutableCopy(
+        kCFAllocatorDefault, 0, configurations);
+    bool removed = newNames && newConfiguration && newConfigurations;
+    if (removed) {
+        CFArrayRemoveValueAtIndex(newNames, nameCount - 1);
+        CFDictionarySetValue(newConfiguration, CFSTR("Interfaces"), newNames);
+        CFArraySetValueAtIndex(newConfigurations, target, newConfiguration);
+        CFDictionarySetValue(info, CFSTR("ConfigurationDescriptors"), newConfigurations);
+    }
+    if (newNames) CFRelease(newNames);
+    if (newConfiguration) CFRelease(newConfiguration);
+    if (newConfigurations) CFRelease(newConfigurations);
+    return removed;
+}
+
+// Shared body of the two pure entry points: decode, apply the one edit, encode.
+// Both the pure path and the clone path go through append_function and
+// remove_appended_function, so there is one implementation of each edit.
+static MAC2JBUSBResult edit_description_data(
     const uint8_t *plist, size_t plistLength,
-    const char *functionName, int32_t configurationNumber,
+    const char *functionName, int32_t configurationNumber, bool appending,
     uint8_t **out, size_t *outLength
 ) {
     if (!out || !outLength) return MAC2JBUSBInvalidInput;
@@ -103,7 +147,11 @@ MAC2JBUSBResult MAC2JBUSBAppendFunctionToDescriptionData(
     CFStringRef name = CFStringCreateWithCString(kCFAllocatorDefault, functionName,
                                                  kCFStringEncodingUTF8);
     if (!name) goto finished;
-    if (!append_function((CFMutableDictionaryRef)decoded, name, configurationNumber)) {
+    bool edited = appending
+        ? append_function((CFMutableDictionaryRef)decoded, name, configurationNumber)
+        : remove_appended_function((CFMutableDictionaryRef)decoded, name,
+                                   configurationNumber);
+    if (!edited) {
         result = MAC2JBUSBFunctionRejected;
         goto release_name;
     }
@@ -124,6 +172,24 @@ release_name:
 finished:
     CFRelease(decoded);
     return result;
+}
+
+MAC2JBUSBResult MAC2JBUSBAppendFunctionToDescriptionData(
+    const uint8_t *plist, size_t plistLength,
+    const char *functionName, int32_t configurationNumber,
+    uint8_t **out, size_t *outLength
+) {
+    return edit_description_data(plist, plistLength, functionName,
+                                 configurationNumber, true, out, outLength);
+}
+
+MAC2JBUSBResult MAC2JBUSBRemoveFunctionFromDescriptionData(
+    const uint8_t *plist, size_t plistLength,
+    const char *functionName, int32_t configurationNumber,
+    uint8_t **out, size_t *outLength
+) {
+    return edit_description_data(plist, plistLength, functionName,
+                                 configurationNumber, false, out, outLength);
 }
 
 MAC2JBUSBResult MAC2JBUSBCaptureControllerRegistryID(uint64_t *controllerRegistryID) {
@@ -495,6 +561,8 @@ static MAC2JBUSBResult reconstruct_or_clone(
     bool cloneCurrent,
     const char *functionName,
     int32_t configurationNumber,
+    const char *expectedFunctionName,
+    int32_t expectedConfigurationNumber,
     int32_t *setReturn,
     int32_t *busReturn
 ) {
@@ -506,6 +574,8 @@ static MAC2JBUSBResult reconstruct_or_clone(
     }
     // Refuse a malformed added name before any controller user client opens.
     if (functionName && !mac2jb_usb_function_name_is_legal(functionName)) return MAC2JBUSBFunctionRejected;
+    if (expectedFunctionName && !mac2jb_usb_function_name_is_legal(expectedFunctionName))
+        return MAC2JBUSBFunctionRejected;
 
     MAC2JBUSBResult result = MAC2JBUSBInvalidInput;
     CFDataRef input = CFDataCreate(kCFAllocatorDefault, livePlist, (CFIndex)livePlistLength);
@@ -566,6 +636,24 @@ static MAC2JBUSBResult reconstruct_or_clone(
         goto release_description;
     }
     if (cloneCurrent) {
+        // A successful additive publication leaves the appended function on the
+        // live description, so a clone of it can never equal the journaled
+        // original. A restore therefore states the one function it appended and
+        // exactly that name comes off, last in that configuration, before the
+        // comparison below. Without this an additive publication would be
+        // unrestorable, which reads on the device like the gadget stack
+        // refusing to come back rather than this shim refusing to ask.
+        if (expectedFunctionName) {
+            CFStringRef appendedName = CFStringCreateWithCString(
+                kCFAllocatorDefault, expectedFunctionName, kCFStringEncodingUTF8);
+            bool removed = appendedName && remove_appended_function(
+                info, appendedName, expectedConfigurationNumber);
+            if (appendedName) CFRelease(appendedName);
+            if (!removed) {
+                result = MAC2JBUSBFunctionRejected;
+                goto release_description;
+            }
+        }
         CFIndex count = CFDictionaryGetCount(info);
         if (count != originalCount && count != originalCount + 1) {
             result = MAC2JBUSBDescriptionMismatch;
@@ -676,17 +764,21 @@ MAC2JBUSBResult MAC2JBUSBReconstructOrPublish(
 ) {
     return reconstruct_or_clone(livePlist, livePlistLength,
                                 expectedControllerRegistryID, publish, cycleBus,
-                                false, NULL, 0, setReturn, busReturn);
+                                false, NULL, 0, NULL, 0, setReturn, busReturn);
 }
 
 MAC2JBUSBResult MAC2JBUSBCloneOrPublish(
     const uint8_t *livePlist, size_t livePlistLength,
-    uint64_t expectedControllerRegistryID, bool publish, bool cycleBus,
+    uint64_t expectedControllerRegistryID,
+    const char *expectedFunctionName, int32_t expectedConfigurationNumber,
+    bool publish, bool cycleBus,
     int32_t *setReturn, int32_t *busReturn
 ) {
     return reconstruct_or_clone(livePlist, livePlistLength,
                                 expectedControllerRegistryID, publish, cycleBus,
-                                true, NULL, 0, setReturn, busReturn);
+                                true, NULL, 0,
+                                expectedFunctionName, expectedConfigurationNumber,
+                                setReturn, busReturn);
 }
 
 MAC2JBUSBResult MAC2JBUSBCloneAppendFunctionOrPublish(
@@ -700,5 +792,5 @@ MAC2JBUSBResult MAC2JBUSBCloneAppendFunctionOrPublish(
     return reconstruct_or_clone(livePlist, livePlistLength,
                                 expectedControllerRegistryID, publish, cycleBus,
                                 true, functionName, configurationNumber,
-                                setReturn, busReturn);
+                                NULL, 0, setReturn, busReturn);
 }

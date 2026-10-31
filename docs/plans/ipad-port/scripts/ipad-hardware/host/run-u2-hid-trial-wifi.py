@@ -18,15 +18,33 @@ has no journal; the device is not already publishing the function; and a fresh
 restore kit was taken.
 
 Then, with network syslog recording and the passive Mac lifecycle monitor
-armed: `prepare`, `publish-hid NAME`, the canary, and the host-side enumeration
-capture. It then waits up to 120 s with no host action for USB to return, runs
-the strict external check, and sends `confirm <sha256(check output)>` only when
+armed: `prepare`, then the canary, which connects to the broker and sends
+`watch`; only once it reports that lease held does the host send
+`publish-hid NAME`, because the broker refuses to publish with no worker
+registered, and that registration is also what makes the worker's death
+restore the original. The canary holds that one connection open across the
+publication and waits, bounded, for the appended interface to appear. The
+host-side enumeration capture is started while the lease is still held and the
+function is live, since releasing the lease tears the interface down again.
+
+It then waits up to 120 s with no host action for USB to return, runs the
+strict external check, and sends `confirm <sha256(check output)>` only when
 that check's own output is the proof - never on a successful canary write, a
 passing descriptor comparison or anything else. On any failure the journal is
 left alone and the broker's heal-status is reported.
 
-The command surface is injected (`live_environment`), so the refusals and the
-proof-gated confirm are testable with no device and no network.
+Limitation, reported and never papered over: no step here records the keyboard
+input reports the device sends. Reading a live keyboard's input reports on this
+Mac needs an OS privacy permission and may be impossible while the system owns
+the device, so a clean trial ends `hid-proof=inconclusive
+reason=reports-unobserved` with the descriptor evidence only, and exits
+non-zero. `--reports` is accepted only for a file this same trial produced in
+its own evidence directory; an operator-supplied path is refused, so an
+unprovenanced file cannot manufacture a pass.
+
+The command surface is injected (`live_environment`), so the refusals, the
+publication ordering and the proof-gated confirm are testable with no device
+and no network.
 """
 
 import hashlib
@@ -35,6 +53,7 @@ from pathlib import Path
 import re
 import runpy
 import secrets
+import select
 import shlex
 import subprocess
 import sys
@@ -49,6 +68,11 @@ RECOVER = runpy.run_path(str(HOST / "recover-u2-over-wifi.py"))
 PROFILE = runpy.run_path(str(HOST / "u2_broker_profile.py"))
 IDLE_STATUS = "OK phase=absent publication=enabled"
 USB_RETURN_SECONDS = 120
+LEASE_WAIT_SECONDS = 20
+CANARY_SECONDS = 90
+CAPTURE_SECONDS = 180
+# The canary says this as soon as the broker has made it the worker.
+LEASE_MARKER = b"U3_HID_CANARY lease=held"
 PREFIX = "U2_HID_TRIAL"
 ASK = ('import socket,sys;s=socket.socket(socket.AF_UNIX);s.settimeout(150);'
        's.connect("/var/jb/var/lib/mac2jb-u2-native/broker.sock");'
@@ -58,6 +82,34 @@ BROKER = re.compile(r"v[0-9]{1,3}\Z")
 NAME = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.-]{0,31}\Z")
 DEVICE_PATH = re.compile(r"/var/jb/[A-Za-z0-9._/-]{1,128}\Z")
 HEX64 = re.compile(r"[0-9a-f]{64}\Z")
+
+
+def hid_proof(outcome):
+    """The HID verdict, kept apart from the restore verdict. Only `pass` passes.
+
+    An absent report sequence is `inconclusive`, never a pass: it says the
+    descriptors matched and nothing at all about reports reaching a host.
+    """
+    if outcome == "pass":
+        return "pass"
+    return "inconclusive" if outcome == "reports-unobserved" else "fail"
+
+
+def checked_reports_path(value, trial):
+    """Accept an observed-report file only if this trial produced it itself.
+
+    Nothing in this runner records reports, so an operator-supplied file is the
+    only way one could arrive - and an unprovenanced file would turn a red
+    trial green. The trial directory is fresh and randomly named, so requiring
+    the file to live in it refuses anything this run did not write.
+    """
+    if value is None:
+        return None
+    candidate = Path(value).resolve()
+    if candidate.parent != Path(trial).resolve() or not candidate.is_file():
+        raise ValueError("an observed-report file must be one this trial wrote in its "
+                         "own evidence directory; no other file may produce a HID pass")
+    return str(candidate)
 
 
 def main(options, env):
@@ -90,10 +142,28 @@ def main(options, env):
             raise ValueError("broker refused to journal the original (%s)" % prepared)
 
         def body():
-            published = env["ask"]("publish-hid " + options["function"])
-            if published != "OK published-additive":
-                raise ValueError("broker refused the additive publication (%s)" % published)
-            return published, env["run_canary"](), env["capture"]("published")
+            # The broker refuses to publish unless a worker is registered, and
+            # only a held `watch` connection registers one. The canary is that
+            # worker: it takes the lease first and keeps the connection open
+            # across the publication, so its death restores the original.
+            canary = env["start_canary"]()
+            try:
+                if not env["await_lease"](canary):
+                    raise ValueError("the canary never reported the broker lease held "
+                                     "within %ds; nothing was published"
+                                     % LEASE_WAIT_SECONDS)
+                published = env["ask"]("publish-hid " + options["function"])
+                if published != "OK published-additive":
+                    raise ValueError("broker refused the additive publication (%s)"
+                                     % published)
+            except BaseException:
+                env["collect_canary"](canary)
+                raise
+            # Started while the lease is held and the function is live: the
+            # canary's release tears the appended interface down again, so a
+            # capture that followed it would prove nothing.
+            capture = env["start_capture"]("published")
+            return published, env["collect_canary"](canary), env["collect_capture"](capture)
 
         (published, canary, capture), lifecycle = env["observe"](body)
         env["evidence"]("lifecycle.ndjson", lifecycle[:16384])
@@ -108,9 +178,10 @@ def main(options, env):
         # Asked before any verdict: on every failure path this is what gets reported.
         heal = env["ask"]("heal-status")
         env["evidence"]("heal-status.txt", heal.encode("ascii") + b"\n")
-        print("%s published=%s canary-exit=%d enumeration=%s usb=%s heal=%s" % (
-            PREFIX, published, canary[0], capture[0],
-            "returned" if back else "absent", heal), flush=True)
+        proof = hid_proof(capture[0])
+        print("%s published=%s canary-exit=%d enumeration=%s hid-proof=%s "
+              "usb=%s heal=%s" % (PREFIX, published, canary[0], capture[0], proof,
+                                  "returned" if back else "absent", heal), flush=True)
         if not back:
             raise ValueError("USB did not return in %ds; journal retained, heal %s"
                              % (USB_RETURN_SECONDS, heal))
@@ -125,8 +196,17 @@ def main(options, env):
         env["evidence"]("after-confirm.txt", reply.encode("ascii") + b"\n" + after)
         if reply != "OK verified-and-cleared" or not ok_after:
             raise ValueError("broker did not clear the journal (%s)" % reply)
-        print("%s confirm=%s strict-after=pass enumeration=%s" % (PREFIX, reply, capture[0]))
-        return {"confirmed": True, "enumeration": capture[0], "canary_exit": canary[0]}
+        print("%s confirm=%s strict-after=pass enumeration=%s hid-proof=%s"
+              % (PREFIX, reply, capture[0], proof))
+        if proof != "pass":
+            # The restore is proven; the keyboard is not. Said in its own line
+            # so no reader can take a cleared journal for a HID proof.
+            print("%s hid-proof=%s reason=%s note=%s" % (
+                PREFIX, proof, capture[0],
+                "no-report-sequence-was-recorded-on-this-Mac"
+                if capture[0] == "reports-unobserved" else "see-the-enumeration-evidence"))
+        return {"confirmed": True, "enumeration": capture[0], "hid_proof": proof,
+                "canary_exit": canary[0]}
     finally:
         env["stop_syslog"](syslog)
 
@@ -174,21 +254,57 @@ def live_environment(options):
                 tail = process.communicate(timeout=SUPPORT["WINDOW_SECONDS"] + 10)[0]
         return result, ready + tail
 
-    def run_canary():
-        return remote(shlex.quote(options["canary_path"]) + " --function " +
-                      shlex.quote(options["function"]) + " --controller " +
-                      str(options["controller"]), 90)
+    reports = checked_reports_path(options["reports"], trial)
 
-    def capture(stage):
+    def start_canary():
+        """The lease holder, left running: it is the broker's worker."""
+        process = subprocess.Popen(
+            [*ssh, shlex.quote(options["canary_path"]) + " --function " +
+             shlex.quote(options["function"]) + " --controller " +
+             str(options["controller"])],
+            stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
+        return {"process": process, "output": b""}
+
+    def await_lease(handle):
+        """Bounded wait for the canary's own report that the lease is held."""
+        process = handle["process"]
+        deadline = time.monotonic() + LEASE_WAIT_SECONDS
+        while True:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0 or not select.select([process.stdout], [], [], remaining)[0]:
+                return False
+            text = process.stdout.readline()
+            if not text:
+                return False
+            handle["output"] += text
+            if text.startswith(LEASE_MARKER):
+                return True
+
+    def collect_canary(handle):
+        process = handle["process"]
+        try:
+            rest = process.communicate(timeout=CANARY_SECONDS)[0]
+        except subprocess.TimeoutExpired:
+            process.kill()
+            rest = process.communicate(timeout=10)[0]
+        return process.returncode, handle["output"] + (rest or b"")
+
+    def start_capture(stage):
         argv = [sys.executable, str(HOST / "capture-u2-hid-enumeration.py"),
                 "--configuration=%d" % options["configuration"],
                 "--stock-interfaces=%d" % options["stock_interfaces"],
                 "--out=%s" % (trial / ("enumeration-%s.txt" % stage))]
-        if options["reports"]:
-            argv.append("--reports=%s" % options["reports"])
-        result = subprocess.run(argv, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
-                                timeout=180)
-        text = result.stdout.decode("ascii", "replace")
+        if reports:
+            argv.append("--reports=%s" % reports)
+        return subprocess.Popen(argv, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
+
+    def collect_capture(process):
+        try:
+            out = process.communicate(timeout=CAPTURE_SECONDS)[0]
+        except subprocess.TimeoutExpired:
+            process.kill()
+            out = process.communicate(timeout=10)[0]
+        text = (out or b"").decode("ascii", "replace")
         match = re.search(r"outcome=([a-z-]+)", text)
         return (match.group(1) if match else "rejected"), text
 
@@ -213,8 +329,11 @@ def live_environment(options):
             [sys.executable, str(HOST / "backup-u2-wifi-restore-kit.py")],
             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=400).returncode,
         "observe": observe,
-        "run_canary": run_canary,
-        "capture": capture,
+        "start_canary": start_canary,
+        "await_lease": await_lease,
+        "collect_canary": collect_canary,
+        "start_capture": start_capture,
+        "collect_capture": collect_capture,
         "usb_present": SUPPORT["usb_present"],
         "strict": strict,
         "syslog": lambda: RECOVER["start_syslog"](trial / "syslog.txt"),
@@ -248,12 +367,15 @@ def parse(argv):
 
 if __name__ == "__main__":
     try:
+        if any(item in ("--help", "-h") for item in sys.argv[1:]):
+            print(__doc__, end="")
+            raise SystemExit(0)
         parsed = parse(sys.argv[1:])
         environment = live_environment(parsed)
         print("%s evidence=%s" % (PREFIX, environment["trial"].relative_to(ROOT)), flush=True)
         summary = main(parsed, environment)
         print("%s %s" % (PREFIX, json.dumps(summary, sort_keys=True)))
-        raise SystemExit(0 if summary["enumeration"] == "pass" else 2)
+        raise SystemExit(0 if summary["hid_proof"] == "pass" else 2)
     except (OSError, ValueError, KeyError, subprocess.SubprocessError) as error:
         print("%s rejected (%s); journal left alone" % (PREFIX, error))
         raise SystemExit(1)

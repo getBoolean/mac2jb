@@ -104,8 +104,11 @@ struct USBDeviceProfile: Codable, Equatable {
                 break
             }
         }
+        // Version 2: a stock learn has no added functions, and the build a
+        // rollback returns to rejects anything but 2 and cannot re-learn while
+        // a journal exists.
         let profile = USBDeviceProfile(
-            schemaVersion: 3, productType: facts.productType, osBuild: facts.osBuild,
+            schemaVersion: 2, productType: facts.productType, osBuild: facts.osBuild,
             stockSourcePath: stockSourcePath,
             stockSourceSHA256: facts.stockSource.map(sha256),
             stockSourceSize: facts.stockSource?.count,

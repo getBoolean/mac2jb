@@ -43,6 +43,7 @@ enum HIDCanaryStop: Equatable {
     case writeFailed
     case disconnected
     case leaseLost
+    case interrupted
 }
 
 struct HIDCanarySummary: Equatable {
@@ -61,11 +62,18 @@ struct HIDCanaryRun {
     let sink: HIDReportSink
     let lease: CanaryLease
     let reports: [[UInt8]]
+    // A requested stop, asked before every write rather than only once the
+    // list runs out: a signal must take effect during the writing, not after
+    // it. Defaulted, so a caller that cannot be interrupted says nothing.
+    var shouldStop: () -> Bool = { false }
 
     func run() -> HIDCanarySummary {
         var written = 0
         var stop = HIDCanaryStop.completed
         for report in reports {
+            // A requested stop is a controlled exit: the neutral report and
+            // the lease release below still happen.
+            guard !shouldStop() else { stop = .interrupted; break }
             // Checked before every write: a write after the lease has gone is
             // the one thing the broker cannot restore from.
             guard lease.isHeld() else { stop = .leaseLost; break }

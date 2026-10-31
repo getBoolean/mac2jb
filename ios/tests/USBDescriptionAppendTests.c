@@ -116,6 +116,31 @@ static MAC2JBUSBResult append_to(CFDataRef input, const char *name,
     return result;
 }
 
+static MAC2JBUSBResult remove_from(CFDataRef input, const char *name,
+                                   int32_t configurationNumber, CFDataRef *out) {
+    uint8_t *bytes = NULL;
+    size_t length = 0;
+    MAC2JBUSBResult result = MAC2JBUSBRemoveFunctionFromDescriptionData(
+        CFDataGetBytePtr(input), (size_t)CFDataGetLength(input), name,
+        configurationNumber, &bytes, &length);
+    if (out) *out = NULL;
+    if (result == MAC2JBUSBSuccess && out && bytes)
+        *out = CFDataCreate(kCFAllocatorDefault, bytes, (CFIndex)length);
+    if (result != MAC2JBUSBSuccess) check(bytes == NULL && length == 0,
+                                         "rejected removal returned no buffer");
+    MAC2JBUSBFreeCapturedDescription(bytes);
+    return result;
+}
+
+static void expect_removal_rejected(CFDataRef input, const char *name,
+                                    int32_t configurationNumber, const char *what) {
+    CFDataRef out = NULL;
+    check(remove_from(input, name, configurationNumber, &out) ==
+          MAC2JBUSBFunctionRejected, what);
+    check(out == NULL, what);
+    if (out) CFRelease(out);
+}
+
 static CFArrayRef configurations_of(CFDictionaryRef info) {
     CFTypeRef value = CFDictionaryGetValue(info, CFSTR("ConfigurationDescriptors"));
     return value && CFGetTypeID(value) == CFArrayGetTypeID() ? (CFArrayRef)value : NULL;
@@ -263,14 +288,132 @@ int main(void) {
         CFRelease(variant);
     }
 
+    // Undoing an append. The restore path has to take the appended function
+    // back off a live description before it can prove it equal to the journaled
+    // original, and this is the same helper that path runs, so it is proved
+    // here on plist bytes with no controller.
+    uint8_t *appendedBytes = NULL;
+    size_t appendedLength = 0;
+    check(MAC2JBUSBAppendFunctionToDescriptionData(
+              CFDataGetBytePtr(input), (size_t)CFDataGetLength(input),
+              "Mac2jbCanary", TARGET_CONFIGURATION,
+              &appendedBytes, &appendedLength) == MAC2JBUSBSuccess,
+          "append for the removal round trip succeeds");
+    CFDataRef appendedData = appendedBytes
+        ? CFDataCreate(kCFAllocatorDefault, appendedBytes, (CFIndex)appendedLength)
+        : NULL;
+    MAC2JBUSBFreeCapturedDescription(appendedBytes);
+    if (!appendedData) {
+        fprintf(stderr, "FAIL no appended bytes for the removal tests\n");
+        CFRelease(input);
+        CFRelease(original);
+        return 1;
+    }
+
+    CFDataRef roundTrip = NULL;
+    check(remove_from(appendedData, "Mac2jbCanary", TARGET_CONFIGURATION, &roundTrip) ==
+          MAC2JBUSBSuccess, "removing the appended function succeeds");
+    CFDictionaryRef restored = roundTrip
+        ? decode(CFDataGetBytePtr(roundTrip), (size_t)CFDataGetLength(roundTrip))
+        : NULL;
+    check(restored && CFEqual(restored, original),
+          "append then remove restores the original description");
+    check(roundTrip && CFEqual(roundTrip, input),
+          "append then remove restores the original bytes");
+    if (restored) {
+        CFMutableDictionaryRef wasScalars = CFDictionaryCreateMutableCopy(
+            kCFAllocatorDefault, 0, original);
+        CFMutableDictionaryRef isScalars = CFDictionaryCreateMutableCopy(
+            kCFAllocatorDefault, 0, restored);
+        CFDictionaryRemoveValue(wasScalars, CFSTR("ConfigurationDescriptors"));
+        CFDictionaryRemoveValue(isScalars, CFSTR("ConfigurationDescriptors"));
+        check(CFEqual(wasScalars, isScalars), "removal left device-level fields alone");
+        check(CFDictionaryGetCount(original) == CFDictionaryGetCount(restored),
+              "removal left the top-level field count alone");
+        CFRelease(wasScalars);
+        CFRelease(isScalars);
+        CFArrayRef wasList = configurations_of(original);
+        CFArrayRef isList = configurations_of(restored);
+        check(isList && CFArrayGetCount(isList) == CONFIGURATION_COUNT,
+              "removal left the configuration count alone");
+        for (CFIndex index = 0; wasList && isList &&
+             index < CFArrayGetCount(isList); index++) {
+            // Position by position, so a shifted interface number would show.
+            check(CFEqual(CFArrayGetValueAtIndex(wasList, index),
+                          CFArrayGetValueAtIndex(isList, index)),
+                  "removal left every configuration and interface order alone");
+        }
+        CFRelease(restored);
+    }
+    if (roundTrip) CFRelease(roundTrip);
+
+    // Only the last interface of that configuration may go. Anything else
+    // would let a restore drop an interface the stock device had.
+    expect_removal_rejected(appendedData, "AppleUSBMux", TARGET_CONFIGURATION,
+                            "a present but not last interface is refused");
+    expect_removal_rejected(appendedData, "PTP", TARGET_CONFIGURATION,
+                            "the first interface is refused");
+    expect_removal_rejected(input, "Mac2jbCanary", TARGET_CONFIGURATION,
+                            "an absent name is refused");
+    expect_removal_rejected(appendedData, "Valeria", TARGET_CONFIGURATION,
+                            "a name last in another configuration is refused");
+    expect_removal_rejected(appendedData, "Mac2jbCanary", 1,
+                            "removal from the wrong configuration is refused");
+    expect_removal_rejected(appendedData, "Mac2jbCanary", 2,
+                            "removal from an empty interface list is refused");
+
+    expect_removal_rejected(appendedData, "Mac2jbCanary", 0,
+                            "removal from configuration zero refused");
+    expect_removal_rejected(appendedData, "Mac2jbCanary", -1,
+                            "removal from a negative configuration refused");
+    expect_removal_rejected(appendedData, "Mac2jbCanary", CONFIGURATION_COUNT + 1,
+                            "removal past the configuration array refused");
+    expect_removal_rejected(appendedData, "Mac2jbCanary", 256,
+                            "removal above configuration 255 refused");
+
+    expect_removal_rejected(appendedData, "", TARGET_CONFIGURATION,
+                            "empty removal name refused");
+    expect_removal_rejected(appendedData, "has space", TARGET_CONFIGURATION,
+                            "space in the removal name refused");
+    expect_removal_rejected(appendedData, tooLong, TARGET_CONFIGURATION,
+                            "over-long removal name refused");
+
+    bytes = NULL;
+    length = 0;
+    check(MAC2JBUSBRemoveFunctionFromDescriptionData(NULL, 0, "Mac2jbCanary",
+                                                     TARGET_CONFIGURATION, &bytes,
+                                                     &length) == MAC2JBUSBInvalidInput,
+          "missing plist refused as invalid input on removal");
+
+    // A configuration with no interface list at all cannot have a name removed.
+    CFMutableDictionaryRef bareVariant = CFDictionaryCreateMutableCopy(
+        kCFAllocatorDefault, 0, original);
+    CFMutableArrayRef bareList = CFArrayCreateMutableCopy(
+        kCFAllocatorDefault, 0, configurations_of(original));
+    CFMutableDictionaryRef bareTarget = CFDictionaryCreateMutableCopy(
+        kCFAllocatorDefault, 0, CFArrayGetValueAtIndex(bareList, TARGET_CONFIGURATION - 1));
+    CFDictionaryRemoveValue(bareTarget, CFSTR("Interfaces"));
+    CFArraySetValueAtIndex(bareList, TARGET_CONFIGURATION - 1, bareTarget);
+    CFDictionarySetValue(bareVariant, CFSTR("ConfigurationDescriptors"), bareList);
+    CFDataRef bareEncoded = encode(bareVariant);
+    expect_removal_rejected(bareEncoded, "Mac2jbCanary", TARGET_CONFIGURATION,
+                            "target configuration without an interface list refused");
+    CFRelease(bareEncoded);
+    CFRelease(bareTarget);
+    CFRelease(bareList);
+    CFRelease(bareVariant);
+    CFRelease(appendedData);
+
     CFRelease(input);
     CFRelease(original);
     if (failures) {
         fprintf(stderr, "%d assertion(s) failed\n", failures);
         return 1;
     }
-    printf("PASS USB description append: appended last in the selected "
-           "configuration, order and device fields unchanged, duplicate, "
-           "configuration range and malformed names refused\n");
+    printf("PASS USB description append and removal: appended last in the "
+           "selected configuration, order and device fields unchanged, "
+           "duplicate, configuration range and malformed names refused; "
+           "append then remove restores the original bytes, and a name that "
+           "is absent or not last is refused\n");
     return 0;
 }

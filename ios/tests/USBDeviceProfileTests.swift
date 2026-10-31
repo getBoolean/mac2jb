@@ -76,7 +76,10 @@ enum USBDeviceProfileTests {
                     profile.usbProductID == 4779 && profile.healthyBcdUSB == 784 && profile.healthyMPS0 == 9,
                     "scalars")
         try require(profile.healPolicy().owners == ["Valeria": "com.apple.audiomxd"], "policy owners")
-        try require(profile.schemaVersion == 3 && profile.addedFunctions.isEmpty, "learned stock profile")
+        // A stock learn stays readable by the build a rollback returns to, so it
+        // keeps the version that build requires.
+        try require(profile.schemaVersion == 2 && profile.addedFunctions.isEmpty, "learned stock profile")
+        try profile.validate()
         try require(!String(decoding: try profile.json(), as: UTF8.self).contains("redacted"),
                     "profile must not contain serial/UDID")
 
@@ -156,6 +159,19 @@ enum USBDeviceProfileTests {
         try require(!String(decoding: try extended.json(), as: UTF8.self).contains("redacted"),
                     "extended profile must not contain serial/UDID")
 
+        // Only a profile that really describes an appended function announces the newer version.
+        try require(extended.schemaVersion == 3 && extended.addedFunctions.count == 1, "recorded profile version")
+        try extended.validate()
+
+        // Rollback: the previous build accepted exactly version 2 and re-learning
+        // is refused while a journal exists, so a stock profile this build saved
+        // must still pass that check.
+        func previousBuildAccepts(_ p: USBDeviceProfile) -> Bool { p.schemaVersion == 2 }
+        try store.save(profile)
+        let reloaded = store.load()
+        try require(reloaded == profile && reloaded.map(previousBuildAccepts) == true,
+                    "stock profile must stay loadable by the previous build")
+
         // A profile learned before added functions existed keeps loading, with
         // the section empty: no key, no re-learn.
         try (try stored(profile) { $0["schemaVersion"] = 2; $0.removeValue(forKey: "addedFunctions") })
@@ -168,6 +184,6 @@ enum USBDeviceProfileTests {
 
         chmod(store.path, 0o644)
         try require(store.load() == nil, "readable profile must be refused")
-        print("PASS USBDeviceProfile learning tests (15 scenarios)")
+        print("PASS USBDeviceProfile learning tests (18 scenarios)")
     }
 }

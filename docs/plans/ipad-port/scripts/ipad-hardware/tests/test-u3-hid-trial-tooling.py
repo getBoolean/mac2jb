@@ -3,14 +3,21 @@
 
 No device, no network, no USB: every input here is synthetic. The comparator is
 driven with hand-built raw configuration descriptors and a hand-built ioreg
-transcript; the runner is driven with an injected command surface, so the
-refusals and the single rule that matters most - no `confirm` without the
-strict external check's own output as proof - are observable without a trial.
+transcript; the runner is driven with an injected command surface that models
+the broker's real preconditions - `watch` accepted only while the journal is
+prepared, one worker at a time, and no publication without one - so the
+refusals, the publication ordering and the single rule that matters most - no
+`confirm` without the strict external check's own output as proof - are
+observable without a trial.
 """
 
+import hashlib
 from pathlib import Path
 import re
 import runpy
+import subprocess
+import sys
+import tempfile
 
 
 ROOT = Path(__file__).resolve().parents[6]
@@ -212,6 +219,50 @@ def comparator():
     print("PASS HID enumeration comparator outcomes and identifier redaction")
 
 
+def descriptors():
+    """A device-supplied length is untrusted: every bad one is refused by offset."""
+    header = configuration(5, [])[:9]
+    for body, reason in ((bytes((0,)), "zero length"),
+                         (bytes((1,)), "header-less descriptor"),
+                         (bytes((20, 4, 0)), "declared length past the buffer"),
+                         (bytes((4, 4, 0, 0)), "interface shorter than an interface")):
+        message = rejected(lambda body=body: CAPTURE["interface_groups"](header + body),
+                           "malformed-descriptor offset=9")
+        assert message.startswith("malformed-descriptor offset=9"), (reason, message)
+
+    groups = CAPTURE["interface_groups"](
+        configuration(5, [interface(3, (3, 1, 1), 1), endpoint()]))
+    assert len(groups) == 1 and len(groups[0]["endpoints"]) == 1, groups
+
+    # The same refusal through the tool itself: no outcome at all, never a pass.
+    with tempfile.TemporaryDirectory(prefix="u3-hid-malformed-") as temporary:
+        raw = Path(temporary) / "raw-configs.bin"
+        raw.write_bytes(envelope([configuration(5, [bytes((4, 4, 0, 0))])]))
+        registry = Path(temporary) / "ioreg.txt"
+        registry.write_text(ioreg(CAPTURE["REPORT_DESCRIPTOR"]))
+        result = subprocess.run(
+            [sys.executable, str(HOST / "capture-u2-hid-enumeration.py"),
+             "--configuration=5", "--stock-interfaces=3",
+             "--vendor=0x%04x" % VENDOR, "--product=0x%04x" % PRODUCT,
+             "--raw-configs=%s" % raw, "--ioreg=%s" % registry],
+            stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, timeout=60)
+        text = result.stdout.decode("ascii", "replace")
+        assert result.returncode == 1, (result.returncode, text)
+        assert "rejected (malformed-descriptor" in text, text
+        assert "outcome=pass" not in text, text
+
+    # A divergence is named for what it is: a differing report at the same
+    # index is wrong, a dropped one missing, an inserted one extra.
+    expected = CAPTURE["expected_reports"]()
+    for reports, name in ((([bytes([1] * 8)] + expected[1:]), "wrong"),
+                          (expected[1:], "missing"),
+                          (([bytes([1] * 8)] + expected), "extra")):
+        result = evaluate(published(), reports=reports)
+        assert result["outcome"] == "reports-mismatch", (name, result)
+        assert "index=0 %s" % name in failure_text(result), (name, result)
+    print("PASS HID descriptor length refusals and report divergence labels")
+
+
 def rejected(action, contains=None):
     try:
         action()
@@ -223,17 +274,29 @@ def rejected(action, contains=None):
 
 
 class Surface:
-    """An injected command surface: records what the runner asked of the device."""
+    """An injected command surface with the broker's own preconditions.
+
+    The broker registers a worker only on a held `watch` connection, accepts
+    that `watch` only while the journal is prepared, and refuses `publish-hid`
+    with no worker registered - which is what makes a worker's death restore
+    the original. The canary is that worker, so the lease is taken here when it
+    starts and given back when it is collected. Every step the runner takes is
+    recorded in order, because the order is the thing being proven.
+    """
 
     def __init__(self, **overrides):
         self.asked = []
+        self.steps = []
         self.evidence = {}
+        self.phase = "absent"
+        self.worker = False
         self.state = dict(
             local={"canary": "a" * 64, "broker": "b" * 64},
             staged="a" * 64, reachable=True,
             status="OK phase=absent publication=enabled",
             function="absent-service", kit=0, canary=(0, b"reports written=12\n"),
-            capture=("pass", "outcome=pass\n"), usb=True, strict=(True, b"U2_V7_CURRENT ok\n"))
+            lease=True, capture=("pass", "outcome=pass\n"), usb=True,
+            strict=(True, b"U2_V7_CURRENT ok\n"))
         self.state.update(overrides)
 
     def ask(self, command):
@@ -241,14 +304,46 @@ class Surface:
         if command == "status":
             return self.state["status"]
         if command == "prepare":
+            self.phase = "prepared"
             return "OK prepared"
         if command.startswith("publish-hid "):
+            self.steps.append("publish-hid")
+            if not self.worker or self.phase != "prepared":
+                return "ERR rejected"
+            self.phase = "published"
             return "OK published-additive"
         if command == "heal-status":
             return "OK last-heal none"
         if command.startswith("confirm "):
+            self.phase = "absent"
             return "OK verified-and-cleared"
         raise AssertionError("unexpected broker command %r" % command)
+
+    def start_canary(self):
+        self.steps.append("start-canary")
+        return {"collected": False}
+
+    def await_lease(self, handle):
+        """The canary's `watch`: refused unless the journal is prepared and free."""
+        self.steps.append("await-lease")
+        if not self.state["lease"] or self.worker or self.phase != "prepared":
+            return False
+        self.worker = True
+        return True
+
+    def collect_canary(self, handle):
+        self.steps.append("collect-canary")
+        handle["collected"] = True
+        self.worker = False  # the lease goes back when the canary exits
+        return self.state["canary"]
+
+    def start_capture(self, stage):
+        self.steps.append("start-capture")
+        return stage
+
+    def collect_capture(self, handle):
+        self.steps.append("collect-capture")
+        return self.state["capture"]
 
     def environment(self):
         return {
@@ -259,8 +354,11 @@ class Surface:
             "function_outcome": lambda name: self.state["function"],
             "restore_kit": lambda: self.state["kit"],
             "observe": lambda body: (body(), b'{"type":"ready"}\n'),
-            "run_canary": lambda: self.state["canary"],
-            "capture": lambda stage: self.state["capture"],
+            "start_canary": self.start_canary,
+            "await_lease": self.await_lease,
+            "collect_canary": self.collect_canary,
+            "start_capture": self.start_capture,
+            "collect_capture": self.collect_capture,
             "usb_present": lambda: self.state["usb"],
             "strict": lambda phase: self.state["strict"],
             "syslog": lambda: None,
@@ -284,9 +382,68 @@ def runner():
     summary = RUNNER["main"](options(), surface.environment())
     assert summary["confirmed"] is True, summary
     assert surface.asked[:3] == ["status", "prepare", "publish-hid hidcanary"], surface.asked
+    # The lease is held across the publication, and the host-side enumeration
+    # capture starts while it is still held: the canary's exit releases the
+    # lease and the broker tears the appended interface down again.
+    assert surface.steps == ["start-canary", "await-lease", "publish-hid",
+                             "start-capture", "collect-canary",
+                             "collect-capture"], surface.steps
+
+    # The rule that matters most: the confirm argument is the digest of the
+    # strict external check's own output and of nothing else.
     confirms = [item for item in surface.asked if item.startswith("confirm ")]
-    assert len(confirms) == 1 and len(confirms[0].split()[1]) == 64, surface.asked
+    assert confirms == ["confirm " + hashlib.sha256(b"U2_V7_CURRENT ok\n").hexdigest()], (
+        confirms)
     assert "heal-status" in surface.asked
+    # Different check output, different digest: the length alone proves nothing.
+    other_output = b"U2_V7_CURRENT ok with different detail\n"
+    other = Surface(strict=(True, other_output))
+    assert RUNNER["main"](options(), other.environment())["confirmed"] is True
+    other_confirms = [item for item in other.asked if item.startswith("confirm ")]
+    assert other_confirms == ["confirm " + hashlib.sha256(other_output).hexdigest()], (
+        other_confirms)
+    assert other_confirms != confirms, other_confirms
+
+    # No lease, no publication: the broker would refuse it anyway, and the
+    # canary that was started is collected rather than left running.
+    no_lease = Surface(lease=False)
+    rejected(lambda: RUNNER["main"](options(), no_lease.environment()), "lease held")
+    assert not [item for item in no_lease.asked if item.startswith("publish-hid")], (
+        no_lease.asked)
+    assert no_lease.steps == ["start-canary", "await-lease", "collect-canary"], (
+        no_lease.steps)
+
+    # An absent report sequence is reported as inconclusive and never as a HID
+    # proof; only an observed, matching sequence passes.
+    unobserved = Surface(capture=("reports-unobserved", "outcome=reports-unobserved\n"))
+    quiet = RUNNER["main"](options(), unobserved.environment())
+    assert quiet["enumeration"] == "reports-unobserved", quiet
+    assert quiet["hid_proof"] == "inconclusive", quiet
+    assert RUNNER["hid_proof"]("pass") == "pass"
+    assert RUNNER["hid_proof"]("reports-unobserved") == "inconclusive"
+    for outcome in ("not-enumerated", "interface-absent", "reports-mismatch",
+                    "report-descriptor-mismatch", "rejected"):
+        assert RUNNER["hid_proof"](outcome) == "fail", outcome
+
+    # An observed-report file is accepted only where this trial wrote it, so no
+    # operator-supplied file can manufacture a pass.
+    with tempfile.TemporaryDirectory(prefix="u3-hid-reports-") as temporary:
+        trial = Path(temporary) / "trial"
+        trial.mkdir()
+        inside = trial / "reports.txt"
+        inside.write_text(observed())
+        outside = Path(temporary) / "reports.txt"
+        outside.write_text(observed())
+        assert RUNNER["checked_reports_path"](None, trial) is None
+        assert RUNNER["checked_reports_path"](str(inside), trial) == str(inside.resolve())
+        rejected(lambda: RUNNER["checked_reports_path"](str(outside), trial),
+                 "evidence directory")
+        rejected(lambda: RUNNER["checked_reports_path"](str(trial / "absent.txt"), trial),
+                 "evidence directory")
+        rejected(lambda: RUNNER["checked_reports_path"](
+            str(trial / ".." / "reports.txt"), trial), "evidence directory")
+    # The limitation belongs where an operator reads it.
+    assert "reports-unobserved" in RUNNER["__doc__"], "the runner must state the limitation"
 
     # The one rule worth proving: a failing strict check never produces a confirm.
     failing = Surface(strict=(False, b"U2_V7_CURRENT rejected\n"))
@@ -318,4 +475,5 @@ def runner():
 
 if __name__ == "__main__":
     comparator()
+    descriptors()
     runner()

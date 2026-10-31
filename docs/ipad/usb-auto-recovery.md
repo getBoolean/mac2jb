@@ -78,11 +78,45 @@ An owner is a function whose direct client is an `IOUSBDeviceInterfaceUserClient
 
 Socket commands: `heal`, `heal-status`, `profile`. Re-publications go through `USBRestoreCoordinator.recoverAfterExternalFailure`, which journals them and refuses while configured. If healing succeeds without a re-publication, `acceptConfiguredOriginal` records `awaitingVerification`, because the no-op already published the journaled original. **Healing never confirms or clears the journal**; that needs the host's external proof.
 
-Build: `docs/plans/ipad-port/scripts/ipad-hardware/build-u2-noop-trial-binary.py --v12-learned-profile`.
+Build: `docs/plans/ipad-port/scripts/ipad-hardware/build-u2-noop-trial-binary.py --v12-learned-profile`,
+or `--v13-additive-function` for the build that can also append a function.
+
+## Restoring a description that is not a no-op
+
+A publication that appends a function changes the restore contract, and getting
+this wrong is costly to diagnose. The clone path refuses to publish unless the
+live description equals the journaled original apart from `AllowMultipleCreates`
+and the two scalars an earlier trial changed. After an appending publication the
+live description legitimately differs by the appended interface, so an unmodified
+restore is refused and the journal falls to `recoveryRequired` — which on the
+device looks exactly like the controller refusing to restore, rather than like
+the shim refusing.
+
+So the restore path is told what to take off: the broker records the appended
+function's name and configuration on the journal **record** when it publishes,
+and the restore strips exactly that name before the equality check. The record,
+not the recipe, carries it, so the recipe's digest and its field and
+configuration counts stay what every host tool and the external check already
+expect. Those two fields are optional and absent on an older journal.
+
+Two rules keep the strip from becoming a way to lose an interface:
+
+- the strip is refused unless the name is the **last** element of that
+  configuration's interface list, so nothing else can be dropped;
+- a refused strip is followed by exactly one plain restore of the journaled
+  original, which the clone-equality check refuses unless the bus already
+  carries that original. That is what recovers a publication whose controller
+  call failed with nothing written, and it cannot remove a foreign interface,
+  because a bus carrying one fails both the strip and the retry.
+
+`acceptConfiguredOriginal` also refuses while the record still names an appended
+function: healing can bring the controller on bus with no re-publication, but
+that path's premise is that the bus carries the journaled original, which is
+false until the appended function has come off.
 
 ## Embedding in the TrollStore app or a tweak
 
-Reuse unchanged: the C shim (`USBRestoreControllerShim.c/.h`), `USBDeviceProfile.swift`, `USBFunctionRegistrationHealer.swift` and `USBFunctionOwnerRestarter.swift`. Provide a probe whose `republish()` publishes your app's description, or the original on failure, through the same clone path.
+Reuse unchanged: the C shim (`USBRestoreControllerShim.c/.h`), `USBDeviceProfile.swift`, `USBFunctionRegistrationHealer.swift` and `USBFunctionOwnerRestarter.swift`. Provide a probe whose `republish()` publishes your app's description, or the original on failure, through the same clone path. An app that appends anything to the description must also carry the restore rules above, or its own restore will be refused.
 
 - **Privileges:**
   - `SetDescription` needs `com.apple.private.usbdevice.setdescription` together with `platform-application`. A plain TrollStore app process was SIGKILLed before `main`; a root launchd job with those two entitlements runs.

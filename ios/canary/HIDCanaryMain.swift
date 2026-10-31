@@ -45,6 +45,16 @@ private struct PipeHandles {
 // The reference's write timeout for a keyboard report.
 private let writeTimeoutMilliseconds: UInt64 = 250
 
+// The appended interface cannot exist until the broker's publication lands,
+// and the broker will not publish until this process holds the lease, so the
+// interface is expected to be absent for a moment after the lease is taken.
+// The shim makes one match-and-open attempt per call and leaves the waiting to
+// its caller, so the waiting is done here: a call that reports no such service
+// opened nothing, and the first call that finds the interface is the single
+// open attempt.
+private let interfaceWaitSeconds: Double = 10
+private let interfacePollMicroseconds: UInt32 = 100_000
+
 private struct Arguments {
     let function: String
     let controllerRegistryID: UInt64
@@ -119,16 +129,32 @@ enum HIDCanaryMain {
             line("rejected reason=no-lease")
             exit(1)
         }
+        // Said as soon as the lease is held, because the host runner waits for
+        // exactly this before it asks the broker to publish: the broker
+        // refuses to publish with no worker registered.
+        line("lease=held function=\(arguments.function)")
         var session: OpaquePointer?
         var matchReturn: Int32 = 0
         var openReturn: Int32 = 0
-        let opened = MAC2JBUSBFunctionOpen(arguments.controllerRegistryID,
+        var opened = MAC2JBUSBFunctionServiceAbsent
+        var waits = 0
+        let deadline = clock_gettime_nsec_np(CLOCK_UPTIME_RAW) +
+            UInt64(interfaceWaitSeconds * 1_000_000_000)
+        while true {
+            opened = MAC2JBUSBFunctionOpen(arguments.controllerRegistryID,
                                            arguments.function,
                                            MAC2JBUSBFunctionReferenceUserClientType,
                                            &session, &matchReturn, &openReturn)
+            guard opened == MAC2JBUSBFunctionServiceAbsent,
+                  lease.isHeld(), interrupted == 0,
+                  clock_gettime_nsec_np(CLOCK_UPTIME_RAW) < deadline else { break }
+            waits += 1
+            usleep(interfacePollMicroseconds)
+        }
         line("open result=\(opened.rawValue) " +
              "match=" + hex(matchReturn) +
-             " open=" + hex(openReturn))
+             " open=" + hex(openReturn) +
+             " waits=\(waits)")
         guard opened == MAC2JBUSBFunctionSuccess, let session else {
             lease.release(neutralDelivered: false)
             exit(1)
@@ -146,9 +172,9 @@ enum HIDCanaryMain {
             lease.release(neutralDelivered: false)
             exit(1)
         }
-        let reports = interrupted != 0 ? [] : HIDKeyboard.canaryReports()
         let summary = HIDCanaryRun(sink: transport(session, handles: handles),
-                                   lease: lease, reports: reports).run()
+                                   lease: lease, reports: HIDKeyboard.canaryReports(),
+                                   shouldStop: { interrupted != 0 }).run()
         // Counts only: the keys themselves never reach the log.
         line("reports written=\(summary.reportsWritten) stop=\(summary.stop) " +
              "neutral-attempts=\(summary.neutralAttempts) " +

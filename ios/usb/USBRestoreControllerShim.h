@@ -38,10 +38,17 @@ MAC2JBUSBResult MAC2JBUSBReconstructOrPublish(
 // the two observed post-publication scalar changes and replacement flag, then
 // restore those scalars in memory before a guarded SetDescription. A dry run
 // changes only the in-process clone; it never writes the controller or bus.
+// expectedFunctionName is the one function a previous additive publication
+// appended, or NULL. When given, exactly that name is removed from
+// expectedConfigurationNumber's Interfaces array before the comparison, and the
+// call is refused if that name is not the last element there; nothing else can
+// be dropped. With NULL the behaviour is unchanged.
 MAC2JBUSBResult MAC2JBUSBCloneOrPublish(
     const uint8_t *livePlist,
     size_t livePlistLength,
     uint64_t expectedControllerRegistryID,
+    const char *expectedFunctionName,
+    int32_t expectedConfigurationNumber,
     bool publish,
     bool cycleBus,
     int32_t *setReturn,
@@ -72,6 +79,17 @@ MAC2JBUSBResult MAC2JBUSBCloneAppendFunctionOrPublish(
 // Same implementation the publication path above uses, so it is testable on a
 // Mac with no device.
 MAC2JBUSBResult MAC2JBUSBAppendFunctionToDescriptionData(
+    const uint8_t *plist, size_t plistLength,
+    const char *functionName, int32_t configurationNumber,
+    uint8_t **out, size_t *outLength
+);
+
+// Pure inverse of the above, and the same removal the clone restore path runs:
+// drop one function name from the given configuration's Interfaces array and
+// change nothing else. Refused unless that name is the array's last element,
+// so no other interface can ever be dropped. No IOKit, no controller; the
+// caller owns *out and frees it with MAC2JBUSBFreeCapturedDescription.
+MAC2JBUSBResult MAC2JBUSBRemoveFunctionFromDescriptionData(
     const uint8_t *plist, size_t plistLength,
     const char *functionName, int32_t configurationNumber,
     uint8_t **out, size_t *outLength

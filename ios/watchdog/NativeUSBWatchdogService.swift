@@ -320,7 +320,8 @@ final class NativeUSBWatchdogService {
             guard publicationEnabled, worker >= 0, let selectedConfiguration else {
                 throw NativeUSBWatchdogError.disabled
             }
-            guard Self.isFunctionName(name),
+            // Checked here so a malformed name never reaches the controller.
+            guard USBRestoreRecord.isFunctionName(name),
                   !(deviceProfile?.functions.contains(name) ?? false),
                   let record = try currentRecord(), record.phase == .prepared else {
                 throw NativeUSBWatchdogError.invalidRequest
@@ -380,18 +381,6 @@ final class NativeUSBWatchdogService {
             return "verified-and-cleared"
         }
         throw NativeUSBWatchdogError.invalidRequest
-    }
-
-    // ^[A-Za-z0-9][A-Za-z0-9_.-]{0,31}$ , the same shape the shim enforces.
-    // Checked here so a malformed name never reaches the controller.
-    static func isFunctionName(_ name: String) -> Bool {
-        guard (1...32).contains(name.utf8.count) else { return false }
-        for (index, byte) in name.utf8.enumerated() {
-            if (65...90).contains(byte) || (97...122).contains(byte) ||
-                (48...57).contains(byte) { continue }
-            guard index > 0, byte == 95 || byte == 46 || byte == 45 else { return false }
-        }
-        return true
     }
 
     private func workerClosed(neutral: Bool) {
