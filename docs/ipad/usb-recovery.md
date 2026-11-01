@@ -34,7 +34,13 @@ The broker already heals automatically: bounded re-publication plus owner restar
      `audio-children-missing` means every function is present and only a
      host-invisible driver is absent, which the next publication re-matches.
 3. Never confirm or clear the journal without the strict external check. Use `host/confirm-u2-after-heal-wifi.py`: it sends `heal`, checks USB, pairing, the controller and the census against the healthy reference, then confirms.
-4. If nothing works, ask the owner for a restart and re-jailbreak; a reboot always restores USB. On the new boot, verify SSH and USB, make a backup kit, capture a new trial baseline, and resolve the old journal before the next trial.
+4. If nothing works, ask the owner for a restart and re-jailbreak; a reboot always restores USB.
+   - Then run `host/resume-u3-after-reboot.py`, which does the ordered post-reboot work and stops
+     at the first failure: preconditions, a fresh kit, retiring the previous boot's journal (which
+     is unresolvable by design and otherwise blocks `prepare`), retiring and re-capturing the
+     baseline, and raising the fresh broker's jetsam limit, which does not survive a restart. It
+     prints the new manifest digest to pin rather than pinning it: that digest is what makes the
+     strict external check mean anything, so the edit stays a deliberate one. On the new boot, verify SSH and USB, make a backup kit, capture a new trial baseline, and resolve the old journal before the next trial.
    - A guarded old-boot archive needs a fresh tool. The previous version-specific ones are in git history, e.g. `archive-u2-v8-old-boot-journal-wifi.py`.
 
 ## Replace the broker
