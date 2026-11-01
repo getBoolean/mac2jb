@@ -187,6 +187,34 @@ that accepted either answer is what let it hide.
 What this does not establish: which configuration operations the build
 authorizes. Nothing was configured and nothing was typed.
 
+## U3 open-only HID gate, first clean attempt (2026-11-01): a 17-function bus did not come up
+
+The first gate attempt whose evidence is not spoiled by the runner killing the
+lease holder (that bug is fixed). The broker published the stock description
+plus one appended function (`Mac2jbCanary`).
+
+- The kernel **accepted the appended name into the device description**
+  (`createUSBDevice: interface: Mac2jbCanary`), so an arbitrary 17th function
+  name is not rejected outright.
+- The controller **did not come on bus** with the 17-function configuration:
+  `goOnBus: not on bus`, no arrival across the whole window — not even the
+  transient arrivals the earlier spoiled runs showed. So the earlier
+  "transient then vanish" readings were, if anything, optimistic.
+- The additive heal (which keeps the appended function under test) did 5
+  republications, no owner restarts, and gave up with the audio functions and
+  `Valeria` unregistered — the same race U2 characterized, here unrecovered
+  within the republication bound.
+- The canary never reached its single open attempt, because no
+  `IOUSBDeviceInterface` service materialized while the controller was off bus.
+  So this attempt does **not** answer R9's open/materialize question; it fails
+  earlier, at bus liveness.
+- USB recovered without a reboot: restoring the bare 16-function original came
+  on bus in 2 republications, the strict check passed, and the journal cleared.
+
+Not yet recorded as a gate decision. One lead is open: the additive heal did no
+owner restarts despite a user-space-owned function (`Valeria`/`audiomxd`) being
+among the missing, which is being investigated in code before any further trial.
+
 ## U3 first device trial (2026-10-31): a changed description recovers
 
 The first publication on this device that was **not** a no-op. The broker
