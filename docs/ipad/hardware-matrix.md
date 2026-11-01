@@ -105,6 +105,41 @@ Publishing without the initial cycle and cycling once after the commit was
 tried and is materially safer - USB returned unaided - but it did not make the
 result observable, for the structural reason above.
 
+### 2026-11-01: a fully configured interface, and the host still does not select it
+
+With the broker surviving (jetsam limit raised) and the lease renewed across 12
+quanta, the `configure-only` gate completed the whole sequence on device:
+
+```
+operations interface-open=0x00000000 set-class=0x00000000 set-subclass=0x00000000
+  set-protocol=0x00000000 append-standard=0x00000000 append-nonstandard=0x00000000
+  class-callbacks=0x00000000 create-pipe=0x00000000 commit=0x00000000
+  create-buffer=0x00000000 pipe-max-packet=0x00000000/1 aborted-by=255
+pipe max-packet=0 result=0 io=0x00000000 expected=8
+enumeration host=never-enumerated polls=239 max-packet=0 io=0x00000000
+```
+
+Every operation returned success and nothing aborted: the class triple is set,
+both descriptors are appended, the pipe exists, the buffer is mapped and
+committed, and the class-command callbacks are registered. The bus was then
+cycled (`bus-cycled io=0x00000000`). Across 120 s and 239 polls the pipe's
+max packet size stayed **0** against an expected 8.
+
+That size is the device's own answer to the question: it is non-zero only once a
+host has selected a configuration containing the interface. Zero for two minutes
+after a committed configuration and a bus cycle is strong device-side evidence
+that **the host never selects the appended interface**, which is what the
+reference model would predict if the controller fixes the host-visible
+configuration descriptor when it builds the device object and a later commit
+cannot reach the host.
+
+It is not yet the host-side proof, and must not be written up as one. The
+descriptor capture was still `void`: the bus cycle now takes the device off bus
+for longer than the trial's 120 s reattach bound, so the capture ran after the
+publication had gone. Closing that needs the reattach bound, the lease cap and
+the canary's wait raised together past the observed outage - the same
+"everything must move together" rule that the lease fix already taught.
+
 **What remains genuinely unknown** is whether a configuration committed after
 the kernel has built the device object can reach a host's configuration
 descriptor on this controller. Nothing observed contradicts the reference's
