@@ -150,7 +150,13 @@ RENEW_INTERVAL_SECONDS = 10
 # cannot cover. 120 s is the slowest measured return with margin.
 USB_RETURN_SECONDS = 420
 LEASE_WAIT_SECONDS = 20
-CANARY_SECONDS = 90
+# Must cover the canary's own enumeration wait, because this is how long the
+# runner is prepared to wait for it to *exit*. At 90 s against a 560 s wait
+# it timed out and killed the lease holder, and killing the worker is what
+# makes the broker restore the original - so the runner was tearing down the
+# publication it was trying to observe, and the canary's own enumeration
+# result was lost with it (exit 255, output truncated mid-sequence).
+CANARY_SECONDS = 660
 # A process bound on a read-only registry read, not a liveness bound: whether
 # the read was positioned is settled by the witness the capture is given and
 # its own stamped read time, never by how long this runner was prepared to
