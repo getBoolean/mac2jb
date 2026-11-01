@@ -409,7 +409,7 @@ def lease_bounds():
     # drives renewal itself. One quantum could never cover the bus return.
     budget = RUNNER["lease_budget_seconds"]()
     assert RUNNER["BROKER_LEASE_CEILING_SECONDS"] == 30, budget
-    assert budget == RUNNER["BROKER_LEASE_CAP_SECONDS"] == 180, budget
+    assert budget == RUNNER["BROKER_LEASE_CAP_SECONDS"] == 300, budget
     # Every wait the runner takes while the publication must still be live.
     for name in ("REPORT_DEADLINE_SECONDS", "CONFIGURE_WAIT_SECONDS", "LEASE_WAIT_SECONDS"):
         assert RUNNER[name] <= budget, (name, RUNNER[name])

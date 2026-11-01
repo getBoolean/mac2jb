@@ -36,6 +36,7 @@ BROKERS = {
     "v15": ("dev.mac2jb.u2.additivev15", "bbc4946fa6af6d3013be689ec581114266848f106bea1cad6b0fabed91f20e3a"),
     "v16": ("dev.mac2jb.u2.additivev16", "11f63007bd9e5ce2f16bc2c8eb88bc3245ed073857b3bfea1cb964b49b58df87"),
     "v17": ("dev.mac2jb.u2.additivev17", "2d1c7582a739c90397f8b2f6c0d483222e743dda818e26cb5fd9b80e017ed0fb"),
+    "v18": ("dev.mac2jb.u2.additivev18", "0e2063d6d33a6567806f05eaa231106123d39d952c9b8c66db1a0845b53bdf70"),
 }
 
 
@@ -43,10 +44,19 @@ def binary_path(digest):
     return "/var/jb/usr/libexec/.mac2jb-u2-noop-trial-" + digest[:8]
 
 
+# Jailbreak tweak injection is kept out of every broker. 37 dylibs were being
+# injected, which took its idle footprint from 1.41 MB to 6.22 MB and put it
+# over the 6 MB jetsam limit the generic daemon category gives it, so it was
+# killed with JETSAM_REASON_MEMORY_PERPROCESSLIMIT during publications. The
+# JetsamProperties below are kept for the record but launchd ignores them for a
+# third-party job; raising the limit needs memorystatus_control at runtime.
+SAFE_MODE = {"_MSSafeMode": "1", "_SafeMode": "1"}
+
+
 def description(label, digest):
     return {"Label": label, "ProgramArguments": [binary_path(digest), "--serve-noop-trial"],
             "RunAtLoad": True, "KeepAlive": True, "ThrottleInterval": 2, "UserName": "root",
-            "JetsamProperties": JETSAM}
+            "EnvironmentVariables": SAFE_MODE, "JetsamProperties": JETSAM}
 
 
 def sha(path):

@@ -44,6 +44,11 @@ VARIANTS = {
     # Restoring - expired lease, dead worker, restart, explicit restore - still
     # publishes the bare original.
     "--v17-renewable-lease": "u3-native-additive-function-v17",
+    # v17 with the publication life cap at 300 s. The bus cycle that makes a
+    # host re-read the configuration descriptor takes the device off bus for
+    # over 120 s, so a 180 s cap expired during the outage and the
+    # publication was restored before any host could read it.
+    "--v18-longer-cap": "u3-native-additive-function-v18",
 }
 # Resolve the installed iPhoneOS SDK instead of pinning an Xcode point release.
 SDK = subprocess.run(["/usr/bin/xcrun", "--sdk", "iphoneos", "--show-sdk-path"],
@@ -83,13 +88,14 @@ def main():
     output = BUILD / VARIANTS[sys.argv[1]]
     additive_function = sys.argv[1] in ("--v13-additive-function", "--v14-additive-lease",
                                         "--v15-additive-cycle", "--v16-additive-single-cycle",
-                                        "--v17-renewable-lease")
+                                        "--v17-renewable-lease", "--v18-longer-cap")
     explicit_cycle = True
     controller_clone = True
     post_clone = True
     settled_recovery = False
     ready_gated = True
-    no_initial_cycle = sys.argv[1] in ("--v16-additive-single-cycle", "--v17-renewable-lease")
+    no_initial_cycle = sys.argv[1] in ("--v16-additive-single-cycle", "--v17-renewable-lease",
+                                   "--v18-longer-cap")
     if output.exists() or not BUILD.is_dir() or not Path(SDK).is_dir():
         raise ValueError("unsafe output or missing SDK")
     if plistlib.loads(ENTITLEMENTS.read_bytes()) != EXPECTED_ENTITLEMENTS:

@@ -26,7 +26,8 @@ BINARIES = {"v12": ("u2-native-noop-trial-v12-learned-profile", "9629611372c6f57
             "v14": ("u3-native-additive-function-v14", "f8e17bbdfc26df182c584383f180814a485014fe7244161af1066ff81e835229"),
             "v15": ("u3-native-additive-function-v15", "bbc4946fa6af6d3013be689ec581114266848f106bea1cad6b0fabed91f20e3a"),
             "v16": ("u3-native-additive-function-v16", "11f63007bd9e5ce2f16bc2c8eb88bc3245ed073857b3bfea1cb964b49b58df87"),
-            "v17": ("u3-native-additive-function-v17", "2d1c7582a739c90397f8b2f6c0d483222e743dda818e26cb5fd9b80e017ed0fb")}
+            "v17": ("u3-native-additive-function-v17", "2d1c7582a739c90397f8b2f6c0d483222e743dda818e26cb5fd9b80e017ed0fb"),
+            "v18": ("u3-native-additive-function-v18", "0e2063d6d33a6567806f05eaa231106123d39d952c9b8c66db1a0845b53bdf70")}
 SUPPORT = runpy.run_path(str(HOST / "u2_trial_support.py"))
 
 

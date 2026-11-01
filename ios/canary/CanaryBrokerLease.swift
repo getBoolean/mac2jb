@@ -30,7 +30,7 @@ final class BrokerSocketLease: CanaryLease {
     // restore the original and delete the function under observation - no
     // amount of broker-side renewal could help, because the worker was the
     // thing expiring. Keep this and the host's BROKER_LEASE_CAP_SECONDS equal.
-    static let maximumLeaseSeconds: Double = 180
+    static let maximumLeaseSeconds: Double = 300
     static let defaultSocketPath = "/var/jb/var/lib/mac2jb-u2-native/broker.sock"
 
     private var descriptor: Int32 = -1

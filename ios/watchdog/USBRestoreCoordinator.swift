@@ -88,7 +88,13 @@ struct USBRestoreCoordinator {
     // seconds of host-visible time to read descriptors and capture a result,
     // and it still bounds an unrestored publication with a hung worker at
     // three minutes rather than thirty seconds.
-    static let maxPublicationLifeNanoseconds: UInt64 = 180_000_000_000
+    // 300 s, not 180: the bus cycle that makes the host re-read the
+    // configuration descriptor takes the device off bus for longer than the
+    // 29-72 s a plain description change costs - measured over 120 s - and a
+    // publication whose cap expires during that outage is restored before any
+    // host can read it. The cap still bounds an unrestored publication behind
+    // a hung worker, now at five minutes.
+    static let maxPublicationLifeNanoseconds: UInt64 = 300_000_000_000
 
     let journal: USBRestoreJournal
     let currentIdentity: USBRestoreIdentity

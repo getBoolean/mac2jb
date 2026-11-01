@@ -27,7 +27,7 @@ WINDOW_SECONDS = 20
 # that with margin and stays inside the monitor's own 1...600 s limit. The
 # monitor buffers its events and emits them when the window ends, so it is left
 # to run the window out rather than being cut short.
-TRIAL_WINDOW_SECONDS = 300
+TRIAL_WINDOW_SECONDS = 540
 PACKET_OK = (b"U2_NCM_PACKET peer=one-linklocal echo=reply "
              b"link=active usbmux=one ssh=healthy\n")
 POWER_OK = {
