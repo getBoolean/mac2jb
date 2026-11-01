@@ -187,6 +187,29 @@ that accepted either answer is what let it hide.
 What this does not establish: which configuration operations the build
 authorizes. Nothing was configured and nothing was typed.
 
+## U3 configure-only gate (2026-11-01): the HID operation matrix passed device-side; the host did not enumerate the composite
+
+The canary opened the appended interface and ran the full private-selector
+sequence, holding it under the lease.
+
+- **Every operation returned `0x00000000` (success)**: interface open,
+  set-class/subclass/protocol, append standard descriptor (`0x21`), append
+  nonstandard report descriptor (`0x22`), class-command callbacks, create
+  interrupt-IN pipe, commit, create buffer, pipe max-packet. `aborted-by=none`,
+  `outcome=configured`. **This settles R9's operation matrix: the private HID
+  user-client ABI works on this iPadOS build as the macOS reference predicted.**
+- The interface was held across 44 lease renewals, a bus cycle succeeded, and
+  the broker's heal reached configured.
+- **But the host enumerated no device** while the composite publication was
+  live — not the HID interface and not the stock interfaces (`host enumerates
+  no device`, control-requests `not-observed`). The 17-function composite does
+  not present a descriptor the host will enumerate. After the window the bare
+  original was restored and the host enumerated it normally.
+
+So device-side HID is proven; the open question narrows to host enumeration of
+the composite, which is what the exclusive-HID fallback (parent plan U4) exists
+to sidestep.
+
 ## U3 open-only HID gate, first clean attempt (2026-11-01): the appended interface materialized and opened
 
 The first gate attempt whose evidence is not spoiled by the runner killing the
