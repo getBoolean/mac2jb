@@ -40,6 +40,52 @@ Restarting `audiomxd` registered the last function and brought USB back on the s
 
 A function that failed to register has **no IOService client under its `IOUSBDeviceInterface` nub**. This matched the kernel `register function` log in every capture. `MAC2JBUSBCopyUnservedFunctions` (`ios/usb/USBRestoreControllerShim.c`) walks the exact controller's children, read-only, and returns the `USBDeviceFunction` names of client-less nubs. Host-dependent functions (`PTP`) are excluded. "Configured" means `CurrentState` `DeviceState=Configured`, `OnBus=true` and `SelectedConfiguration>0` (`MAC2JBUSBCopyConfiguredState`).
 
+## A registered nub with no driver cannot be re-matched from user space
+
+A nub can come back and its kernel driver still not attach: after one
+publish-and-restore cycle the device was left with two
+`AppleUSBDeviceAudioController` instead of three, on a bus whose descriptor was
+byte-identical to stock. There is no user-space call that re-runs matching on
+one existing service, so a publication - which destroys and recreates every nub,
+and matches them afresh - remains the only remedy. The evidence, against
+xnu-10002.1.13 (the iOS 17 era) and the current SDK headers:
+
+- `IOServiceRequestProbe` exists on iOS (it is exported by `IOKit.tbd` although
+  the header marks it unavailable to public iOS clients) and its MIG routine
+  does no privilege or MACF check at all - it forwards straight to
+  `IOService::requestProbe`, whose generic implementation **returns
+  `kIOReturnUnsupported`** (`IOService.cpp`). Only a family that overrides it
+  does anything, and what it does is family-defined. It is a bus *rescan*
+  request, not a matching request: nothing in IOKit turns it into
+  `startMatching`. Call it on a nub if you want the measurement; never on the
+  controller, where a family rescan is precisely what recreates every nub.
+- `IORegistryEntrySetCFProperty`/`SetCFProperties` reach
+  `IORegistryEntry::setProperties`, default `kIOReturnUnsupported`, behind a
+  MACF hook and a `IORegistryEntryAllowableSetProperties` filter. Even when a
+  family accepts a property, setting one never starts a matching pass.
+- The `IOCatalogue` route is the only generic re-match (`IOCatalogue::addDrivers`
+  with matching, which calls `IOService::catalogNewDrivers` and does
+  `startMatching` on every already-registered service of the personality's
+  provider class). It is unreachable in practice: `is_io_catalog_send_data`
+  requires the `kIOCatalogManagement` entitlement and, for a task without it,
+  **returns `kIOReturnSuccess` without doing anything** - so a success from
+  `IOCatalogueSendData` proves nothing. An exactly duplicate personality is
+  skipped as a dup and starts no matching at all, so forcing a pass would mean
+  leaving a modified personality in the kernel catalogue until reboot.
+  `IOCatalogueTerminate(kIOCatalogServiceTerminate)` is administrator-gated,
+  compiled out under `SECURE_KERNEL`, and acts on a whole class - it would
+  terminate all 16 function nubs.
+
+Tools: `host/rematch-u2-driverless-function-wifi.py` (`--explain-census`,
+`--inspect`, `--probe FUNCTION`) over `device/u3-rematch-driverless-function.py`.
+`--explain-census` is the part to rely on: it says whether a census difference
+is a missing **function nub** (the description on the bus is wrong; the device
+still needs restoring) or only a missing kernel child driver or on-demand client
+(nothing a host can see in the descriptor). Retained censuses show the audio
+drivers, the `ptpd` and `audiomxd` clients and the accessory port coming and
+going on a device whose description is unchanged, so the healthy 44-node census
+is only a reference for a controller that is configured and attached to a host.
+
 ## Algorithm
 
 `USBFunctionRegistrationHealer` (`ios/watchdog/USBFunctionRegistrationHealer.swift`) is pure policy over a probe protocol:

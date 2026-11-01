@@ -25,6 +25,14 @@ The broker already heals automatically: bounded re-publication plus owner restar
 2. If still absent, read the recorded `syslog.txt` for `register function` lines; the unregistered functions are also visible via `host/read-u2-xdci-function-census-wifi.py` as nubs with no client.
    - Kernel-owned functions missing: `host/recover-u2-until-registered-wifi.py` (bounded re-publication).
    - Only a user-space-owned function missing: `host/recover-u2-restart-function-owner-wifi.py com.apple.audiomxd` (or the owner the profile names).
+   - A nub that is present but has no kernel driver (observed: one
+     `AppleUSBDeviceAudioController` short) is **not** fixed by restarting a
+     daemon, and no user-space call re-matches one service; see
+     [automatic recovery](usb-auto-recovery.md). Classify the difference first
+     with `host/rematch-u2-driverless-function-wifi.py --explain-census`:
+     `nub-missing` means the description on the bus is wrong, while
+     `audio-children-missing` means every function is present and only a
+     host-invisible driver is absent, which the next publication re-matches.
 3. Never confirm or clear the journal without the strict external check. Use `host/confirm-u2-after-heal-wifi.py`: it sends `heal`, checks USB, pairing, the controller and the census against the healthy reference, then confirms.
 4. If nothing works, ask the owner for a restart and re-jailbreak; a reboot always restores USB. On the new boot, verify SSH and USB, make a backup kit, capture a new trial baseline, and resolve the old journal before the next trial.
    - A guarded old-boot archive needs a fresh tool. The previous version-specific ones are in git history, e.g. `archive-u2-v8-old-boot-journal-wifi.py`.

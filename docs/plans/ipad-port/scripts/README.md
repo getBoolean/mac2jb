@@ -41,6 +41,7 @@ Only the tools for the current workflow are kept. The historical U1 probes, the 
 | `host/recover-u2-over-wifi.py` | Standard response when a U2 trial loses Mac USB: back up, capture, then one Wi-Fi restore. |
 | `host/recover-u2-restart-function-owner-wifi.py` | Restart the userspace owner of the one unregistered USB function, then observe. |
 | `host/recover-u2-until-registered-wifi.py` | Bounded re-publication until every USB function registers (Wi-Fi only). |
+| `host/rematch-u2-driverless-function-wifi.py` | Inspect, explain or probe a driverless audio USB function nub over pinned root Wi-Fi SSH. |
 | `host/replace-u2-broker-wifi.py` | Swap one allowlisted U2 broker for another over pinned root Wi-Fi SSH (usage: OLD NEW). |
 | `host/run-u2-noop-trial-auto-heal-wifi.py` | One auto-heal no-op U2 trial (normal | worker-kill | watchdog-kill) on any staged broker. |
 | `host/u2-usb-lifecycle-monitor.swift` | Passive Mac USB arrival/termination monitor for a target vendor/product (used by trials). |
@@ -119,6 +120,7 @@ Only the tools for the current workflow are kept. The historical U1 probes, the 
 | `device/u2-replace-broker.py` | Replace one allowlisted U2 broker with another, keeping any active journal. |
 | `device/u2-wifi-restore-request.py` | Ask the staged U2 broker for exactly one restore after a host-observed USB failure. |
 | `device/u2_target_snapshot.py` | Read the exact iPad identity and live USB description for the watchdog. |
+| `device/u3-rematch-driverless-function.py` | Report, and at most probe, a driverless audio USB function nub (no publication). |
 
 ## Tests (Mac-only)
 
@@ -143,5 +145,6 @@ Only the tools for the current workflow are kept. The historical U1 probes, the 
 | `tests/test-u2-string-descriptors.py` | Exercise the Mac string-probe envelope parser without a USB device. |
 | `tests/test-u2-string-semantics.py` | Test value-based USB string equivalence without a connected device. |
 | `tests/test-u2-target-pairing.py` | Mac-only fixture for the U2 USB/network target and pairing gate. |
+| `tests/test-u3-rematch-function.py` | Mac-only fixtures for the driverless-audio-function inspector and its probe gate. |
 
 Run one with `python3 docs/plans/ipad-port/scripts/ipad-hardware/tests/<name>.py`. The `test-u2-native-*`, `test-u2-device-profile` and `test-u2-function-healer` tests compile the real Swift broker sources against fakes.
