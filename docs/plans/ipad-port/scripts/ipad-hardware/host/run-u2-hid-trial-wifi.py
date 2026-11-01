@@ -109,6 +109,7 @@ import hashlib
 import json
 from pathlib import Path
 import re
+import os
 import runpy
 import secrets
 import select
@@ -218,7 +219,12 @@ def lease_budget_seconds():
 # past the lease it is no longer waiting on the published keyboard at all. It
 # still returns the moment the expected report count arrives, so a healthy run
 # does not spend this; it is a bound, not a pause.
-REPORT_DEADLINE_SECONDS = BROKER_LEASE_CAP_SECONDS
+# Bounded small, not at the cap: this wait runs in series with the reattach
+# and the descriptor read inside one publication's life, so spending the
+# whole cap here starves the measurement it exists to protect. The reader
+# returns as soon as the expected reports arrive, so a healthy run pays none
+# of it.
+REPORT_DEADLINE_SECONDS = 30
 # A read this trial cannot place inside a live publication, said by the capture
 # itself, and a publication that had gone by the time the read finished, which
 # only this runner can see. Two different failures to be positioned, so two
@@ -635,28 +641,11 @@ def live_environment(options):
         process = subprocess.Popen(
             [*ssh, shlex.quote(options["canary_path"]) + " " +
              canary_arguments(options)],
-            stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
-        return {"process": process, "output": b""}
+            stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, bufsize=0)
+        # `scanned` is how far await_line has examined `output`; nothing may be
+        # left in a Python-level buffer, which is why bufsize is 0.
+        return {"process": process, "output": b"", "scanned": 0}
 
-    def await_line(handle, marker, seconds, required=None):
-        """Bounded read of the canary's streamed output for one of its lines.
-
-        Every line read is kept, so the canary's own evidence is complete
-        whether or not the line arrives. A closed stream and an expired
-        deadline both mean it did not.
-        """
-        process = handle["process"]
-        deadline = time.monotonic() + seconds
-        while True:
-            remaining = deadline - time.monotonic()
-            if remaining <= 0 or not select.select([process.stdout], [], [], remaining)[0]:
-                return False
-            text = process.stdout.readline()
-            if not text:
-                return False
-            handle["output"] += text
-            if text.startswith(marker) and (required is None or required in text):
-                return True
 
     def start_renewal():
         """Drive `renew-lease` in the background for the life of the window.
@@ -722,14 +711,6 @@ def live_environment(options):
         return await_line(handle, CONFIGURED_MARKER, CONFIGURE_WAIT_SECONDS,
                           CONFIGURED_NOTHING_ABORTED)
 
-    def collect_canary(handle):
-        process = handle["process"]
-        try:
-            rest = process.communicate(timeout=CANARY_SECONDS)[0]
-        except subprocess.TimeoutExpired:
-            process.kill()
-            rest = process.communicate(timeout=10)[0]
-        return process.returncode, handle["output"] + (rest or b"")
 
     def start_reports(stage):
         """The seizing report reader: it takes the keyboard away from this Mac.
@@ -840,6 +821,57 @@ def live_environment(options):
         "sleep": time.sleep,
         "trial": trial,
     }
+
+
+def await_line(handle, marker, seconds, required=None):
+    """Bounded read of the canary's streamed output for one of its lines.
+
+    Frames lines out of raw reads rather than using readline(), and that is not
+    a style choice. select() answers about the *kernel pipe*; readline() reads
+    through a BufferedReader, which issues one 8 KiB read and returns only the
+    first line, leaving the rest in a userspace buffer select() cannot see. When
+    the canary printed its configuration milestones in one burst and then went
+    quiet for its whole enumeration wait, select() never fired again, this
+    returned False with `operations ... aborted-by=255` sitting unread, the bus
+    was never cycled, and collect_canary then dropped the buffer - so the
+    canary's own evidence file lost four lines it had certainly printed. Reading
+    the descriptor directly keeps every byte in `output`, where both the match
+    below and the evidence file can see it.
+
+    select() also only guarantees one byte, not a whole line, so readline() here
+    could block past the deadline with no bound at all while the canary holds
+    the broker's lease.
+    """
+    process = handle["process"]
+    deadline = time.monotonic() + seconds
+    while True:
+        # Lines already read but not yet examined, including any that arrived in
+        # the same chunk as the line a previous call returned on.
+        end = handle["output"].rfind(b"\n", handle["scanned"]) + 1
+        if end > handle["scanned"]:
+            for text in handle["output"][handle["scanned"]:end].splitlines(True):
+                handle["scanned"] += len(text)
+                if text.startswith(marker) and (required is None or required in text):
+                    return True
+            continue
+        remaining = deadline - time.monotonic()
+        if remaining <= 0 or not select.select([process.stdout], [], [], remaining)[0]:
+            return False
+        chunk = os.read(process.stdout.fileno(), 65536)
+        if not chunk:
+            return False
+        handle["output"] += chunk
+
+
+def collect_canary(handle):
+    """The canary's exit code and its complete output, streamed part included."""
+    process = handle["process"]
+    try:
+        rest = process.communicate(timeout=CANARY_SECONDS)[0]
+    except subprocess.TimeoutExpired:
+        process.kill()
+        rest = process.communicate(timeout=10)[0]
+    return process.returncode, handle["output"] + (rest or b"")
 
 
 def parse(argv):

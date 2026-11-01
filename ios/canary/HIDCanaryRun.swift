@@ -183,7 +183,12 @@ struct HIDCanaryRun {
     // chance to enumerate and reports "not enumerated" about a device that was
     // not yet present. 120 s covers the slowest measured return with room for
     // the host to read descriptors, and stays inside the lease above.
-    static let enumerationWaitSeconds: Double = 240
+    // Must also outlast the *host's* sequence after the bus cycle - the
+    // reattach, the report collection and the descriptor read - because this
+    // wait ending is what releases the lease, and the broker restores the
+    // original the moment the worker goes. A wait that ends first makes the
+    // capture read a restored device, which is a void observation.
+    static let enumerationWaitSeconds: Double = 280
     static let enumerationPollMicroseconds: UInt32 = 500_000
 
     let sink: HIDReportSink

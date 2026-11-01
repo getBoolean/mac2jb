@@ -1176,3 +1176,52 @@ if __name__ == "__main__":
     finally:
         for directory in TEMPORARIES:
             shutil.rmtree(directory, ignore_errors=True)
+
+
+def streamed_canary_output():
+    """await_line keeps every byte the canary printed, bursts included.
+
+    This is the only test that drives the real stream handling: the runner
+    cases above stub start_canary/await_configured/collect_canary, so the one
+    piece of byte-level code in the file went untested while the suite stayed
+    green. It cost four lines of device evidence and a void trial - the burst
+    below is exactly the shape the canary produces, and the old implementation
+    read the first line of it and discarded the rest.
+    """
+    child = (
+        "import sys,time\n"
+        "def say(t):\n"
+        "    sys.stdout.write(t+'\\n'); sys.stdout.flush()\n"
+        "say('U3_HID_CANARY lease=held')\n"
+        "time.sleep(0.2)\n"
+        # One burst, as the configuration sequence produces.
+        "sys.stdout.write('U3_HID_CANARY open result=0\\n'\n"
+        "                 'U3_HID_CANARY pipe id=0\\n'\n"
+        "                 'U3_HID_CANARY buffer size=4096 mapped=true\\n'\n"
+        "                 'U3_HID_CANARY operations commit=0x0 aborted-by=255\\n')\n"
+        "sys.stdout.flush()\n"
+        # Then silent past the caller's deadline, as the enumeration wait is.
+        "time.sleep(2.0)\n"
+        "say('U3_HID_CANARY enumeration host=never-enumerated')\n")
+    process = subprocess.Popen([sys.executable, "-I", "-c", child],
+                               stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
+                               bufsize=0)
+    handle = {"process": process, "output": b"", "scanned": 0}
+    assert RUNNER["await_line"](handle, b"U3_HID_CANARY lease=held", 5), "lease line"
+    # Nothing reads the pipe for a moment, so the burst lands in one chunk - the
+    # condition that broke the old implementation.
+    time.sleep(0.8)
+    # A deadline shorter than the child's silence: the line is already in hand,
+    # so it must be matched from the buffer and not waited for.
+    assert RUNNER["await_line"](handle, b"U3_HID_CANARY operations ", 0.5,
+                                b"aborted-by=255"), "burst line must be matched"
+    code, output = RUNNER["collect_canary"](handle)
+    for expected in (b"lease=held", b"open result=0", b"pipe id=0",
+                     b"buffer size=4096", b"aborted-by=255",
+                     b"enumeration host=never-enumerated"):
+        assert expected in output, (expected, output)
+    assert code == 0, code
+    print("PASS canary stream keeps every line of a burst and matches from the buffer")
+
+
+streamed_canary_output()
