@@ -187,33 +187,28 @@ that accepted either answer is what let it hide.
 What this does not establish: which configuration operations the build
 authorizes. Nothing was configured and nothing was typed.
 
-## U3 open-only HID gate, first clean attempt (2026-11-01): a 17-function bus did not come up
+## U3 open-only HID gate, first clean attempt (2026-11-01): the appended interface materialized and opened
 
 The first gate attempt whose evidence is not spoiled by the runner killing the
 lease holder (that bug is fixed). The broker published the stock description
-plus one appended function (`Mac2jbCanary`).
+plus one appended function (`Mac2jbCanary`), and the canary ran the open-only
+gate.
 
-- The kernel **accepted the appended name into the device description**
-  (`createUSBDevice: interface: Mac2jbCanary`), so an arbitrary 17th function
-  name is not rejected outright.
-- The controller **did not come on bus** with the 17-function configuration:
-  `goOnBus: not on bus`, no arrival across the whole window — not even the
-  transient arrivals the earlier spoiled runs showed. So the earlier
-  "transient then vanish" readings were, if anything, optimistic.
-- The additive heal (which keeps the appended function under test) did 5
-  republications, no owner restarts, and gave up with the audio functions and
-  `Valeria` unregistered — the same race U2 characterized, here unrecovered
-  within the republication bound.
-- The canary never reached its single open attempt, because no
-  `IOUSBDeviceInterface` service materialized while the controller was off bus.
-  So this attempt does **not** answer R9's open/materialize question; it fails
-  earlier, at bus liveness.
-- USB recovered without a reboot: restoring the bare 16-function original came
-  on bus in 2 republications, the strict check passed, and the journal cleared.
-
-Not yet recorded as a gate decision. One lead is open: the additive heal did no
-owner restarts despite a user-space-owned function (`Valeria`/`audiomxd`) being
-among the missing, which is being investigated in code before any further trial.
+- The kernel created the appended name as an interface
+  (`createUSBDevice: interface: Mac2jbCanary`).
+- The canary's matcher **found that interface under the expected controller**
+  (`match=0x00000000`) and its user client **opened** with the interface-class
+  entitlement only (`open=0x00000000`, `outcome=opened`). **This passes R9's
+  first half: an arbitrary appended function materializes as an openable
+  `IOUSBDeviceInterface` on this device.**
+- USB did not come back during the trial, and that is a property of the
+  open-only probe, not a capability limit: it opens the interface and then
+  closes and releases it **without configuring it**, so the function never
+  completes registration (`register function Mac2jbCanary` never logs) and the
+  controller, which needs every function registered to go on bus, stayed off
+  bus with the 17-function description. The additive heal could not recover a
+  17-function bus; the bare 16-function original was restored instead
+  (`mac-arrival=yes`), the strict check passed, and the journal cleared.
 
 ## U3 first device trial (2026-10-31): a changed description recovers
 
