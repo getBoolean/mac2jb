@@ -188,7 +188,7 @@ struct HIDCanaryRun {
     // wait ending is what releases the lease, and the broker restores the
     // original the moment the worker goes. A wait that ends first makes the
     // capture read a restored device, which is a void observation.
-    static let enumerationWaitSeconds: Double = 280
+    static let enumerationWaitSeconds: Double = 560
     static let enumerationPollMicroseconds: UInt32 = 500_000
 
     let sink: HIDReportSink

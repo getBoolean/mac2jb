@@ -94,7 +94,7 @@ struct USBRestoreCoordinator {
     // publication whose cap expires during that outage is restored before any
     // host can read it. The cap still bounds an unrestored publication behind
     // a hung worker, now at five minutes.
-    static let maxPublicationLifeNanoseconds: UInt64 = 300_000_000_000
+    static let maxPublicationLifeNanoseconds: UInt64 = 600_000_000_000
 
     let journal: USBRestoreJournal
     let currentIdentity: USBRestoreIdentity

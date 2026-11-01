@@ -139,7 +139,7 @@ BROKER_LEASE_CEILING_SECONDS = 30
 # forward in quanta of the ceiling above, but never past this. It is what makes
 # the 29-72 s bus return observable at all, and it still bounds an unrestored
 # publication behind a hung worker at three minutes rather than indefinitely.
-BROKER_LEASE_CAP_SECONDS = 300
+BROKER_LEASE_CAP_SECONDS = 600
 # Three attempts inside one quantum, so a single lost or heal-blocked reply
 # cannot end the publication. The broker is single-threaded and cannot answer a
 # renewal while it is healing, so a slow or failed tick is expected and is not
@@ -148,7 +148,7 @@ RENEW_INTERVAL_SECONDS = 10
 # Bounded by the device's own measurement rather than by the lease: the device
 # takes 29-72 s to come back on bus after a description change, which the lease
 # cannot cover. 120 s is the slowest measured return with margin.
-USB_RETURN_SECONDS = 240
+USB_RETURN_SECONDS = 420
 LEASE_WAIT_SECONDS = 20
 CANARY_SECONDS = 90
 # A process bound on a read-only registry read, not a liveness bound: whether
