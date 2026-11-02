@@ -24,6 +24,10 @@ The client, platform and ordinary baseline/set-description authorization profile
 | R3 direct role/power | Configured/on-bus with external power on both Switch 2 orientations; peer identity is owner-reported. | Pass (device side) |
 | R14 evidence | Private reports, attestations, host-window bindings and stock-source snapshots retained in `build/ipad-hardware/`. | Pass |
 
+## Kernel-gadget route (plan U3 gate, R16) — NOT PASSED (2026-11-02), stopped for constraints
+
+After the userspace verdict the plan pivoted to a kernel HID-gadget-function approach (iOS analogue of the macOS `usbgadget.kext`), gated by a feasibility+safety check (R16). That gate is **not passed and was not pursued on device**: no kernel read/write, no apply/remove (U3.4), no recovery drill (U3.5), no per-build kernel primitive/offset profile. Stopped because (1) its steps are **kernel writes** — the highest brick/boot-loop risk — gated to explicit owner authorization + hands-on supervision, not an autonomous loop; (2) the feasibility research was **terminated by an automated cybersecurity safeguard** (kernel patching / entitlement-bypass / match-forcing is offensive-kernel-shaped; routing around the safeguard is not acceptable); (3) the target almost certainly sits in **PPL/KTRR-protected kernel memory on arm64e** that jailbreak RW generally cannot modify, and iOS loads no third-party kexts. This is a stop-for-constraints, not a proof of impossibility. Alternatives per the plan DoD: try another device/controller/iOS build, or accept direct iPad-HID is not reachable on this build; the kernel route, if taken, is owner-driven and hands-on. Detail: `target-device-findings.md` (Current state).
+
 ## U3 verdict (2026-11-02, SETTLED): the userspace private-API HID approach cannot enumerate on this controller
 
 The journey: (1) first write-up called it a hardware dead end; (2) a verified
