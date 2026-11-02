@@ -132,6 +132,21 @@ static MAC2JBUSBResult remove_from(CFDataRef input, const char *name,
     return result;
 }
 
+static MAC2JBUSBResult sole_to(CFDataRef input, const char *name,
+                               int32_t configurationNumber, CFDictionaryRef *out) {
+    uint8_t *bytes = NULL;
+    size_t length = 0;
+    MAC2JBUSBResult result = MAC2JBUSBSetSoleFunctionInDescriptionData(
+        CFDataGetBytePtr(input), (size_t)CFDataGetLength(input), name,
+        configurationNumber, &bytes, &length);
+    if (out) *out = NULL;
+    if (result == MAC2JBUSBSuccess && out) *out = decode(bytes, length);
+    if (result != MAC2JBUSBSuccess) check(bytes == NULL && length == 0,
+                                         "rejected sole-set returned no buffer");
+    MAC2JBUSBFreeCapturedDescription(bytes);
+    return result;
+}
+
 static void expect_removal_rejected(CFDataRef input, const char *name,
                                     int32_t configurationNumber, const char *what) {
     CFDataRef out = NULL;
@@ -403,6 +418,64 @@ int main(void) {
     CFRelease(bareList);
     CFRelease(bareVariant);
     CFRelease(appendedData);
+
+    // Exclusive-HID shape: the selected configuration's interface list becomes
+    // exactly the one function, every stock function in it removed, and
+    // everything else left alone.
+    CFDictionaryRef sole = NULL;
+    check(sole_to(input, "Mac2jbCanary", TARGET_CONFIGURATION, &sole) ==
+          MAC2JBUSBSuccess, "set sole function in the selected configuration succeeds");
+    if (sole) {
+        CFArrayRef soleConfigs = configurations_of(sole);
+        check(soleConfigs && CFArrayGetCount(soleConfigs) == CONFIGURATION_COUNT,
+              "sole-set keeps the configuration count");
+        if (soleConfigs && CFArrayGetCount(soleConfigs) == CONFIGURATION_COUNT) {
+            CFDictionaryRef target = (CFDictionaryRef)CFArrayGetValueAtIndex(
+                soleConfigs, TARGET_CONFIGURATION - 1);
+            CFArrayRef names = (CFArrayRef)CFDictionaryGetValue(target, CFSTR("Interfaces"));
+            check(names && CFArrayGetCount(names) == 1,
+                  "the selected configuration now carries exactly one interface");
+            if (names && CFArrayGetCount(names) == 1) {
+                check(CFEqual(CFArrayGetValueAtIndex(names, 0), CFSTR("Mac2jbCanary")),
+                      "that one interface is the appended function");
+            }
+            // A different configuration (config 1) is untouched.
+            CFDictionaryRef other = (CFDictionaryRef)CFArrayGetValueAtIndex(soleConfigs, 0);
+            CFArrayRef otherNames = (CFArrayRef)CFDictionaryGetValue(other, CFSTR("Interfaces"));
+            check(otherNames && CFArrayGetCount(otherNames) == 1 &&
+                  CFEqual(CFArrayGetValueAtIndex(otherNames, 0), CFSTR("Valeria")),
+                  "a non-target configuration is left exactly as it was");
+        }
+        // Device-level scalars are untouched: drop configurations and compare.
+        CFMutableDictionaryRef wasScalars = CFDictionaryCreateMutableCopy(
+            kCFAllocatorDefault, 0, original);
+        CFMutableDictionaryRef isScalars = CFDictionaryCreateMutableCopy(
+            kCFAllocatorDefault, 0, sole);
+        CFDictionaryRemoveValue(wasScalars, CFSTR("ConfigurationDescriptors"));
+        CFDictionaryRemoveValue(isScalars, CFSTR("ConfigurationDescriptors"));
+        check(CFEqual(wasScalars, isScalars), "sole-set leaves every device scalar unchanged");
+        CFRelease(wasScalars);
+        CFRelease(isScalars);
+        CFRelease(sole);
+    }
+    // A name already present in any configuration is refused, with no buffer.
+    CFDictionaryRef collision = NULL;
+    check(sole_to(input, "PTP", TARGET_CONFIGURATION, &collision) ==
+          MAC2JBUSBFunctionRejected, "sole-set refuses a name already in the description");
+    check(collision == NULL, "a refused sole-set yields no description");
+    if (collision) CFRelease(collision);
+    // A configuration out of range is refused.
+    CFDictionaryRef outOfRange = NULL;
+    check(sole_to(input, "Mac2jbCanary", CONFIGURATION_COUNT + 1, &outOfRange) ==
+          MAC2JBUSBFunctionRejected, "sole-set refuses a configuration out of range");
+    if (outOfRange) CFRelease(outOfRange);
+    // A NULL input is refused and returns no buffer.
+    uint8_t *nullOut = (uint8_t *)1;
+    size_t nullLen = 1;
+    check(MAC2JBUSBSetSoleFunctionInDescriptionData(NULL, 0, "Mac2jbCanary",
+          TARGET_CONFIGURATION, &nullOut, &nullLen) == MAC2JBUSBInvalidInput,
+          "sole-set refuses a NULL description");
+    check(nullOut == NULL && nullLen == 0, "a refused sole-set clears the out buffer");
 
     CFRelease(input);
     CFRelease(original);

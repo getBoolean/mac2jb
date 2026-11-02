@@ -134,6 +134,20 @@ MAC2JBUSBResult MAC2JBUSBRemoveFunctionFromDescriptionData(
     uint8_t **out, size_t *outLength
 );
 
+// Pure: the exclusive-HID shape (parent plan U4). Deserialize the description,
+// replace the given configuration's Interfaces array with exactly one name -
+// the function alone, every stock function removed from that configuration -
+// and serialize the result. Only that one configuration is changed; device
+// scalars and every other configuration are untouched, so the journaled
+// original restores the stripped stock functions by a plain republish. No
+// IOKit, no controller; the caller owns *out and frees it with
+// MAC2JBUSBFreeCapturedDescription.
+MAC2JBUSBResult MAC2JBUSBSetSoleFunctionInDescriptionData(
+    const uint8_t *plist, size_t plistLength,
+    const char *functionName, int32_t configurationNumber,
+    uint8_t **out, size_t *outLength
+);
+
 // Read-only: the configuration number the host has currently selected on the
 // exact controller, from CurrentState.SelectedConfiguration. Success only when
 // that value is a typed number greater than zero; the number is never assumed.

@@ -123,12 +123,69 @@ static bool remove_appended_function(CFMutableDictionaryRef info, CFStringRef na
     return removed;
 }
 
-// Shared body of the two pure entry points: decode, apply the one edit, encode.
-// Both the pure path and the clone path go through append_function and
-// remove_appended_function, so there is one implementation of each edit.
+// Replace the given configuration's Interfaces array with exactly one name:
+// the appended function alone, every stock function removed from that
+// configuration. This is the exclusive-HID shape (parent plan U4): the host
+// selects this configuration and sees a single-interface keyboard, which a
+// controller can bring on bus without the composite's extra interface and
+// endpoint. Only the one configuration is touched; the device-level scalars
+// and every other configuration are left exactly as the stock description had
+// them, and the journaled original stays the restore target, so restoring the
+// stripped stock functions is a plain republish of the original. The name must
+// not already appear in any configuration, as for append_function.
+static bool set_sole_function(CFMutableDictionaryRef info, CFStringRef name,
+                              int32_t configurationNumber) {
+    if (!info || !name || configurationNumber < 1 || configurationNumber > 255) return false;
+    CFIndex target = (CFIndex)configurationNumber - 1;
+    CFTypeRef value = CFDictionaryGetValue(info, CFSTR("ConfigurationDescriptors"));
+    if (!value || CFGetTypeID(value) != CFArrayGetTypeID()) return false;
+    CFArrayRef configurations = (CFArrayRef)value;
+    CFIndex count = CFArrayGetCount(configurations);
+    if (target >= count) return false;
+    // Same whole-array validation and name-collision check as append_function:
+    // the target configuration must carry an interface list, and the name must
+    // not already be present in any configuration.
+    for (CFIndex index = 0; index < count; index++) {
+        CFTypeRef entry = CFArrayGetValueAtIndex(configurations, index);
+        if (!entry || CFGetTypeID(entry) != CFDictionaryGetTypeID()) return false;
+        CFTypeRef names = CFDictionaryGetValue((CFDictionaryRef)entry, CFSTR("Interfaces"));
+        if (!names && index != target) continue;
+        if (!names || CFGetTypeID(names) != CFArrayGetTypeID()) return false;
+        CFIndex nameCount = CFArrayGetCount((CFArrayRef)names);
+        for (CFIndex slot = 0; slot < nameCount; slot++) {
+            CFTypeRef existing = CFArrayGetValueAtIndex((CFArrayRef)names, slot);
+            if (!existing || CFGetTypeID(existing) != CFStringGetTypeID()) return false;
+            if (CFEqual(existing, name)) return false;
+        }
+    }
+    CFDictionaryRef configuration = (CFDictionaryRef)CFArrayGetValueAtIndex(configurations, target);
+    CFMutableArrayRef soleName = CFArrayCreateMutable(kCFAllocatorDefault, 1,
+                                                      &kCFTypeArrayCallBacks);
+    CFMutableDictionaryRef newConfiguration = CFDictionaryCreateMutableCopy(
+        kCFAllocatorDefault, 0, configuration);
+    CFMutableArrayRef newConfigurations = CFArrayCreateMutableCopy(
+        kCFAllocatorDefault, 0, configurations);
+    bool set = soleName && newConfiguration && newConfigurations;
+    if (set) {
+        CFArrayAppendValue(soleName, name);
+        CFDictionarySetValue(newConfiguration, CFSTR("Interfaces"), soleName);
+        CFArraySetValueAtIndex(newConfigurations, target, newConfiguration);
+        CFDictionarySetValue(info, CFSTR("ConfigurationDescriptors"), newConfigurations);
+    }
+    if (soleName) CFRelease(soleName);
+    if (newConfiguration) CFRelease(newConfiguration);
+    if (newConfigurations) CFRelease(newConfigurations);
+    return set;
+}
+
+// Shared body of the pure entry points: decode, apply the one edit, encode.
+// The pure path and the clone path go through these same edit helpers, so
+// there is one implementation of each edit. `mode` selects which.
+enum mac2jb_edit_mode { MAC2JB_EDIT_APPEND = 0, MAC2JB_EDIT_REMOVE = 1, MAC2JB_EDIT_SOLE = 2 };
+
 static MAC2JBUSBResult edit_description_data(
     const uint8_t *plist, size_t plistLength,
-    const char *functionName, int32_t configurationNumber, bool appending,
+    const char *functionName, int32_t configurationNumber, int mode,
     uint8_t **out, size_t *outLength
 ) {
     if (!out || !outLength) return MAC2JBUSBInvalidInput;
@@ -147,8 +204,10 @@ static MAC2JBUSBResult edit_description_data(
     CFStringRef name = CFStringCreateWithCString(kCFAllocatorDefault, functionName,
                                                  kCFStringEncodingUTF8);
     if (!name) goto finished;
-    bool edited = appending
+    bool edited = mode == MAC2JB_EDIT_APPEND
         ? append_function((CFMutableDictionaryRef)decoded, name, configurationNumber)
+        : mode == MAC2JB_EDIT_SOLE
+        ? set_sole_function((CFMutableDictionaryRef)decoded, name, configurationNumber)
         : remove_appended_function((CFMutableDictionaryRef)decoded, name,
                                    configurationNumber);
     if (!edited) {
@@ -180,7 +239,7 @@ MAC2JBUSBResult MAC2JBUSBAppendFunctionToDescriptionData(
     uint8_t **out, size_t *outLength
 ) {
     return edit_description_data(plist, plistLength, functionName,
-                                 configurationNumber, true, out, outLength);
+                                 configurationNumber, MAC2JB_EDIT_APPEND, out, outLength);
 }
 
 MAC2JBUSBResult MAC2JBUSBRemoveFunctionFromDescriptionData(
@@ -189,7 +248,16 @@ MAC2JBUSBResult MAC2JBUSBRemoveFunctionFromDescriptionData(
     uint8_t **out, size_t *outLength
 ) {
     return edit_description_data(plist, plistLength, functionName,
-                                 configurationNumber, false, out, outLength);
+                                 configurationNumber, MAC2JB_EDIT_REMOVE, out, outLength);
+}
+
+MAC2JBUSBResult MAC2JBUSBSetSoleFunctionInDescriptionData(
+    const uint8_t *plist, size_t plistLength,
+    const char *functionName, int32_t configurationNumber,
+    uint8_t **out, size_t *outLength
+) {
+    return edit_description_data(plist, plistLength, functionName,
+                                 configurationNumber, MAC2JB_EDIT_SOLE, out, outLength);
 }
 
 MAC2JBUSBResult MAC2JBUSBCaptureControllerRegistryID(uint64_t *controllerRegistryID) {
