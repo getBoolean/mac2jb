@@ -8,8 +8,8 @@ Redacted gate decisions for the iPad port's hardware plan (`docs/plans/ipad-port
 |---|---|---|
 | U1 read-only target inventory | **Pass (2026-10-30)** | R1–R3 and U1-scoped R14, below. Read-only inventory, authorization and role/power only. |
 | U2 restoration journal and watchdog | **Pass (2026-10-31)** | Automatic same-boot recovery: v11 5/5 and v12 2/2 hardware no-op trials. Semantic external equivalence; the `AllowMultipleCreates` flag is an accepted deviation. Below. |
-| U3 additive HID canary | In progress; host side not yet observable | The device side works end to end: the appended function **registers with the controller**, materializes as an interface, its user client opens, and every configuration operation returns success. Whether a host can see it is **still unmeasured** - every attempt so far observed outside the window in which the function existed. All below. |
-| U4 exclusive-HID fallback | Not tested | Conditional fallback only. |
+| U3 additive HID canary | **Fail on this device (2026-11-02): host never enumerates** | Device side works end to end (R9: interface registers, opens, every operation succeeds), but no configuration carrying the appended driverless function comes on bus, so no host enumerates it. Triple-confirmed (v19/v20/v21). Verdict section below. |
+| U4 exclusive-HID / usbmux-preserving fallback | **Tested (2026-11-02): same failure** | The 3-interface `[PTP, AppleUSBMux, Mac2jbCanary]` config failed to enumerate exactly like the composite (`heal-gave-up missing=none`, `usb=absent`), so it is not a count/ceiling problem. The stored-description restore recovered the device with no reboot. Verdict section below. |
 | U5 network topology | Not tested | No paired 20-attempt exploit comparison. |
 | U6 capability contract | Not tested | No signed final capability record. |
 
@@ -23,6 +23,27 @@ The client, platform and ordinary baseline/set-description authorization profile
 | R2 authorization boundaries | Ordinary in-process apps: controller opens unsupported (`-536870201`), function opens denied (`-536870174`); the set-description entitlement made no read-only difference. Publication needs `com.apple.private.usbdevice.setdescription` with `platform-application` in a root launchd job (plain apps are SIGKILLed before `main`). | Pass for classification |
 | R3 direct role/power | Configured/on-bus with external power on both Switch 2 orientations; peer identity is owner-reported. | Pass (device side) |
 | R14 evidence | Private reports, attestations, host-window bindings and stock-source snapshots retained in `build/ipad-hardware/`. | Pass |
+
+## U3 verdict (2026-11-02): direct HID via the private-API appended-function approach does not enumerate on this controller
+
+Three enumeration trials, consistent: a configuration containing the appended,
+driverless `Mac2jbCanary` function will not come on bus on `AppleT8112USBXDCI`,
+and its presence keeps the whole configuration (stock interfaces included) off
+bus, so no host enumerates it.
+
+- v19 composite configure-only — not enumerated (confounded: canary released, re-baring heal).
+- v20 composite full mode — canary held across the cycle, `usb=absent`, device off bus the whole ~530 s hold.
+- v21 usbmux-preserving full mode `[PTP, AppleUSBMux, Mac2jbCanary]` — `renewals=45`, `cycle=OK io=0`, `heal-gave-up missing=none republications=5`; syslog: five `goOnBus: not on bus`, the only `handleUSBConnectionDone` is the restore; `usb=absent`.
+
+Not a count/endpoint ceiling (3 interfaces failed like 7) and not non-registration
+(`missing=none`). Device-side `IOReturn 0x00000000` means the IOKit call was
+accepted, not that the controller enumerated. R9 (device-side operation matrix)
+still passes; U3.9 (host enumeration) fails. Per the plan DoD the direct-HID USB
+gate is **failed on this reference device via this approach**. The stored-description
+restore (`MAC2JBUSBSetStoredDescriptionOrPublish`) recovered the device each time
+with no reboot. Open avenues: another controller/iOS build (product goal spans
+many devices), or a real kernel driver for the function (a different, larger
+mechanism). Evidence: `build/ipad-hardware/u2-trials/hid-v19-…`, `hid-v20-…`, `hid-v21-…`.
 
 ## U3 operation matrix (2026-10-31): every configuration operation is authorized
 
