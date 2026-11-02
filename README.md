@@ -1,5 +1,17 @@
 # mac2jb
 
+> **Failed experiment — iPad/iPhone port closed, 2026-11-02.** This repository
+> retains the experiment and its findings for reference. Direct USB HID did not
+> enumerate on the reference M2 iPad Pro running iPadOS 17.0 across five userspace
+> trials. Source review found no kernel gadget candidate meeting the project's
+> reversibility requirements, so the later kernel and Switch validation gates
+> were not run. There is no working iPad/iPhone port. See the
+> [gate findings](docs/ipad/hardware-matrix.md) and
+> [kernel candidate assessment](docs/plans/ipad-port/research/kernel-gadget-candidate-matrix.md).
+> This result is limited to the investigated approaches and target; it does not
+> establish impossibility on every device. The original macOS instructions are
+> retained below.
+
 an all-in-one ns2 jailbreaking tool for mac.
 
 ## what you need

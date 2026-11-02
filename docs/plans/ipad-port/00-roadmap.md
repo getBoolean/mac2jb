@@ -12,6 +12,12 @@ plan_role: roadmap
 
 # M2 iPad Full Port Roadmap - Plan
 
+> **Closed as a failed experiment, 2026-11-02.** Direct USB HID failed on the
+> reference device through the tested userspace approach. No kernel candidate
+> met the source eligibility requirements, so the remaining port work was not
+> executed. This roadmap is retained for reference. See the
+> [hardware verdict](../../ipad/hardware-matrix.md).
+
 ## Goal Capsule
 
 - **Objective:** The jailbroken M2 iPad Pro 12.9-inch (6th generation), `iPad14,5` / `J620AP` / `T8112`, on iPadOS 17.0 can run the complete mac2jb workflow with no Mac present during normal use, including USB bootstrap entry, ns2jb hosting, held-RPC tools, every bundled homebrew app, recovery, updates, and diagnostics.

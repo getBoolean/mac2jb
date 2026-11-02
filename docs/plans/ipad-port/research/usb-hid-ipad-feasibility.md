@@ -1,13 +1,21 @@
 # USB HID device mode on the M2 iPad Pro target
 
+> **SUPERSEDED 2026-11-02.** This was the pre-trial source hypothesis. Exact-device
+> trials disproved its generic-userspace bridge: an arbitrary or stock-named
+> userspace-configured function does not enumerate because `createUSBDevice`
+> requires an in-kernel driver match. The current source-only kernel candidate
+> verdict is in [`kernel-gadget-candidate-matrix.md`](kernel-gadget-candidate-matrix.md);
+> retained device evidence is in
+> [`../../../ipad/target-device-findings.md`](../../../ipad/target-device-findings.md).
+
 Date: 2026-10-28  
 Target: M2 iPad Pro 12.9-inch (6th generation), `iPad14,5` / `J620AP` / `T8112`, iPadOS 17.0, Dopamine, TrollStore
 
 ## Verdict
 
-The sources establish a credible route to direct USB HID and justify implementing a recoverable canary. They do not yet prove USB HID on iPadOS. The iPad is USB-device capable; iOS has a configurable device controller and generic device-interface family; privileged userspace can replace a controller description; and the closely related Apple-silicon Mac stack can materialize an arbitrary named interface and configure it as HID entirely from userspace.
+The sources originally established a testable userspace hypothesis and justified a recoverable canary. The completed exact-device trials disproved that hypothesis on this target. The iPad is USB-device capable and privileged userspace can replace a controller description, but a described function still needs an in-kernel driver match before the configuration reaches the bus.
 
-The unproven bridge is whether this exact iPadOS 17.0 controller will materialize an arbitrary named generic interface and authorize the same class, descriptor, endpoint, buffer, callback, commit, and write operations. Only a capture showing the target iPad enumerate as a boot keyboard, deliver press/neutral reports, and restore its original functions can close that claim. A second direct-Switch run is required to prove the mac2jb path.
+The controller did materialize the interface and authorize the class, descriptor, endpoint, buffer, callback, commit, and write operations, but it did not bring either the arbitrary name or the stock `Keyboard` name on bus. Direct USB HID now depends on finding a reversible kernel-matched function candidate; the source-only gate found none.
 
 ## Evidence chain
 
@@ -27,7 +35,7 @@ The unproven bridge is whether this exact iPadOS 17.0 controller will materializ
 
 ## What the evidence disproves
 
-- A dedicated `AppleUSBDeviceHID` kernel driver is not a prerequisite on the demonstrated macOS stack. The iPad path still depends on arbitrary generic-service materialization.
+- The macOS generic-userspace behavior does not transfer to this iPadOS target. Here, a function requires an in-kernel match; no source identifies a suitable reversible HID gadget driver or reusable stock report transport.
 - `IOHIDUserDevice` is not the correct mechanism; it creates a local virtual HID device and does not expose the iPad as a USB peripheral.
 - Possessing only the HID report descriptor is insufficient. Controller publication, generic-interface creation, user-client access, endpoint creation, host control requests, USB-C role negotiation, and restoration must all pass.
 - Bluetooth HID, a Mac relay, or an ESP32 bridge may prove the Switch accepts a keyboard, but does not prove direct iPad USB device mode.
