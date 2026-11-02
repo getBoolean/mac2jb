@@ -28,7 +28,9 @@ BINARIES = {"v12": ("u2-native-noop-trial-v12-learned-profile", "9629611372c6f57
             "v16": ("u3-native-additive-function-v16", "11f63007bd9e5ce2f16bc2c8eb88bc3245ed073857b3bfea1cb964b49b58df87"),
             "v17": ("u3-native-additive-function-v17", "2d1c7582a739c90397f8b2f6c0d483222e743dda818e26cb5fd9b80e017ed0fb"),
             "v18": ("u3-native-additive-function-v18", "0e2063d6d33a6567806f05eaa231106123d39d952c9b8c66db1a0845b53bdf70"),
-            "v19": ("u3-native-additive-function-v19", "eddb506f52c5bd913438ef4fb44007368e9fe89fa1fa47f8a4569c8d15c0a224")}
+            "v19": ("u3-native-additive-function-v19", "eddb506f52c5bd913438ef4fb44007368e9fe89fa1fa47f8a4569c8d15c0a224"),
+            # v19 behaviour rebuilt from the tv_sec-only boot-session source.
+            "v20": ("u3-native-additive-function-v20", "df0ac6a4fb2f24c639a8ffc703e01e3c8fbfba37e4f59e3c628a60a79f038c6d")}
 SUPPORT = runpy.run_path(str(HOST / "u2_trial_support.py"))
 
 

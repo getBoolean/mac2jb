@@ -53,6 +53,11 @@ VARIANTS = {
     # flapping afterwards, so a 300 s cap ends the publication before any
     # host can read the device it is meant to be observing.
     "--v19-cycle-sized-cap": "u3-native-additive-function-v19",
+    # v19 behaviour exactly, rebuilt from the tv_sec-only boot-session source
+    # (commit 147bb66). The full-timeval derivation drifted the session on a
+    # time-sync and orphaned the journal; this is the deployable fixed broker.
+    # Only the source digest differs from v19.
+    "--v20-tvsec-bootsession": "u3-native-additive-function-v20",
 }
 # Resolve the installed iPhoneOS SDK instead of pinning an Xcode point release.
 SDK = subprocess.run(["/usr/bin/xcrun", "--sdk", "iphoneos", "--show-sdk-path"],
@@ -93,14 +98,15 @@ def main():
     additive_function = sys.argv[1] in ("--v13-additive-function", "--v14-additive-lease",
                                         "--v15-additive-cycle", "--v16-additive-single-cycle",
                                         "--v17-renewable-lease", "--v18-longer-cap",
-                                        "--v19-cycle-sized-cap")
+                                        "--v19-cycle-sized-cap", "--v20-tvsec-bootsession")
     explicit_cycle = True
     controller_clone = True
     post_clone = True
     settled_recovery = False
     ready_gated = True
     no_initial_cycle = sys.argv[1] in ("--v16-additive-single-cycle", "--v17-renewable-lease",
-                                   "--v18-longer-cap", "--v19-cycle-sized-cap")
+                                   "--v18-longer-cap", "--v19-cycle-sized-cap",
+                                   "--v20-tvsec-bootsession")
     if output.exists() or not BUILD.is_dir() or not Path(SDK).is_dir():
         raise ValueError("unsafe output or missing SDK")
     if plistlib.loads(ENTITLEMENTS.read_bytes()) != EXPECTED_ENTITLEMENTS:
