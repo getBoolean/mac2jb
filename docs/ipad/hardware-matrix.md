@@ -8,8 +8,8 @@ Redacted gate decisions for the iPad port's hardware plan (`docs/plans/ipad-port
 |---|---|---|
 | U1 read-only target inventory | **Pass (2026-10-30)** | R1–R3 and U1-scoped R14, below. Read-only inventory, authorization and role/power only. |
 | U2 restoration journal and watchdog | **Pass (2026-10-31)** | Automatic same-boot recovery: v11 5/5 and v12 2/2 hardware no-op trials. Semantic external equivalence; the `AllowMultipleCreates` flag is an accepted deviation. Below. |
-| U3 additive HID canary | **Fail on this device (2026-11-02): host never enumerates** | Device side works end to end (R9: interface registers, opens, every operation succeeds), but no configuration carrying the appended driverless function comes on bus, so no host enumerates it. Triple-confirmed (v19/v20/v21). Verdict section below. |
-| U4 exclusive-HID / usbmux-preserving fallback | **Tested (2026-11-02): same failure** | The 3-interface `[PTP, AppleUSBMux, Mac2jbCanary]` config failed to enumerate exactly like the composite (`heal-gave-up missing=none`, `usb=absent`), so it is not a count/ceiling problem. The stored-description restore recovered the device with no reboot. Verdict section below. |
+| U3 additive HID canary | **Open (2026-11-02): dead-end verdict retracted** | Three trials (v19/v20/v21) did not enumerate, but all used an **invented** function name (`Mac2jbCanary`) with no gadget-registry definition, which best explains `goOnBus: not on bus` with `missing=none`. The stock `Keyboard` function (`standardKeyboard` profile) is untried. R9 device-side passes. Verdict section below (corrected). |
+| U4 exclusive-HID / usbmux-preserving fallback | **Mechanism proven, not a count problem** | `[PTP, AppleUSBMux, Mac2jbCanary]` (3 interfaces) failed like the composite, ruling out a count/endpoint ceiling. The interface-list publish and stored-description restore work (recovered with no reboot). Reusable for the stock-`Keyboard` test. |
 | U5 network topology | Not tested | No paired 20-attempt exploit comparison. |
 | U6 capability contract | Not tested | No signed final capability record. |
 
@@ -24,12 +24,21 @@ The client, platform and ordinary baseline/set-description authorization profile
 | R3 direct role/power | Configured/on-bus with external power on both Switch 2 orientations; peer identity is owner-reported. | Pass (device side) |
 | R14 evidence | Private reports, attestations, host-window bindings and stock-source snapshots retained in `build/ipad-hardware/`. | Pass |
 
-## U3 verdict (2026-11-02): direct HID via the private-API appended-function approach does not enumerate on this controller
+## U3 verdict (2026-11-02, CORRECTED): the dead-end was premature — an invented name, not a hardware limit
 
-Three enumeration trials, consistent: a configuration containing the appended,
-driverless `Mac2jbCanary` function will not come on bus on `AppleT8112USBXDCI`,
-and its presence keeps the whole configuration (stock interfaces included) off
-bus, so no host enumerates it.
+**Retraction:** the first write-up concluded direct HID is impossible on this
+controller. A verified second opinion corrected it: all three trials used the
+**invented** function name `Mac2jbCanary`, which has no definition in the gadget
+registry, so the controller cannot build the configuration descriptor and
+refuses `goOnBus` — while the per-interface nub still materializes and its user
+client accepts every call (`0x0`), counting as "served" (`missing=none`).
+Userspace backing is sufficient to enumerate (census: PTP←`ptpd`, Valeria←`audiomxd`
+via `IOUSBDeviceInterfaceUserClient`, on bus). The stock catalog defines a real
+`Keyboard` function (`standardKeyboard` = `[AppleUSBMux, Keyboard]`,
+`DefaultConfiguration=true`) that was never published. The test below decides it.
+
+Original (now-superseded) framing follows; the three trials still show the
+invented-name config never comes on bus:
 
 - v19 composite configure-only — not enumerated (confounded: canary released, re-baring heal).
 - v20 composite full mode — canary held across the cycle, `usb=absent`, device off bus the whole ~530 s hold.
