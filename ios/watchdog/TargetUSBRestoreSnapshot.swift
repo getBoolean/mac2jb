@@ -139,7 +139,13 @@ struct TargetUSBRestoreSnapshot {
               source.map(digest) == profile.stockSourceSHA256 else {
             throw TargetUSBRestoreSnapshotError.changedTarget
         }
+        // kern.boottime is a `struct timeval`; wall-clock time-sync rewrites its
+        // sub-second tv_usec field *without* a reboot, so digesting the whole
+        // value makes the boot session drift mid-boot and orphans the journal.
+        // Bind only tv_sec - the first 8 bytes - which changes only at reboot.
         let boot = try sysctlBytes("kern.boottime")
+        guard boot.count >= 8 else { throw TargetUSBRestoreSnapshotError.unavailable }
+        let bootSeconds = Data(boot.prefix(8))
         var registryID: UInt64 = 0
         guard MAC2JBUSBCaptureControllerRegistryID(&registryID) ==
                 MAC2JBUSBSuccess, registryID > 0 else {
@@ -149,7 +155,7 @@ struct TargetUSBRestoreSnapshot {
             productType: product, osBuild: build,
             controllerIdentity: String(registryID),
             // Devices without a stock plist bind the empty-input digest instead.
-            bootSession: digest(boot), sourceSHA256: profile.stockSourceSHA256 ?? digest(Data()))
+            bootSession: digest(bootSeconds), sourceSHA256: profile.stockSourceSHA256 ?? digest(Data()))
     }
 
     static func capture() throws -> Self {

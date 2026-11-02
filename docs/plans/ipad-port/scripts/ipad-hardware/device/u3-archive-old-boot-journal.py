@@ -50,9 +50,11 @@ def digest(path):
 def current_boot_session():
     """The running boot's session, derived exactly as the broker derives it.
 
-    The broker takes the SHA-256 of the *raw* `kern.boottime` sysctl bytes, so
-    this reads them the same way through libc. Shelling out to `sysctl -n`
-    would digest a decimal rendering instead and never match, which would make
+    kern.boottime is a `struct timeval`. Wall-clock time-sync rewrites its
+    sub-second tv_usec field *without* a reboot, so the broker digests only
+    tv_sec - the first 8 bytes - read here the same way through libc. Digesting
+    the whole value would make the session drift mid-boot; shelling out to
+    `sysctl -n` would digest a decimal rendering instead. Either would make
     every journal look like it came from another boot - the opposite of the
     guard this is for.
     """
@@ -63,12 +65,12 @@ def current_boot_session():
     length = ctypes.c_size_t(0)
     if libc.sysctlbyname(b"kern.boottime", None, ctypes.byref(length), None, 0) != 0:
         raise ValueError("boot time unavailable")
-    if not 1 <= length.value <= 256:
+    if not 8 <= length.value <= 256:
         raise ValueError("implausible boot time size")
     buffer = ctypes.create_string_buffer(length.value)
     if libc.sysctlbyname(b"kern.boottime", buffer, ctypes.byref(length), None, 0) != 0:
         raise ValueError("boot time unavailable")
-    return hashlib.sha256(buffer.raw[:length.value]).hexdigest()
+    return hashlib.sha256(buffer.raw[:8]).hexdigest()
 
 
 def recorded_boot_session(data):

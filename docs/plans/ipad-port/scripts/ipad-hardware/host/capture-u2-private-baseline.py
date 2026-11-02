@@ -24,7 +24,7 @@ import subprocess
 
 ROOT = Path(__file__).resolve().parents[6]
 SOURCE = ROOT / "docs/plans/ipad-port/scripts/ipad-hardware/device/u2_target_snapshot.py"
-SOURCE_SHA256 = "b31079908483b290aeb7d23e7b9d7ed96af1b4b550e5e0124a026329ce9723ba"
+SOURCE_SHA256 = "24aa165bc438a6763cf2aca1315d2db4e5dd6143dffef4b31d0ee6aacb54152a"
 WIRELESS = ROOT / "docs/plans/ipad-port/scripts/ipad-hardware/host/check-pinned-wireless-ssh.py"
 HELPER = ROOT / "docs/plans/ipad-port/scripts/ipad-hardware/host/backup-clienttruth-over-root-ssh.py"
 DESTINATION = ROOT / "build/ipad-hardware/u2-baseline"

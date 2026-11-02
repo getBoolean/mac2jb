@@ -55,7 +55,9 @@ def read_boot_token():
         "import hashlib\n"
         "m={'__name__':'u2_target_snapshot'}\n"
         "exec(compile(" + repr(source) + ",'u2_target_snapshot.py','exec'),m)\n"
-        "print(hashlib.sha256(m['_sysctl'](b'kern.boottime')).hexdigest())\n"
+        # tv_sec only (first 8 bytes) - matches the broker's drift-free session.
+        "b=m['_sysctl'](b'kern.boottime')\n"
+        "print(hashlib.sha256(b[:8]).hexdigest() if len(b)>=8 else '')\n"
     ).encode("ascii")
     command = ["/usr/bin/ssh", *HELPER["ssh_options"](),
                "-o", "HostKeyAlias=" + WIRELESS["HOST_KEY_ALIAS"],

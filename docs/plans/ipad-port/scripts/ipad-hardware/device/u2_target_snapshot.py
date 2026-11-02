@@ -153,7 +153,13 @@ def capture():
     build = _sysctl(b"kern.osversion").rstrip(b"\0").decode("ascii")
     if product != EXPECTED_PRODUCT or build != EXPECTED_BUILD:
         raise SnapshotError("target build changed")
-    boot = hashlib.sha256(_sysctl(b"kern.boottime")).hexdigest()
+    # kern.boottime is a struct timeval; time-sync rewrites its tv_usec field
+    # without a reboot, so hash only tv_sec (the first 8 bytes). The broker,
+    # diagnose, and archive helpers slice identically so the sessions match.
+    boot_time = _sysctl(b"kern.boottime")
+    if len(boot_time) < 8:
+        raise SnapshotError("boot time too short")
+    boot = hashlib.sha256(boot_time[:8]).hexdigest()
     source = _configuration_digest()
     controller_id, live = _controller()
     return {
