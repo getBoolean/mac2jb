@@ -98,6 +98,33 @@ MAC2JBUSBResult MAC2JBUSBCloneRepublishAppendedFunctionOrPublish(
     int32_t *busReturn
 );
 
+// Exclusive / usbmux-preserving publication (parent plan U4): clone the live
+// description, require it byte-equal to the journaled original exactly as the
+// additive path does, then replace the given configuration's interface list
+// with the provided names before a guarded SetDescription. The journaled
+// original is the restore target and is never modified; restore pushes it back
+// with MAC2JBUSBSetStoredDescriptionOrPublish, since the replaced interface
+// list cannot be stripped back to it. A dry run edits the in-process clone only.
+MAC2JBUSBResult MAC2JBUSBCloneSetInterfacesOrPublish(
+    const uint8_t *livePlist, size_t livePlistLength,
+    uint64_t expectedControllerRegistryID,
+    const char *const *interfaceNames, size_t interfaceCount, int32_t configurationNumber,
+    bool publish, bool cycleBus,
+    int32_t *setReturn, int32_t *busReturn
+);
+
+// Restore an interface-list-replacement publication by pushing the exact stored
+// stock description bytes back through SetDescription, with no clone-and-compare
+// (the live description no longer resembles the original, so nothing can be
+// stripped back to it). The stored bytes are the journaled original captured at
+// prepare time. Controller identity is checked; AllowMultipleCreates is set as
+// the publish path does; the raw IOReturn of the optional cycle is reported.
+MAC2JBUSBResult MAC2JBUSBSetStoredDescriptionOrPublish(
+    const uint8_t *storedPlist, size_t storedPlistLength,
+    uint64_t expectedControllerRegistryID, bool cycleBus,
+    int32_t *setReturn, int32_t *busReturn
+);
+
 // Take the exact controller off and on the bus and do nothing else: no
 // description is created, compared, edited or written. Publishing a description
 // already cycles the bus, so the host reads the configuration descriptor at

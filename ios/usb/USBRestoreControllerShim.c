@@ -737,6 +737,8 @@ static MAC2JBUSBResult reconstruct_or_clone(
     int32_t configurationNumber,
     const char *expectedFunctionName,
     int32_t expectedConfigurationNumber,
+    const char *const *replacementInterfaces,
+    size_t replacementInterfaceCount,
     int32_t *setReturn,
     int32_t *busReturn
 ) {
@@ -746,10 +748,26 @@ static MAC2JBUSBResult reconstruct_or_clone(
         expectedControllerRegistryID == 0 || (cycleBus && !publish)) {
         return MAC2JBUSBInvalidInput;
     }
+    // The append name and the replacement list are mutually exclusive edits.
+    if (functionName && replacementInterfaces) return MAC2JBUSBInvalidInput;
     // Refuse a malformed added name before any controller user client opens.
     if (functionName && !mac2jb_usb_function_name_is_legal(functionName)) return MAC2JBUSBFunctionRejected;
     if (expectedFunctionName && !mac2jb_usb_function_name_is_legal(expectedFunctionName))
         return MAC2JBUSBFunctionRejected;
+    // Validate the replacement list the same way the pure entry does, before any
+    // controller user client opens: 1..32 legal, distinct names.
+    if (replacementInterfaces) {
+        if (replacementInterfaceCount < 1 || replacementInterfaceCount > 32)
+            return MAC2JBUSBInvalidInput;
+        for (size_t index = 0; index < replacementInterfaceCount; index++) {
+            if (!mac2jb_usb_function_name_is_legal(replacementInterfaces[index]))
+                return MAC2JBUSBFunctionRejected;
+            for (size_t other = 0; other < index; other++) {
+                if (strcmp(replacementInterfaces[index], replacementInterfaces[other]) == 0)
+                    return MAC2JBUSBFunctionRejected;
+            }
+        }
+    }
 
     MAC2JBUSBResult result = MAC2JBUSBInvalidInput;
     CFDataRef input = CFDataCreate(kCFAllocatorDefault, livePlist, (CFIndex)livePlistLength);
@@ -905,6 +923,25 @@ static MAC2JBUSBResult reconstruct_or_clone(
             goto release_description;
         }
     }
+    // The exclusive / usbmux-preserving edit: replace the target configuration's
+    // interface list, applied only after the clone proved byte-equal to the
+    // journaled original, so restore still starts from exactly the stock bytes.
+    if (replacementInterfaces) {
+        CFMutableArrayRef names = CFArrayCreateMutable(kCFAllocatorDefault,
+            (CFIndex)replacementInterfaceCount, &kCFTypeArrayCallBacks);
+        bool built = names != NULL;
+        for (size_t index = 0; index < replacementInterfaceCount && built; index++) {
+            CFStringRef name = CFStringCreateWithCString(kCFAllocatorDefault,
+                replacementInterfaces[index], kCFStringEncodingUTF8);
+            if (name) { CFArrayAppendValue(names, name); CFRelease(name); } else built = false;
+        }
+        bool set = built && set_configuration_interfaces(info, names, configurationNumber);
+        if (names) CFRelease(names);
+        if (!set) {
+            result = MAC2JBUSBFunctionRejected;
+            goto release_description;
+        }
+    }
     if (publish) {
         CFDictionarySetValue(info, CFSTR("AllowMultipleCreates"), kCFBooleanTrue);
         IOReturn setStatus = setDescription(controller, description);
@@ -979,7 +1016,7 @@ MAC2JBUSBResult MAC2JBUSBReconstructOrPublish(
 ) {
     return reconstruct_or_clone(livePlist, livePlistLength,
                                 expectedControllerRegistryID, publish, cycleBus,
-                                false, NULL, 0, NULL, 0, setReturn, busReturn);
+                                false, NULL, 0, NULL, 0, NULL, 0, setReturn, busReturn);
 }
 
 MAC2JBUSBResult MAC2JBUSBCloneOrPublish(
@@ -993,7 +1030,7 @@ MAC2JBUSBResult MAC2JBUSBCloneOrPublish(
                                 expectedControllerRegistryID, publish, cycleBus,
                                 true, NULL, 0,
                                 expectedFunctionName, expectedConfigurationNumber,
-                                setReturn, busReturn);
+                                NULL, 0, setReturn, busReturn);
 }
 
 MAC2JBUSBResult MAC2JBUSBCloneAppendFunctionOrPublish(
@@ -1007,7 +1044,112 @@ MAC2JBUSBResult MAC2JBUSBCloneAppendFunctionOrPublish(
     return reconstruct_or_clone(livePlist, livePlistLength,
                                 expectedControllerRegistryID, publish, cycleBus,
                                 true, functionName, configurationNumber,
-                                NULL, 0, setReturn, busReturn);
+                                NULL, 0, NULL, 0, setReturn, busReturn);
+}
+
+MAC2JBUSBResult MAC2JBUSBCloneSetInterfacesOrPublish(
+    const uint8_t *livePlist, size_t livePlistLength,
+    uint64_t expectedControllerRegistryID,
+    const char *const *interfaceNames, size_t interfaceCount, int32_t configurationNumber,
+    bool publish, bool cycleBus,
+    int32_t *setReturn, int32_t *busReturn
+) {
+    if (!interfaceNames) return MAC2JBUSBInvalidInput;
+    return reconstruct_or_clone(livePlist, livePlistLength,
+                                expectedControllerRegistryID, publish, cycleBus,
+                                true, NULL, configurationNumber, NULL, 0,
+                                interfaceNames, interfaceCount, setReturn, busReturn);
+}
+
+// Restore for a configuration whose interface list was replaced: push the
+// exact stored stock description bytes back through SetDescription, with no
+// clone-and-compare, because the live description no longer resembles the
+// original and nothing can be stripped back to it. The stored bytes are the
+// description captured and journaled at prepare time, so this republishes
+// exactly what the device had. The controller identity is checked as every
+// other path checks it; AllowMultipleCreates is set as the publish path does.
+MAC2JBUSBResult MAC2JBUSBSetStoredDescriptionOrPublish(
+    const uint8_t *storedPlist, size_t storedPlistLength,
+    uint64_t expectedControllerRegistryID, bool cycleBus,
+    int32_t *setReturn, int32_t *busReturn
+) {
+    if (setReturn) *setReturn = kIOReturnNotReady;
+    if (busReturn) *busReturn = kIOReturnNotReady;
+    if (!storedPlist || storedPlistLength < 8 || storedPlistLength > 1024 * 1024 ||
+        expectedControllerRegistryID == 0) {
+        return MAC2JBUSBInvalidInput;
+    }
+    MAC2JBUSBResult result = MAC2JBUSBInvalidInput;
+    CFDataRef input = CFDataCreate(kCFAllocatorDefault, storedPlist, (CFIndex)storedPlistLength);
+    if (!input) return result;
+    CFPropertyListRef stored = CFPropertyListCreateWithData(
+        kCFAllocatorDefault, input, kCFPropertyListImmutable, NULL, NULL);
+    CFRelease(input);
+    if (!stored) return result;
+    if (CFGetTypeID(stored) != CFDictionaryGetTypeID()) goto finished;
+    void *handle = dlopen("/System/Library/Frameworks/IOKit.framework/IOKit", RTLD_NOW | RTLD_LOCAL);
+    if (!handle) { result = MAC2JBUSBMissingAPI; goto finished; }
+    CreateController createController = (CreateController)dlsym(handle, "IOUSBDeviceControllerCreate");
+    CreateFromController createFromController = (CreateFromController)dlsym(
+        handle, "IOUSBDeviceDescriptionCreateFromController");
+    GetInfo getInfo = (GetInfo)dlsym(handle, "_IOUSBDeviceDescriptionGetInfo");
+    GetService getService = (GetService)dlsym(handle, "IOUSBDeviceControllerGetService");
+    SetDescription setDescription = (SetDescription)dlsym(handle, "IOUSBDeviceControllerSetDescription");
+    GoOffAndOnBus goOffAndOnBus = (GoOffAndOnBus)dlsym(handle, "IOUSBDeviceControllerGoOffAndOnBus");
+    if (!createController || !createFromController || !getInfo || !getService ||
+        !setDescription || (cycleBus && !goOffAndOnBus)) {
+        result = MAC2JBUSBMissingAPI;
+        goto close_handle;
+    }
+    ControllerRef controller = NULL;
+    if (createController(kCFAllocatorDefault, &controller) != kIOReturnSuccess || !controller) {
+        result = MAC2JBUSBControllerUnavailable;
+        goto close_handle;
+    }
+    io_service_t service = getService(controller);
+    uint64_t actualRegistryID = 0;
+    if (service == IO_OBJECT_NULL ||
+        IORegistryEntryGetRegistryEntryID(service, &actualRegistryID) != kIOReturnSuccess ||
+        actualRegistryID != expectedControllerRegistryID) {
+        result = MAC2JBUSBWrongController;
+        goto release_controller;
+    }
+    DescriptionRef description = createFromController(kCFAllocatorDefault, controller);
+    if (!description) { result = MAC2JBUSBDescriptionMismatch; goto release_controller; }
+    CFMutableDictionaryRef info = getInfo(description);
+    if (!info || CFGetTypeID(info) != CFDictionaryGetTypeID()) {
+        result = MAC2JBUSBDescriptionMismatch;
+        goto release_description;
+    }
+    // Overwrite the description's dictionary with exactly the stored contents.
+    CFDictionaryRemoveAllValues(info);
+    CFIndex storedCount = CFDictionaryGetCount((CFDictionaryRef)stored);
+    if (storedCount < 1 || storedCount > 64) { result = MAC2JBUSBDescriptionMismatch; goto release_description; }
+    const void *keys[65];
+    const void *values[65];
+    CFDictionaryGetKeysAndValues((CFDictionaryRef)stored, keys, values);
+    for (CFIndex index = 0; index < storedCount; index++) {
+        CFDictionarySetValue(info, keys[index], values[index]);
+    }
+    CFDictionarySetValue(info, CFSTR("AllowMultipleCreates"), kCFBooleanTrue);
+    IOReturn setStatus = setDescription(controller, description);
+    if (setReturn) *setReturn = setStatus;
+    if (setStatus != kIOReturnSuccess) { result = MAC2JBUSBSetFailed; goto release_description; }
+    result = MAC2JBUSBSuccess;
+    if (cycleBus) {
+        IOReturn busStatus = goOffAndOnBus(controller, 1000);
+        if (busReturn) *busReturn = busStatus;
+        if (busStatus != kIOReturnSuccess) result = MAC2JBUSBBusCycleFailed;
+    }
+release_description:
+    CFRelease(description);
+release_controller:
+    CFRelease(controller);
+close_handle:
+    dlclose(handle);
+finished:
+    CFRelease(stored);
+    return result;
 }
 
 MAC2JBUSBResult MAC2JBUSBCloneRepublishAppendedFunctionOrPublish(
@@ -1030,10 +1172,10 @@ MAC2JBUSBResult MAC2JBUSBCloneRepublishAppendedFunctionOrPublish(
     MAC2JBUSBResult result = reconstruct_or_clone(
         livePlist, livePlistLength, expectedControllerRegistryID, publish,
         cycleBus, true, functionName, configurationNumber,
-        functionName, configurationNumber, setReturn, busReturn);
+        functionName, configurationNumber, NULL, 0, setReturn, busReturn);
     if (result != MAC2JBUSBFunctionRejected) return result;
     return reconstruct_or_clone(livePlist, livePlistLength,
                                 expectedControllerRegistryID, publish, cycleBus,
                                 true, functionName, configurationNumber,
-                                NULL, 0, setReturn, busReturn);
+                                NULL, 0, NULL, 0, setReturn, busReturn);
 }
