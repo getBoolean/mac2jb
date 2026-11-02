@@ -8,8 +8,8 @@ Redacted gate decisions for the iPad port's hardware plan (`docs/plans/ipad-port
 |---|---|---|
 | U1 read-only target inventory | **Pass (2026-10-30)** | R1–R3 and U1-scoped R14, below. Read-only inventory, authorization and role/power only. |
 | U2 restoration journal and watchdog | **Pass (2026-10-31)** | Automatic same-boot recovery: v11 5/5 and v12 2/2 hardware no-op trials. Semantic external equivalence; the `AllowMultipleCreates` flag is an accepted deviation. Below. |
-| U3 additive HID canary | **Open (2026-11-02): dead-end verdict retracted** | Three trials (v19/v20/v21) did not enumerate, but all used an **invented** function name (`Mac2jbCanary`) with no gadget-registry definition, which best explains `goOnBus: not on bus` with `missing=none`. The stock `Keyboard` function (`standardKeyboard` profile) is untried. R9 device-side passes. Verdict section below (corrected). |
-| U4 exclusive-HID / usbmux-preserving fallback | **Mechanism proven, not a count problem** | `[PTP, AppleUSBMux, Mac2jbCanary]` (3 interfaces) failed like the composite, ruling out a count/endpoint ceiling. The interface-list publish and stored-description restore work (recovered with no reboot). Reusable for the stock-`Keyboard` test. |
+| U3 additive HID canary | **Fail via the userspace approach (2026-11-02)** | Five trials non-enumerating, incl. two stock-`Keyboard` runs (`standardKeyboard` = `[AppleUSBMux, Keyboard]`), one clean (audio race healed) — still `usb=absent`. R9 device-side passes. Root cause (Synacktiv RE, verified): `createUSBDevice` matches each interface to an in-kernel driver before on-bus; a userspace-configured function has no kernel match. Enumerating custom HID needs a kernel driver (macOS-kext equivalent). Verdict section below. |
+| U4 exclusive-HID / usbmux-preserving fallback | **Mechanism proven; not a count or name problem** | 3-interface `[PTP, AppleUSBMux, Mac2jbCanary]` failed like the composite (not a count ceiling); stock `Keyboard` failed like the invented name (not a name/definition problem). Interface-list publish and stored-description restore work (recovered with no reboot). |
 | U5 network topology | Not tested | No paired 20-attempt exploit comparison. |
 | U6 capability contract | Not tested | No signed final capability record. |
 
@@ -24,21 +24,32 @@ The client, platform and ordinary baseline/set-description authorization profile
 | R3 direct role/power | Configured/on-bus with external power on both Switch 2 orientations; peer identity is owner-reported. | Pass (device side) |
 | R14 evidence | Private reports, attestations, host-window bindings and stock-source snapshots retained in `build/ipad-hardware/`. | Pass |
 
-## U3 verdict (2026-11-02, CORRECTED): the dead-end was premature — an invented name, not a hardware limit
+## U3 verdict (2026-11-02, SETTLED): the userspace private-API HID approach cannot enumerate on this controller
 
-**Retraction:** the first write-up concluded direct HID is impossible on this
-controller. A verified second opinion corrected it: all three trials used the
-**invented** function name `Mac2jbCanary`, which has no definition in the gadget
-registry, so the controller cannot build the configuration descriptor and
-refuses `goOnBus` — while the per-interface nub still materializes and its user
-client accepts every call (`0x0`), counting as "served" (`missing=none`).
-Userspace backing is sufficient to enumerate (census: PTP←`ptpd`, Valeria←`audiomxd`
-via `IOUSBDeviceInterfaceUserClient`, on bus). The stock catalog defines a real
-`Keyboard` function (`standardKeyboard` = `[AppleUSBMux, Keyboard]`,
-`DefaultConfiguration=true`) that was never published. The test below decides it.
+The journey: (1) first write-up called it a hardware dead end; (2) a verified
+second opinion retracted that, noting all trials used an invented name and that
+userspace-backed stock functions (PTP←`ptpd`, Valeria←`audiomxd`) do enumerate,
+and that the stock catalog defines a real `Keyboard` function
+(`standardKeyboard` = `[AppleUSBMux, Keyboard]`) never tried; (3) the stock
+`Keyboard` name was then tested — twice — and behaves **identically** to the
+invented name: no enumeration (the clean run healed the audio race and still got
+`usb=absent`). So the name/definition is not the issue.
 
-Original (now-superseded) framing follows; the three trials still show the
-invented-name config never comes on bus:
+**The settled mechanism** (web research — Synacktiv, *"iOS: a journey in the USB
+networking stack,"* 2024 — verified against our evidence):
+`IOUSBDeviceController::createUSBDevice` matches each interface of the selected
+configuration to an **in-kernel IOKit driver** before bringing the config on
+bus. Stock functions enumerate because each has a kernel driver match *plus* a
+userspace backend. The canary supplies only a userspace `IOUSBDeviceInterface`
+user client with no kernel driver to bind, so `createUSBDevice` cannot build the
+interface and the config never goes on bus — while the ABI staging calls return
+`0x0` (hence served / `missing=none` yet not-on-bus). The macOS reference shipped
+a **kext** to defeat exactly this path. No public project has made a jailbroken
+iOS device a USB device-mode HID keyboard to an external host. **Conclusion:
+enumerating a custom HID function here needs a kernel-side driver/match (the
+macOS-kext equivalent), a different and much larger mechanism than this plan's
+userspace private-API approach.** R9 device-side passes; U3.9 fails via this
+approach. Trial evidence below.
 
 - v19 composite configure-only — not enumerated (confounded: canary released, re-baring heal).
 - v20 composite full mode — canary held across the cycle, `usb=absent`, device off bus the whole ~530 s hold.
