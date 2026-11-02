@@ -206,6 +206,7 @@ docs/ipad/
   - Apply and then remove the smallest candidate kernel change with the device idle (no publication); verify the kernel state is byte-identical before and after, and that USB/usbmux are unaffected.
   - Force a worst case (remove the change while "applied", kill the applier) and confirm the broker + reboot path still restore stock.
 - **Verification:** Either (pass) a specific, reversible kernel primitive that can register/match a gadget function is identified and demonstrated to apply+remove cleanly with the device idle, recorded in the per-build profile; or (fail) an evidenced verdict that the jailbreak cannot do this safely, which stops the HID path and routes to the alternatives in the Definition of Done. **No HID publication happens until this gate passes.**
+- **Subtasks:** ordered as U3.1–U3.6 in [`01-u3u4-kernel-hid-gadget.md`](01-u3u4-kernel-hid-gadget.md).
 
 ### U4. Kernel HID gadget function (NEW — only if U3 passes)
 
@@ -219,6 +220,7 @@ docs/ipad/
   - Kill the injector / expire the lease mid-hold; confirm the broker removes the kernel match and the stored-description restore returns stock (owner-restart heal available for the audio race).
   - Confirm the kernel match is gone after restore and after a reboot.
 - **Verification:** The controller brings the HID configuration on bus with the kernel match present, and does not when it is absent (the discriminating result), with restoration verified externally.
+- **Subtasks:** ordered as U4.1–U4.5 in [`01-u3u4-kernel-hid-gadget.md`](01-u3u4-kernel-hid-gadget.md).
 
 ### U5. Host enumeration and report injection (NEW — the HID proof)
 
