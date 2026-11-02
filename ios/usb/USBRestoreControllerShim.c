@@ -178,6 +178,50 @@ static bool set_sole_function(CFMutableDictionaryRef info, CFStringRef name,
     return set;
 }
 
+// Replace the given configuration's Interfaces array with exactly the provided
+// list of names, and change nothing else. This generalizes the exclusive shape:
+// the caller chooses which interfaces that one configuration presents - the
+// keyboard alone, or a lighter stock subset plus the keyboard (for example
+// PTP + AppleUSBMux + the HID function, which keeps the usbmux lifeline up
+// during the trial). Only the one configuration is touched; device scalars and
+// every other configuration are left exactly as the stock description had them,
+// so the journaled original restores by a plain republish. The names are
+// validated by the caller (legality, no duplicates, count bounds) before the
+// CFArray reaches here; this only checks shape and performs the replacement.
+static bool set_configuration_interfaces(CFMutableDictionaryRef info, CFArrayRef newNames,
+                                         int32_t configurationNumber) {
+    if (!info || !newNames || configurationNumber < 1 || configurationNumber > 255) return false;
+    CFIndex nameCount = CFArrayGetCount(newNames);
+    if (nameCount < 1 || nameCount > 32) return false;
+    CFIndex target = (CFIndex)configurationNumber - 1;
+    CFTypeRef value = CFDictionaryGetValue(info, CFSTR("ConfigurationDescriptors"));
+    if (!value || CFGetTypeID(value) != CFArrayGetTypeID()) return false;
+    CFArrayRef configurations = (CFArrayRef)value;
+    if (target >= CFArrayGetCount(configurations)) return false;
+    CFTypeRef entry = CFArrayGetValueAtIndex(configurations, target);
+    if (!entry || CFGetTypeID(entry) != CFDictionaryGetTypeID()) return false;
+    // The target configuration must already carry an interface list; refusing a
+    // configuration with none keeps this from inventing a shape the device
+    // never had, exactly as append_function requires for its target.
+    CFTypeRef names = CFDictionaryGetValue((CFDictionaryRef)entry, CFSTR("Interfaces"));
+    if (!names || CFGetTypeID(names) != CFArrayGetTypeID()) return false;
+    CFMutableArrayRef replacement = CFArrayCreateMutableCopy(kCFAllocatorDefault, 0, newNames);
+    CFMutableDictionaryRef newConfiguration = CFDictionaryCreateMutableCopy(
+        kCFAllocatorDefault, 0, (CFDictionaryRef)entry);
+    CFMutableArrayRef newConfigurations = CFArrayCreateMutableCopy(
+        kCFAllocatorDefault, 0, configurations);
+    bool set = replacement && newConfiguration && newConfigurations;
+    if (set) {
+        CFDictionarySetValue(newConfiguration, CFSTR("Interfaces"), replacement);
+        CFArraySetValueAtIndex(newConfigurations, target, newConfiguration);
+        CFDictionarySetValue(info, CFSTR("ConfigurationDescriptors"), newConfigurations);
+    }
+    if (replacement) CFRelease(replacement);
+    if (newConfiguration) CFRelease(newConfiguration);
+    if (newConfigurations) CFRelease(newConfigurations);
+    return set;
+}
+
 // Shared body of the pure entry points: decode, apply the one edit, encode.
 // The pure path and the clone path go through these same edit helpers, so
 // there is one implementation of each edit. `mode` selects which.
@@ -258,6 +302,68 @@ MAC2JBUSBResult MAC2JBUSBSetSoleFunctionInDescriptionData(
 ) {
     return edit_description_data(plist, plistLength, functionName,
                                  configurationNumber, MAC2JB_EDIT_SOLE, out, outLength);
+}
+
+MAC2JBUSBResult MAC2JBUSBSetConfigurationInterfacesInDescriptionData(
+    const uint8_t *plist, size_t plistLength,
+    const char *const *interfaceNames, size_t interfaceCount,
+    int32_t configurationNumber, uint8_t **out, size_t *outLength
+) {
+    if (!out || !outLength) return MAC2JBUSBInvalidInput;
+    *out = NULL;
+    *outLength = 0;
+    if (!plist || plistLength < 8 || plistLength > 1024 * 1024) return MAC2JBUSBInvalidInput;
+    if (!interfaceNames || interfaceCount < 1 || interfaceCount > 32) return MAC2JBUSBInvalidInput;
+    // Validate every name's legality and reject any duplicate in the list before
+    // touching the description, so a rejected request writes nothing.
+    for (size_t index = 0; index < interfaceCount; index++) {
+        if (!mac2jb_usb_function_name_is_legal(interfaceNames[index]))
+            return MAC2JBUSBFunctionRejected;
+        for (size_t other = 0; other < index; other++) {
+            if (strcmp(interfaceNames[index], interfaceNames[other]) == 0)
+                return MAC2JBUSBFunctionRejected;
+        }
+    }
+    MAC2JBUSBResult result = MAC2JBUSBInvalidInput;
+    CFDataRef input = CFDataCreate(kCFAllocatorDefault, plist, (CFIndex)plistLength);
+    if (!input) return result;
+    CFPropertyListRef decoded = CFPropertyListCreateWithData(
+        kCFAllocatorDefault, input, kCFPropertyListMutableContainers, NULL, NULL);
+    CFRelease(input);
+    if (!decoded) return result;
+    if (CFGetTypeID(decoded) != CFDictionaryGetTypeID()) goto finished;
+    CFMutableArrayRef names = CFArrayCreateMutable(kCFAllocatorDefault, (CFIndex)interfaceCount,
+                                                   &kCFTypeArrayCallBacks);
+    if (!names) goto finished;
+    bool built = true;
+    for (size_t index = 0; index < interfaceCount && built; index++) {
+        CFStringRef name = CFStringCreateWithCString(kCFAllocatorDefault, interfaceNames[index],
+                                                     kCFStringEncodingUTF8);
+        if (name) { CFArrayAppendValue(names, name); CFRelease(name); } else built = false;
+    }
+    if (!built) { result = MAC2JBUSBInvalidInput; goto release_names; }
+    if (!set_configuration_interfaces((CFMutableDictionaryRef)decoded, names,
+                                      configurationNumber)) {
+        result = MAC2JBUSBFunctionRejected;
+        goto release_names;
+    }
+    CFDataRef data = CFPropertyListCreateData(kCFAllocatorDefault, decoded,
+                                              kCFPropertyListBinaryFormat_v1_0, 0, NULL);
+    if (!data) { result = MAC2JBUSBDescriptionMismatch; goto release_names; }
+    CFIndex size = CFDataGetLength(data);
+    uint8_t *copy = size > 0 ? malloc((size_t)size) : NULL;
+    if (copy) {
+        memcpy(copy, CFDataGetBytePtr(data), (size_t)size);
+        *out = copy;
+        *outLength = (size_t)size;
+        result = MAC2JBUSBSuccess;
+    }
+    CFRelease(data);
+release_names:
+    CFRelease(names);
+finished:
+    CFRelease(decoded);
+    return result;
 }
 
 MAC2JBUSBResult MAC2JBUSBCaptureControllerRegistryID(uint64_t *controllerRegistryID) {

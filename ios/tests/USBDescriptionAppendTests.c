@@ -477,6 +477,55 @@ int main(void) {
           "sole-set refuses a NULL description");
     check(nullOut == NULL && nullLen == 0, "a refused sole-set clears the out buffer");
 
+    // General list form: the usbmux-preserving shape keeps a stock subset and
+    // adds the keyboard, as exactly the list given, in that order.
+    {
+        const char *const kept[] = {"PTP", "AppleUSBMux", "Mac2jbCanary"};
+        uint8_t *bytes = NULL;
+        size_t length = 0;
+        check(MAC2JBUSBSetConfigurationInterfacesInDescriptionData(
+                  CFDataGetBytePtr(input), (size_t)CFDataGetLength(input), kept, 3,
+                  TARGET_CONFIGURATION, &bytes, &length) == MAC2JBUSBSuccess,
+              "set-interfaces to a stock subset plus the keyboard succeeds");
+        CFDictionaryRef listed = (bytes ? decode(bytes, length) : NULL);
+        if (listed) {
+            CFArrayRef configs = configurations_of(listed);
+            check(configs && CFArrayGetCount(configs) == CONFIGURATION_COUNT,
+                  "set-interfaces keeps the configuration count");
+            if (configs && CFArrayGetCount(configs) == CONFIGURATION_COUNT) {
+                CFDictionaryRef target = (CFDictionaryRef)CFArrayGetValueAtIndex(
+                    configs, TARGET_CONFIGURATION - 1);
+                CFArrayRef names = (CFArrayRef)CFDictionaryGetValue(target, CFSTR("Interfaces"));
+                check(names && CFArrayGetCount(names) == 3 &&
+                      CFEqual(CFArrayGetValueAtIndex(names, 0), CFSTR("PTP")) &&
+                      CFEqual(CFArrayGetValueAtIndex(names, 1), CFSTR("AppleUSBMux")) &&
+                      CFEqual(CFArrayGetValueAtIndex(names, 2), CFSTR("Mac2jbCanary")),
+                      "the selected configuration carries exactly the given list, in order");
+            }
+            CFRelease(listed);
+        }
+        MAC2JBUSBFreeCapturedDescription(bytes);
+    }
+    // Refusals: a duplicate in the list, an empty list, and a NULL list.
+    {
+        const char *const dup[] = {"PTP", "PTP"};
+        uint8_t *bytes = (uint8_t *)1; size_t length = 1;
+        check(MAC2JBUSBSetConfigurationInterfacesInDescriptionData(
+                  CFDataGetBytePtr(input), (size_t)CFDataGetLength(input), dup, 2,
+                  TARGET_CONFIGURATION, &bytes, &length) == MAC2JBUSBFunctionRejected,
+              "set-interfaces refuses a duplicate name");
+        check(bytes == NULL && length == 0, "a refused set-interfaces clears the out buffer");
+        const char *const one[] = {"Mac2jbCanary"};
+        check(MAC2JBUSBSetConfigurationInterfacesInDescriptionData(
+                  CFDataGetBytePtr(input), (size_t)CFDataGetLength(input), one, 0,
+                  TARGET_CONFIGURATION, &bytes, &length) == MAC2JBUSBInvalidInput,
+              "set-interfaces refuses an empty list");
+        check(MAC2JBUSBSetConfigurationInterfacesInDescriptionData(
+                  CFDataGetBytePtr(input), (size_t)CFDataGetLength(input), NULL, 1,
+                  TARGET_CONFIGURATION, &bytes, &length) == MAC2JBUSBInvalidInput,
+              "set-interfaces refuses a NULL list");
+    }
+
     CFRelease(input);
     CFRelease(original);
     if (failures) {

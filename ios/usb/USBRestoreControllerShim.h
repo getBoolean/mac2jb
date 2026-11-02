@@ -148,6 +148,20 @@ MAC2JBUSBResult MAC2JBUSBSetSoleFunctionInDescriptionData(
     uint8_t **out, size_t *outLength
 );
 
+// Pure, and the general form of the sole-function edit: replace the given
+// configuration's Interfaces array with exactly the provided list of names.
+// The caller chooses the list - the HID function alone (exclusive), or a
+// lighter stock subset plus the HID function (for example PTP + AppleUSBMux +
+// the keyboard, keeping the usbmux lifeline up during a trial). Names must each
+// be legal and distinct, 1 to 32 of them; device scalars and every other
+// configuration are untouched. No IOKit; caller owns *out and frees it with
+// MAC2JBUSBFreeCapturedDescription.
+MAC2JBUSBResult MAC2JBUSBSetConfigurationInterfacesInDescriptionData(
+    const uint8_t *plist, size_t plistLength,
+    const char *const *interfaceNames, size_t interfaceCount,
+    int32_t configurationNumber, uint8_t **out, size_t *outLength
+);
+
 // Read-only: the configuration number the host has currently selected on the
 // exact controller, from CurrentState.SelectedConfiguration. Success only when
 // that value is a typed number greater than zero; the number is never assumed.
