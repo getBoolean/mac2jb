@@ -1,0 +1,988 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="light">
+  <meta name="description" content="Execution overview for porting mac2jb to the M2 iPad Pro iPad14,5 on iPadOS 17.0 with Dopamine and TrollStore.">
+  <title>mac2jb — M2 iPad Pro port flight plan</title>
+  <style>
+    :root {
+      --paper: #f7fafc;
+      --paper-raised: #ffffff;
+      --ink: #102a3a;
+      --ink-soft: #496271;
+      --line: #bdccd5;
+      --line-dark: #78909d;
+      --signal: #2764d8;
+      --signal-soft: #e9f0ff;
+      --caution: #d89016;
+      --caution-soft: #fff4d6;
+      --stop: #b33a35;
+      --stop-soft: #fbe9e7;
+      --pass: #26735c;
+      --pass-soft: #e6f4ef;
+      --rail-width: 17.5rem;
+      --content-width: 74rem;
+      --sans: "Avenir Next", Avenir, "Segoe UI", sans-serif;
+      --condensed: "Avenir Next Condensed", "DIN Condensed", "Arial Narrow", sans-serif;
+      --mono: "SFMono-Regular", "Cascadia Mono", "Roboto Mono", monospace;
+    }
+
+    * {
+      box-sizing: border-box;
+    }
+
+    html {
+      scroll-behavior: smooth;
+    }
+
+    body {
+      margin: 0;
+      color: var(--ink);
+      background:
+        linear-gradient(rgba(16, 42, 58, 0.035) 1px, transparent 1px),
+        linear-gradient(90deg, rgba(16, 42, 58, 0.035) 1px, transparent 1px),
+        var(--paper);
+      background-size: 32px 32px;
+      font-family: var(--sans);
+      font-size: 1rem;
+      line-height: 1.6;
+    }
+
+    a {
+      color: var(--signal);
+      text-underline-offset: 0.18em;
+      text-decoration-thickness: 0.08em;
+    }
+
+    a:hover {
+      color: #1748a4;
+    }
+
+    a:focus-visible,
+    summary:focus-visible {
+      outline: 3px solid var(--caution);
+      outline-offset: 4px;
+    }
+
+    .page {
+      width: min(100%, calc(var(--rail-width) + var(--content-width) + 5rem));
+      margin: 0 auto;
+      display: grid;
+      grid-template-columns: var(--rail-width) minmax(0, var(--content-width));
+      gap: clamp(2rem, 5vw, 5rem);
+      padding: 0 clamp(1.25rem, 3vw, 3rem) 6rem;
+    }
+
+    .mission-rail {
+      position: sticky;
+      top: 0;
+      align-self: start;
+      min-height: 100vh;
+      padding: 2.5rem 0 3rem;
+      border-right: 1px solid var(--line);
+    }
+
+    .rail-mark {
+      margin: 0 1.75rem 2.5rem 0;
+      font-family: var(--condensed);
+      font-size: 1.05rem;
+      font-weight: 700;
+      letter-spacing: 0.035em;
+    }
+
+    .rail-mark span {
+      display: block;
+      color: var(--ink-soft);
+      font-family: var(--mono);
+      font-size: 0.7rem;
+      font-weight: 500;
+      letter-spacing: 0.02em;
+    }
+
+    .mission-status {
+      margin: 0 1.75rem 2.25rem 0;
+      padding: 0.9rem 1rem;
+      background: var(--caution-soft);
+      border-left: 5px solid var(--caution);
+      font-size: 0.82rem;
+      line-height: 1.4;
+    }
+
+    .mission-status strong {
+      display: block;
+      margin-bottom: 0.2rem;
+      font-size: 0.92rem;
+    }
+
+    .rail-nav {
+      position: relative;
+      margin-right: 1.75rem;
+      padding: 0;
+      list-style: none;
+    }
+
+    .rail-nav::before {
+      content: "";
+      position: absolute;
+      top: 1rem;
+      bottom: 1rem;
+      left: 0.69rem;
+      width: 2px;
+      background: var(--line);
+    }
+
+    .rail-nav li {
+      position: relative;
+      margin: 0;
+    }
+
+    .rail-nav a {
+      display: grid;
+      grid-template-columns: 1.5rem 1fr;
+      gap: 0.7rem;
+      align-items: baseline;
+      padding: 0.48rem 0;
+      color: var(--ink-soft);
+      font-size: 0.78rem;
+      text-decoration: none;
+    }
+
+    .rail-nav a:hover {
+      color: var(--ink);
+    }
+
+    .rail-nav b {
+      position: relative;
+      z-index: 1;
+      display: grid;
+      width: 1.45rem;
+      height: 1.45rem;
+      place-items: center;
+      background: var(--paper);
+      border: 2px solid var(--line-dark);
+      border-radius: 50%;
+      color: var(--ink);
+      font-family: var(--mono);
+      font-size: 0.66rem;
+      font-weight: 700;
+    }
+
+    .rail-nav li:first-child b {
+      border-color: var(--signal);
+      color: var(--signal);
+    }
+
+    .rail-nav li:nth-child(2) b {
+      border-color: var(--caution);
+      color: #8c5800;
+    }
+
+    .rail-foot {
+      margin: 2.5rem 1.75rem 0 0;
+      padding-top: 1rem;
+      border-top: 1px solid var(--line);
+      color: var(--ink-soft);
+      font-family: var(--mono);
+      font-size: 0.66rem;
+      line-height: 1.55;
+    }
+
+    main {
+      min-width: 0;
+      padding-top: clamp(3rem, 7vw, 6.5rem);
+    }
+
+    .hero {
+      min-height: 72vh;
+      display: flex;
+      flex-direction: column;
+      justify-content: center;
+      padding-bottom: 5rem;
+      border-bottom: 2px solid var(--ink);
+    }
+
+    .hero h1 {
+      max-width: 12ch;
+      margin: 0;
+      font-family: var(--condensed);
+      font-size: clamp(4rem, 9vw, 8.5rem);
+      font-weight: 700;
+      letter-spacing: -0.055em;
+      line-height: 0.86;
+    }
+
+    .hero-summary {
+      max-width: 48rem;
+      margin: 2.3rem 0 2rem;
+      color: var(--ink-soft);
+      font-size: clamp(1.05rem, 1.7vw, 1.35rem);
+      line-height: 1.5;
+    }
+
+    .mission-ledger {
+      display: grid;
+      grid-template-columns: repeat(4, minmax(0, 1fr));
+      margin: 0;
+      border-top: 1px solid var(--line-dark);
+      border-bottom: 1px solid var(--line-dark);
+    }
+
+    .mission-ledger div {
+      min-width: 0;
+      padding: 0.9rem 1rem 1rem 0;
+    }
+
+    .mission-ledger div + div {
+      padding-left: 1rem;
+      border-left: 1px solid var(--line);
+    }
+
+    .mission-ledger dt {
+      color: var(--ink-soft);
+      font-size: 0.73rem;
+    }
+
+    .mission-ledger dd {
+      margin: 0.18rem 0 0;
+      font-family: var(--condensed);
+      font-size: 1.05rem;
+      font-weight: 700;
+      line-height: 1.25;
+    }
+
+    .section {
+      scroll-margin-top: 2rem;
+      padding: 5rem 0;
+      border-bottom: 1px solid var(--line-dark);
+    }
+
+    .section-heading {
+      display: grid;
+      grid-template-columns: minmax(10rem, 0.8fr) minmax(0, 2fr);
+      gap: 2rem;
+      margin-bottom: 3rem;
+    }
+
+    .section-heading h2 {
+      margin: 0;
+      font-family: var(--condensed);
+      font-size: clamp(2.4rem, 5vw, 4.6rem);
+      letter-spacing: -0.035em;
+      line-height: 0.95;
+    }
+
+    .section-heading p {
+      max-width: 48rem;
+      margin: 0.25rem 0 0;
+      color: var(--ink-soft);
+      font-size: 1.05rem;
+    }
+
+    .architecture {
+      display: grid;
+      grid-template-columns: 1fr auto 1.15fr auto 0.85fr;
+      gap: 0.85rem;
+      align-items: stretch;
+      padding: 1.5rem;
+      background: var(--paper-raised);
+      border: 1px solid var(--line-dark);
+    }
+
+    .system-node {
+      min-height: 9rem;
+      padding: 1.25rem;
+      border-top: 5px solid var(--signal);
+      background: var(--signal-soft);
+    }
+
+    .system-node.service {
+      border-color: var(--ink);
+      background: #e7eef2;
+    }
+
+    .system-node.switch {
+      border-color: var(--caution);
+      background: var(--caution-soft);
+    }
+
+    .system-node h3 {
+      margin: 0 0 0.65rem;
+      font-family: var(--condensed);
+      font-size: 1.35rem;
+      line-height: 1.1;
+    }
+
+    .system-node p {
+      margin: 0;
+      color: var(--ink-soft);
+      font-size: 0.83rem;
+      line-height: 1.5;
+    }
+
+    .system-arrow {
+      align-self: center;
+      color: var(--signal);
+      font-family: var(--mono);
+      font-size: 1.2rem;
+      font-weight: 700;
+    }
+
+    .watchdog-note {
+      grid-column: 3;
+      margin-top: 0.85rem;
+      padding: 0.75rem 1rem;
+      background: var(--stop-soft);
+      border-left: 5px solid var(--stop);
+      font-size: 0.8rem;
+    }
+
+    .plan-trace {
+      margin: 0;
+      padding: 0;
+      list-style: none;
+      counter-reset: phase -1;
+    }
+
+    .plan {
+      counter-increment: phase;
+      display: grid;
+      grid-template-columns: 6.25rem minmax(0, 1fr) minmax(12rem, 0.55fr);
+      gap: 1.5rem;
+      position: relative;
+      padding: 2.25rem 0;
+      border-top: 1px solid var(--line);
+    }
+
+    .plan:last-child {
+      border-bottom: 1px solid var(--line);
+    }
+
+    .phase-marker {
+      position: relative;
+      min-height: 4.5rem;
+      font-family: var(--mono);
+      font-size: 0.78rem;
+    }
+
+    .phase-marker::before {
+      content: counter(phase);
+      display: grid;
+      width: 2.7rem;
+      height: 2.7rem;
+      place-items: center;
+      background: var(--paper);
+      border: 3px solid var(--signal);
+      border-radius: 50%;
+      color: var(--signal);
+      font-size: 0.92rem;
+      font-weight: 700;
+    }
+
+    .plan:nth-child(2) .phase-marker::before {
+      border-color: var(--caution);
+      color: #8c5800;
+    }
+
+    .plan:nth-child(n+3):not(:last-child) .phase-marker::after {
+      content: "";
+      position: absolute;
+      top: 2.7rem;
+      bottom: -3rem;
+      left: 1.29rem;
+      width: 3px;
+      background: var(--signal);
+    }
+
+    .plan:nth-child(1) .phase-marker::after,
+    .plan:nth-child(2) .phase-marker::after {
+      content: "";
+      position: absolute;
+      top: 2.7rem;
+      bottom: -3rem;
+      left: 1.29rem;
+      width: 3px;
+      background: var(--line-dark);
+    }
+
+    .plan h3 {
+      margin: 0 0 0.5rem;
+      font-family: var(--condensed);
+      font-size: clamp(1.5rem, 2.7vw, 2.25rem);
+      letter-spacing: -0.02em;
+      line-height: 1.05;
+    }
+
+    .plan h3 a {
+      color: inherit;
+      text-decoration-color: var(--line-dark);
+    }
+
+    .plan p {
+      max-width: 46rem;
+      margin: 0;
+      color: var(--ink-soft);
+    }
+
+    .plan-output {
+      align-self: start;
+      padding-left: 1rem;
+      border-left: 3px solid var(--line);
+      font-size: 0.82rem;
+    }
+
+    .plan-output strong {
+      display: block;
+      margin-bottom: 0.35rem;
+      color: var(--ink);
+    }
+
+    .plan-output.stop {
+      border-color: var(--stop);
+      color: #7d2a27;
+    }
+
+    .problem-register {
+      border-top: 2px solid var(--ink);
+    }
+
+    .problem {
+      display: grid;
+      grid-template-columns: 3.5rem minmax(12rem, 0.72fr) minmax(0, 1.3fr) minmax(13rem, 0.72fr);
+      gap: 1.4rem;
+      align-items: start;
+      padding: 1.55rem 0;
+      border-bottom: 1px solid var(--line);
+    }
+
+    .problem-index {
+      color: var(--ink-soft);
+      font-family: var(--mono);
+      font-size: 0.74rem;
+    }
+
+    .problem h3 {
+      margin: 0;
+      font-family: var(--condensed);
+      font-size: 1.32rem;
+      line-height: 1.1;
+    }
+
+    .problem p {
+      margin: 0;
+      color: var(--ink-soft);
+      font-size: 0.9rem;
+    }
+
+    .response {
+      padding-left: 1rem;
+      border-left: 3px solid var(--signal);
+    }
+
+    .response strong {
+      display: block;
+      color: var(--ink);
+      font-size: 0.78rem;
+    }
+
+    .release-blocker .problem-index,
+    .release-blocker h3 {
+      color: var(--stop);
+    }
+
+    .release-blocker .response {
+      border-color: var(--stop);
+    }
+
+    .gates {
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      gap: 0;
+      border: 1px solid var(--line-dark);
+    }
+
+    .gate {
+      min-width: 0;
+      padding: 1.5rem;
+      background: var(--paper-raised);
+    }
+
+    .gate + .gate {
+      border-left: 1px solid var(--line-dark);
+    }
+
+    .gate strong {
+      display: block;
+      margin-bottom: 0.7rem;
+      font-family: var(--condensed);
+      font-size: 1.3rem;
+      line-height: 1.1;
+    }
+
+    .gate p {
+      margin: 0;
+      color: var(--ink-soft);
+      font-size: 0.86rem;
+    }
+
+    .gate.block {
+      box-shadow: inset 0 6px 0 var(--stop);
+    }
+
+    .gate.measure {
+      box-shadow: inset 0 6px 0 var(--caution);
+    }
+
+    .gate.release {
+      box-shadow: inset 0 6px 0 var(--pass);
+    }
+
+    .invariants {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 1px;
+      padding: 1px;
+      background: var(--line);
+    }
+
+    .invariant {
+      padding: 1.35rem;
+      background: var(--paper-raised);
+    }
+
+    .invariant h3 {
+      margin: 0 0 0.4rem;
+      font-family: var(--condensed);
+      font-size: 1.2rem;
+    }
+
+    .invariant p {
+      margin: 0;
+      color: var(--ink-soft);
+      font-size: 0.85rem;
+    }
+
+    .next-action {
+      display: grid;
+      grid-template-columns: minmax(0, 1.5fr) minmax(15rem, 0.65fr);
+      gap: 2rem;
+      align-items: end;
+      padding: 2.2rem;
+      color: white;
+      background: var(--ink);
+    }
+
+    .next-action h2 {
+      margin: 0 0 0.7rem;
+      font-family: var(--condensed);
+      font-size: clamp(2rem, 4vw, 3.5rem);
+      line-height: 1;
+    }
+
+    .next-action p {
+      max-width: 45rem;
+      margin: 0;
+      color: #c8d6de;
+    }
+
+    .next-action a {
+      display: block;
+      padding: 1rem 1.2rem;
+      color: var(--ink);
+      background: white;
+      font-weight: 700;
+      text-align: center;
+      text-decoration: none;
+    }
+
+    footer {
+      padding: 2rem 0 0;
+      color: var(--ink-soft);
+      font-family: var(--mono);
+      font-size: 0.7rem;
+    }
+
+    @media (max-width: 980px) {
+      .page {
+        display: block;
+      }
+
+      .mission-rail {
+        position: static;
+        min-height: 0;
+        padding: 1.25rem 0;
+        border-right: 0;
+        border-bottom: 1px solid var(--line-dark);
+      }
+
+      .rail-mark,
+      .mission-status,
+      .rail-foot {
+        margin-right: 0;
+      }
+
+      .mission-status {
+        display: inline-block;
+        margin-bottom: 1rem;
+      }
+
+      .rail-nav {
+        display: flex;
+        gap: 0.4rem;
+        margin: 0;
+        overflow-x: auto;
+        padding-bottom: 0.5rem;
+      }
+
+      .rail-nav::before,
+      .rail-nav a span,
+      .rail-foot {
+        display: none;
+      }
+
+      .rail-nav a {
+        display: block;
+        padding: 0;
+      }
+
+      main {
+        padding-top: 3rem;
+      }
+
+      .hero {
+        min-height: auto;
+      }
+    }
+
+    @media (max-width: 760px) {
+      body {
+        background-size: 24px 24px;
+      }
+
+      .mission-ledger,
+      .section-heading,
+      .plan,
+      .problem,
+      .gates,
+      .invariants,
+      .next-action {
+        grid-template-columns: 1fr;
+      }
+
+      .mission-ledger div + div,
+      .gate + .gate {
+        padding-left: 0;
+        border-left: 0;
+        border-top: 1px solid var(--line);
+      }
+
+      .section-heading {
+        gap: 1rem;
+      }
+
+      .architecture {
+        grid-template-columns: 1fr;
+      }
+
+      .system-arrow {
+        transform: rotate(90deg);
+        justify-self: center;
+      }
+
+      .watchdog-note {
+        grid-column: 1;
+      }
+
+      .plan {
+        gap: 0.7rem;
+      }
+
+      .phase-marker::after {
+        display: none;
+      }
+
+      .plan-output,
+      .response {
+        margin-top: 0.35rem;
+      }
+    }
+
+    @media (prefers-reduced-motion: reduce) {
+      html {
+        scroll-behavior: auto;
+      }
+    }
+
+    @media print {
+      body {
+        background: white;
+        color: black;
+      }
+
+      .page {
+        display: block;
+        max-width: none;
+        padding: 0;
+      }
+
+      .mission-rail {
+        position: static;
+        min-height: 0;
+        border: 0;
+      }
+
+      .rail-nav,
+      .rail-foot {
+        display: none;
+      }
+
+      .hero {
+        min-height: 0;
+      }
+
+      .section,
+      .plan,
+      .problem {
+        break-inside: avoid;
+      }
+
+      a {
+        color: inherit;
+      }
+    }
+  </style>
+</head>
+<body>
+  <div class="page">
+    <aside class="mission-rail" aria-label="Plan navigation">
+      <p class="rail-mark">mac2jb / iPad port<span>M2 · iPad14,5 · iPadOS 17.0</span></p>
+      <div class="mission-status">
+        <strong>U1 passed · U2 passed (automatic USB recovery)</strong>
+        U1 read-only inventory and authorization passed. U2 passed on 2026-10-31: the v11 broker journals the original USB description and, after a description swap leaves functions unregistered, heals automatically by bounded re-publication and restarting the function owner. Five consecutive hardware no-op trials, including worker-kill and watchdog-kill, recovered USB without owner action and passed the strict external check. HID publication (U3) is next.
+      </div>
+      <ol class="rail-nav">
+        <li><a href="#overview"><b>0</b><span>Mission</span></a></li>
+        <li><a href="#architecture"><b>A</b><span>Architecture</span></a></li>
+        <li><a href="#plans"><b>1</b><span>Plan order</span></a></li>
+        <li><a href="#problems"><b>2</b><span>Key problems</span></a></li>
+        <li><a href="#gates"><b>3</b><span>Release gates</span></a></li>
+        <li><a href="#invariants"><b>4</b><span>Invariants</span></a></li>
+      </ol>
+      <p class="rail-foot">Artifact contract: ce-unified-plan/v1<br>Overview date: 2026-10-28<br>Order audit: passed</p>
+    </aside>
+
+    <main>
+      <header class="hero" id="overview">
+        <h1>Port flight plan</h1>
+        <p class="hero-summary">A Mac-free mac2jb workflow on the jailbroken M2 iPad Pro target. The work is ordered around one hard truth: private USB behavior and safe restoration must be proven on the exact device before the runtime, interface, or packaging work earns a release path.</p>
+        <dl class="mission-ledger">
+          <div><dt>Target</dt><dd>iPad14,5 / T8112 / iPadOS 17.0</dd></div>
+          <div><dt>Install model</dt><dd>TrollStore app + rootless package</dd></div>
+          <div><dt>Execution</dt><dd>Six gated implementation plans</dd></div>
+          <div><dt>Current gate</dt><dd>Hardware U3 HID canary</dd></div>
+        </dl>
+      </header>
+
+      <section class="section" id="architecture">
+        <div class="section-heading">
+          <h2>System shape</h2>
+          <p>The UI stays sandboxed and unprivileged. Durable work lives in a Dopamine rootless service, with a separately supervised watchdog as the only USB controller writer.</p>
+        </div>
+        <figure class="architecture" aria-label="Two-artifact system architecture">
+          <div class="system-node">
+            <h3>TrollStore .tipa</h3>
+            <p>SwiftUI interface, protocol models, public verification material, diagnostics, and install guidance.</p>
+          </div>
+          <div class="system-arrow" aria-hidden="true">⟷</div>
+          <div class="system-node service">
+            <h3>Dopamine rootless .deb</h3>
+            <p>Mach/XPC service, Node runtime, process supervisor, homebrew/media capabilities, USB helper, and service state.</p>
+          </div>
+          <div class="system-arrow" aria-hidden="true">⟶</div>
+          <div class="system-node switch">
+            <h3>Switch 2</h3>
+            <p>Direct USB HID for bootstrap entry and a measured IP path for ns2jb and held-session workflows.</p>
+          </div>
+          <figcaption class="watchdog-note"><strong>Independent watchdog:</strong> owns the restoration journal and USB mutation lease. A service crash fails closed; it does not leave an unverifiable child tree or active USB configuration behind.</figcaption>
+        </figure>
+      </section>
+
+      <section class="section" id="plans">
+        <div class="section-heading">
+          <h2>Execution order</h2>
+          <p>The sequence is normative and acyclic. Each file carries a matching <code>plan_order</code> and exact <code>execution_after</code> path.</p>
+        </div>
+        <ol class="plan-trace">
+          <li class="plan">
+            <div class="phase-marker" aria-label="Plan 0"></div>
+            <div>
+              <h3><a href="00-roadmap.md">Roadmap and product contract</a></h3>
+              <p>Defines full parity, the Mac-free requirement, two-artifact architecture, privilege boundaries, and the stop conditions that child plans cannot weaken.</p>
+            </div>
+            <div class="plan-output"><strong>Output</strong>Authoritative scope, requirements R1–R21, architecture, and release definition.</div>
+          </li>
+          <li class="plan">
+            <div class="phase-marker" aria-label="Plan 1"></div>
+            <div>
+              <h3><a href="01-hardware-feasibility.md">Hardware feasibility gates</a></h3>
+              <p>Proves USB-C device role, private API/entitlement access, bindable HID function publication, restoration, and a viable Switch-to-iPad network topology on the reference iPad, then generalizes to other jailbroken/TrollStore USB-C devices. U1 (read-only inventory and authorization) and U2 (restoration journal, watchdog and automatic same-boot USB recovery) have passed. HID publication (U3) and the network gate are next.</p>
+            </div>
+            <div class="plan-output"><strong>Gate status</strong>Hardware child-plan U1 passes for read-only R1–R3 and its scoped R14 evidence decision. The raw reports, exact installed-code attestations, host lifecycle bindings, stock-source cross-check, and operator peer labels are retained privately. U2 passed on 2026-10-31 with automatic same-boot USB recovery (7/7 hardware trials across the v11 and v12 brokers). U3 is next. <a href="../../ipad/usb-auto-recovery.md">How automatic recovery works.</a> <a href="../../ipad/hardware-matrix.md">Review the gate evidence.</a> <a href="scripts/README.md">Browse the iPad scripts.</a></div>
+          </li>
+          <li class="plan">
+            <div class="phase-marker" aria-label="Plan 2"></div>
+            <div>
+              <h3><a href="02-runtime-services.md">Runtime and background services</a></h3>
+              <p>Builds the authenticated Mach/XPC service, native supervisor, immutable runtime, pinned JIT-less Node, and portable orchestration seam.</p>
+            </div>
+            <div class="plan-output"><strong>Output</strong>Durable local execution and abstract capability/update contracts independent of the UI.</div>
+          </li>
+          <li class="plan">
+            <div class="phase-marker" aria-label="Plan 3"></div>
+            <div>
+              <h3><a href="03-homebrew-parity.md">Homebrew and media parity</a></h3>
+              <p>Ports every bundled app plus Python/Pillow, SPIR-V validation, File Exchange, OunceCake, and the bounded Stremio media pipeline.</p>
+            </div>
+            <div class="plan-output"><strong>Output</strong>A stable capability catalog and physical launch/cleanup evidence for every bundled option.</div>
+          </li>
+          <li class="plan">
+            <div class="phase-marker" aria-label="Plan 4"></div>
+            <div>
+              <h3><a href="04-native-interface.md">Native iPad interface</a></h3>
+              <p>Ports setup, jailbreak, developer, keyboard, diagnostic, homebrew, and update workflows to SwiftUI/UIKit over the service contracts.</p>
+            </div>
+            <div class="plan-output"><strong>Output</strong>Complete user-facing parity without process ownership or privileged logic in the app.</div>
+          </li>
+          <li class="plan">
+            <div class="phase-marker" aria-label="Plan 5"></div>
+            <div>
+              <h3><a href="05-distribution-updates.md">Distribution and updates</a></h3>
+              <p>Produces signed .tipa and rootless .deb artifacts, binds concrete release identity, handles safe mixed-version states, and audits provenance.</p>
+            </div>
+            <div class="plan-output"><strong>Output</strong>Installable, recoverable, independently audited artifacts with atomic service activation.</div>
+          </li>
+          <li class="plan">
+            <div class="phase-marker" aria-label="Plan 6"></div>
+            <div>
+              <h3><a href="06-release-validation.md">Release validation</a></h3>
+              <p>Combines Mac regression CI, iOS build/package audits, signed hardware runs, fault injection, end-to-end parity, and operator documentation.</p>
+            </div>
+            <div class="plan-output"><strong>Output</strong>A promotion decision backed by exact artifacts, device evidence, and explicit maintainer acknowledgement.</div>
+          </li>
+        </ol>
+      </section>
+
+      <section class="section" id="problems">
+        <div class="section-heading">
+          <h2>Key problems</h2>
+          <p>These are the problems that determine feasibility or dominate implementation risk. The plan treats them as evidence-producing work, not assumptions.</p>
+        </div>
+        <div class="problem-register">
+          <article class="problem release-blocker">
+            <span class="problem-index">P–01</span>
+            <h3>USB HID has an implementation path, not a device result</h3>
+            <p>The Mac kext forwards controller configuration rather than implementing HID; on that stack, userspace configures the resulting generic named interface with the class tuple, descriptors, interrupt pipe, and reports. iOS 17 retains the controller/interface family, and TrollStore can preserve the controller entitlement. No public result yet proves arbitrary-function materialization, endpoint operations, or direct Switch role negotiation on this physical iPad14,5 running 17.0.</p>
+            <p class="response"><strong>Plan response</strong>Reproduce the generic-interface sequence one operation at a time on the exact ProductType and build, capture generic-host enumeration, restore stock functions, and only then test the Switch. <a href="research/usb-hid-ipad-feasibility.md">Read the evidence chain and proof protocol.</a></p>
+          </article>
+          <article class="problem release-blocker">
+            <span class="problem-index">P–02</span>
+            <h3>A bad descriptor can strand USB</h3>
+            <p>Replacing the active USB description can remove usbmux, networking, or trusted-host functions until reboot—and a crashed worker cannot repair itself.</p>
+            <p class="response"><strong>Plan response</strong>Capture live and default descriptions, externally verify a no-op republish, use additive configuration first, fsync the restore recipe, and give only an independent single-writer watchdog a short mutation lease.</p>
+          </article>
+          <article class="problem release-blocker">
+            <span class="problem-index">P–03</span>
+            <h3>One port must carry two jobs</h3>
+            <p>The iPad must connect directly to the Switch for HID, but the current exploit workflow assumes a reliable IP path that previously used wired networking.</p>
+            <p class="response"><strong>Plan response</strong>Compare Wi-Fi against a wired baseline over at least 20 attempts, then test only two bounded direct-cable fallbacks.</p>
+          </article>
+          <article class="problem">
+            <span class="problem-index">P–04</span>
+            <h3>TrollStore is not a daemon manager</h3>
+            <p>A TrollStore app can retain private entitlements, but it cannot own the durable launch-daemon lifecycle required for hosts, cleanup, and restoration.</p>
+            <p class="response"><strong>Plan response</strong>Split the product: a diagnostic/UI .tipa and a Dopamine rootless .deb containing the service, watchdog, helpers, runtimes, and state.</p>
+          </article>
+          <article class="problem">
+            <span class="problem-index">P–05</span>
+            <h3>The desktop runtime does not transplant</h3>
+            <p>Foundation.Process, desktop Node, Python executables, SPIR-V command tools, and app-bundle FFmpeg paths do not map directly to iPadOS.</p>
+            <p class="response"><strong>Plan response</strong>Use <code>posix_spawn</code>, pinned JIT-less Node, embedded Python/Pillow, linked SPIR-V validation, and a bounded iOS media capability.</p>
+          </article>
+          <article class="problem">
+            <span class="problem-index">P–06</span>
+            <h3>Root authority meets untrusted content</h3>
+            <p>The port introduces private entitlements and a root service while processing vendor scripts, imported apps, media URLs, keyboard input, and account data.</p>
+            <p class="response"><strong>Plan response</strong>Authenticate the installed app by audit token/CDHash plus pairing proof; expose only high-level operations; drop all ordinary work to <code>mobile</code>.</p>
+          </article>
+          <article class="problem">
+            <span class="problem-index">P–07</span>
+            <h3>UI and service failures differ</h3>
+            <p>The interface may disappear without ending a valid host, but a root-service crash can leave unverifiable children, ports, or device state.</p>
+            <p class="response"><strong>Plan response</strong>UI death reconnects from snapshots. Service death fails closed: restore USB, terminate or quarantine unverified trees, and reattach only with existing proof.</p>
+          </article>
+          <article class="problem">
+            <span class="problem-index">P–08</span>
+            <h3>Two artifacts can drift</h3>
+            <p>The app and service update through different channels. A partially installed or incompatible pair must never retain mutation authority.</p>
+            <p class="response"><strong>Plan response</strong>One signed compatibility manifest, diagnostic-only mixed states, immutable versioned service payloads, atomic activation, and retained rollback.</p>
+          </article>
+          <article class="problem">
+            <span class="problem-index">P–09</span>
+            <h3>Public CI cannot prove the device</h3>
+            <p>Private USB behavior, Dopamine process handling, Switch enumeration, exploit timing, and thermal media limits need the physical target.</p>
+            <p class="response"><strong>Plan response</strong>Keep deterministic CI for builds/contracts, then require signed, redacted, artifact-bound hardware records for release promotion.</p>
+          </article>
+        </div>
+      </section>
+
+      <section class="section" id="gates">
+        <div class="section-heading">
+          <h2>Go / no-go gates</h2>
+          <p>A failed gate stops dependent work. It does not silently redefine parity or replace a device requirement with a manual workaround.</p>
+        </div>
+        <div class="gates">
+          <article class="gate block">
+            <strong>USB safety gate — U1 and U2 passed; HID pending</strong>
+            <p>U1 read-only inventory and authorization passed. U2 passed: the broker journals the original description and heals automatically after a swap leaves functions unregistered, verified by strict external USB checks across normal, worker-kill and watchdog-kill trials. U3 must prove HID publication and enumeration on a generic host before any Switch typing.</p>
+          </article>
+          <article class="gate measure">
+            <strong>Network viability gate — not tested</strong>
+            <p>At least 20 comparable attempts per topology. The selected path must remain within 10 percentage points of the wired baseline with no new repeatable transport failure.</p>
+          </article>
+          <article class="gate release">
+            <strong>Release gate — blocked</strong>
+            <p>Every bundled feature passes, app/service versions agree, Mac regressions stay green, artifacts audit cleanly, and signed target evidence matches the published digests.</p>
+          </article>
+        </div>
+      </section>
+
+      <section class="section" id="invariants">
+        <div class="section-heading">
+          <h2>Non-negotiable invariants</h2>
+          <p>These constraints survive implementation choices. Any shortcut that breaks one changes the product contract and requires an explicit decision.</p>
+        </div>
+        <div class="invariants">
+          <article class="invariant"><h3>No Mac during normal use</h3><p>After installation, the iPad owns bootstrap entry, hosting, held-session tools, apps, updates, recovery, and diagnostics.</p></article>
+          <article class="invariant"><h3>Direct HID remains required</h3><p>Host-only and manually typed paths may aid development but do not satisfy the parity release.</p></article>
+          <article class="invariant"><h3>The UI is not privileged</h3><p>The app receives only the exact local service lookup entitlement; controller and root authority stay in minimal helpers.</p></article>
+          <article class="invariant"><h3>USB has one writer</h3><p>The watchdog/controller broker alone owns mutation, journal creation, verification, and journal deletion.</p></article>
+          <article class="invariant"><h3>Ordinary work runs as mobile</h3><p>Node, ns2jb, Python, FFmpeg, and homebrew children receive scrubbed groups, environment, and descriptors.</p></article>
+          <article class="invariant"><h3>macOS remains supported</h3><p>Shared seams may change, but the current Mac app, helpers, archive, fixtures, and release audit remain regression targets.</p></article>
+        </div>
+      </section>
+
+      <section class="section">
+        <div class="next-action">
+          <div>
+            <h2>Start with evidence, not the app</h2>
+            <p>The reference iPad runs only the auto-heal broker and SSH keys; all test apps and leftovers were removed. Read the current state first, then the runbook, before any device action. Next: the U3 HID canary on top of the broker.</p>
+          </div>
+          <a href="../../ipad/target-device-findings.md">Open target findings</a>
+        </div>
+        <footer>Generated from the seven ordered plans under docs/plans/ipad-port. The Markdown plans remain authoritative if this overview and a source plan diverge.</footer>
+      </section>
+    </main>
+  </div>
+</body>
+</html>

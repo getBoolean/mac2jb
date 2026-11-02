@@ -1,0 +1,212 @@
+#!/usr/bin/env python3
+"""Build a separate signed native U2 no-op-trial binary on the Mac only.
+
+This compiles the C restore shim and Swift watchdog with the opt-in
+MAC2JB_ENABLE_U2_NOOP_TRIAL flag, signs exactly platform-application and
+set-description entitlements, verifies the signature, and exclusively saves
+one ignored Mac binary. It never installs or runs on the iPad and does not
+contact USB. The normal installed `--serve` entry stays publication-disabled;
+only this distinct binary's `--serve-noop-trial` can prepare/publish the
+captured original description through the journaled watchdog.
+"""
+
+import hashlib
+import os
+from pathlib import Path
+import plistlib
+import stat
+import subprocess
+import sys
+import tempfile
+
+
+ROOT = Path(__file__).resolve().parents[5]
+BUILD = ROOT / "build/ipad-hardware"
+# Selectable broker builds. Old variants (v2-v11) are in git history.
+# The learned-profile build has no appending command compiled in at all, so it
+# stays the conservative rollback target; the additive build can also publish
+# the journaled original plus one appended function. Both carry the same
+# entitlements and the same restore path, and their source digests differ.
+VARIANTS = {
+    "--v12-learned-profile": "u2-native-noop-trial-v12-learned-profile",
+    "--v13-additive-function": "u3-native-additive-function-v13",
+    "--v14-additive-lease": "u3-native-additive-function-v14",
+    "--v15-additive-cycle": "u3-native-additive-function-v15",
+    # Publishes without cycling the bus, so the one cycle happens after the
+    # interface is configured and the host enumerates a configuration that
+    # already carries it. Two cycles destabilized function re-registration.
+    "--v16-additive-single-cycle": "u3-native-additive-function-v16",
+    # v16 plus the two changes that make a publication observable at all: a
+    # heartbeat-renewable lease (30 s quantum, 180 s total cap) that can outlive
+    # the measured 29-72 s bus return, and a heal that re-publishes the
+    # journaled original *plus* the appended function while the lease is live,
+    # so the mechanism restoring the bus stops deleting the function under test.
+    # Restoring - expired lease, dead worker, restart, explicit restore - still
+    # publishes the bare original.
+    "--v17-renewable-lease": "u3-native-additive-function-v17",
+    # v17 with the publication life cap at 300 s. The bus cycle that makes a
+    # host re-read the configuration descriptor takes the device off bus for
+    # over 120 s, so a 180 s cap expired during the outage and the
+    # publication was restored before any host could read it.
+    "--v18-longer-cap": "u3-native-additive-function-v18",
+    # 600 s cap. The bus cycle was measured at 328 s off bus with the device
+    # flapping afterwards, so a 300 s cap ends the publication before any
+    # host can read the device it is meant to be observing.
+    "--v19-cycle-sized-cap": "u3-native-additive-function-v19",
+    # v19 behaviour exactly, rebuilt from the tv_sec-only boot-session source
+    # (commit 147bb66). The full-timeval derivation drifted the session on a
+    # time-sync and orphaned the journal; this is the deployable fixed broker.
+    # Only the source digest differs from v19.
+    "--v20-tvsec-bootsession": "u3-native-additive-function-v20",
+    # v20 behaviour plus the exclusive / usbmux-preserving publication path
+    # (parent plan U4): a publish-interfaces command that replaces one
+    # configuration's whole interface list, and a stored-description restore.
+    # The composite (config 5 + an appended interface) does not come on bus on
+    # this controller; a lighter interface list may.
+    "--v21-interface-list": "u3-native-additive-function-v21",
+}
+# Resolve the installed iPhoneOS SDK instead of pinning an Xcode point release.
+SDK = subprocess.run(["/usr/bin/xcrun", "--sdk", "iphoneos", "--show-sdk-path"],
+                     stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True).stdout.strip()
+ENTITLEMENTS = ROOT / "ios/entitlements/probe-platform-setdescription.plist"
+SWIFT = [
+    ROOT / "ios/usb/USBRestoreJournal.swift",
+    ROOT / "ios/watchdog/USBRestoreCoordinator.swift",
+    ROOT / "ios/watchdog/TargetUSBRestoreSnapshot.swift",
+    ROOT / "ios/watchdog/TargetUSBRestoreController.swift",
+    ROOT / "ios/watchdog/USBDeviceProfile.swift",
+    ROOT / "ios/watchdog/USBFunctionRegistrationHealer.swift",
+    ROOT / "ios/watchdog/USBFunctionOwnerRestarter.swift",
+    ROOT / "ios/watchdog/NativeUSBWatchdogService.swift",
+    ROOT / "ios/watchdog/USBWatchdogMain.swift",
+]
+C = ROOT / "ios/usb/USBRestoreControllerShim.c"
+EXPECTED_ENTITLEMENTS = {
+    "platform-application": True,
+    "com.apple.private.usbdevice.setdescription": True,
+}
+
+
+def run(command, env=None, timeout=60):
+    result = subprocess.run(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                            timeout=timeout, env=env)
+    if result.returncode != 0:
+        raise ValueError("offline native build/sign/verify failed")
+    return result.stdout
+
+
+def main():
+    # Flags of the current auto-heal broker: explicit bus cycle, controller
+    # clone, post-clone journal normalization, readiness gate (always on).
+    if len(sys.argv) != 2 or sys.argv[1] not in VARIANTS:
+        raise ValueError("usage: " + " | ".join(sorted(VARIANTS)))
+    output = BUILD / VARIANTS[sys.argv[1]]
+    additive_function = sys.argv[1] in ("--v13-additive-function", "--v14-additive-lease",
+                                        "--v15-additive-cycle", "--v16-additive-single-cycle",
+                                        "--v17-renewable-lease", "--v18-longer-cap",
+                                        "--v19-cycle-sized-cap", "--v20-tvsec-bootsession",
+                                        "--v21-interface-list")
+    explicit_cycle = True
+    controller_clone = True
+    post_clone = True
+    settled_recovery = False
+    ready_gated = True
+    interface_list = sys.argv[1] in ("--v21-interface-list",)
+    no_initial_cycle = sys.argv[1] in ("--v16-additive-single-cycle", "--v17-renewable-lease",
+                                   "--v18-longer-cap", "--v19-cycle-sized-cap",
+                                   "--v20-tvsec-bootsession", "--v21-interface-list")
+    if output.exists() or not BUILD.is_dir() or not Path(SDK).is_dir():
+        raise ValueError("unsafe output or missing SDK")
+    if plistlib.loads(ENTITLEMENTS.read_bytes()) != EXPECTED_ENTITLEMENTS:
+        raise ValueError("entitlements changed")
+    sources = [C, *SWIFT, ROOT / "ios/usb/USBRestoreControllerShim.h",
+               ROOT / "ios/usb/USBFunctionName.h"]
+    if any(not stat.S_ISREG(path.lstat().st_mode) or path.stat().st_size > 128 * 1024
+           for path in sources):
+        raise ValueError("unsafe source")
+    source_digest = hashlib.sha256(
+        (b"MAC2JB_U3_ADDITIVE_FUNCTION=1\0" if additive_function else b"") +
+        (b"MAC2JB_U2_NO_INITIAL_CYCLE=1\0" if no_initial_cycle else b"") +
+        (b"MAC2JB_U2_READY_GATE=1\0" if ready_gated else b"") +
+        (b"MAC2JB_U2_SETTLED_RECOVERY=1\0" if settled_recovery else b"") +
+        (b"MAC2JB_U2_POST_CLONE=1\0" if post_clone else b"") +
+        (b"MAC2JB_U2_CONTROLLER_CLONE=1\0" if controller_clone else b"") +
+        (b"MAC2JB_U2_EXPLICIT_BUS_CYCLE=1\0" if explicit_cycle else b"") +
+        (b"MAC2JB_U4_INTERFACE_LIST=1\0" if interface_list else b"") +
+        b"".join(path.name.encode("ascii") + b"\0" + path.read_bytes()
+                 for path in sources)).hexdigest()
+    with tempfile.TemporaryDirectory(prefix="u2-noop-build-", dir=BUILD) as temporary:
+        stage = Path(temporary)
+        object_file = stage / "restore.o"
+        binary = stage / "u2-native-noop-trial"
+        env = dict(os.environ,
+                   CLANG_MODULE_CACHE_PATH=str(stage / "clang-cache"),
+                   SWIFT_MODULE_CACHE_PATH=str(stage / "swift-cache"))
+        run(["/usr/bin/xcrun", "--sdk", "iphoneos", "clang",
+             "-target", "arm64-apple-ios15.0", "-isysroot", SDK,
+             "-c", str(C), "-o", str(object_file)], env=env)
+        defines = ["-D", "MAC2JB_U2_EXPLICIT_BUS_CYCLE"] if explicit_cycle else []
+        if controller_clone:
+            defines += ["-D", "MAC2JB_U2_CONTROLLER_CLONE"]
+        if no_initial_cycle:
+            defines += ["-D", "MAC2JB_U2_NO_INITIAL_CYCLE"]
+        if post_clone:
+            defines += ["-D", "MAC2JB_U2_POST_CLONE"]
+        if settled_recovery:
+            defines += ["-D", "MAC2JB_U2_SETTLED_RECOVERY"]
+        if additive_function:
+            defines += ["-D", "MAC2JB_U3_ADDITIVE_FUNCTION"]
+        if interface_list:
+            defines += ["-D", "MAC2JB_U4_INTERFACE_LIST"]
+        run(["/usr/bin/xcrun", "--sdk", "iphoneos", "swiftc",
+             "-target", "arm64-apple-ios15.0", "-sdk", SDK,
+             "-D", "MAC2JB_ENABLE_U2_NOOP_TRIAL",
+             *defines,
+             "-I", str(ROOT / "ios/usb"), *(str(path) for path in SWIFT),
+             str(object_file), "-framework", "IOKit", "-o", str(binary)], env=env)
+        run(["/usr/bin/codesign", "--force", "--sign", "-",
+             "--entitlements", str(ENTITLEMENTS), str(binary)])
+        run(["/usr/bin/codesign", "--verify", "--strict", str(binary)])
+        actual = plistlib.loads(run(
+            ["/usr/bin/codesign", "-d", "--entitlements", ":-", str(binary)]))
+        if actual != EXPECTED_ENTITLEMENTS:
+            raise ValueError("signed entitlements differ")
+        data = binary.read_bytes()
+        if len(data) > 4 * 1024 * 1024:
+            raise ValueError("oversize trial binary")
+        fd = os.open(output, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o700)
+        try:
+            if os.write(fd, data) != len(data):
+                raise ValueError("short binary write")
+            os.fsync(fd)
+        finally:
+            os.close(fd)
+        directory = os.open(BUILD, os.O_RDONLY | os.O_DIRECTORY)
+        try:
+            os.fsync(directory)
+        finally:
+            os.close(directory)
+    print("U2_NOOP_TRIAL_BINARY built=offline signed=platform-setdescription "
+          "bus-cycle=" + ("enabled" if explicit_cycle else "disabled") +
+          " controller-clone=" + ("enabled" if controller_clone else "disabled"))
+    if post_clone:
+        print("U2_NOOP_TRIAL_BINARY post-clone-normalization=enabled")
+    if settled_recovery:
+        print("U2_NOOP_TRIAL_BINARY settled-recovery=enabled")
+    print("U2_NOOP_TRIAL_BINARY appending-command=" +
+          ("compiled-in" if additive_function else "absent"))
+    if ready_gated:
+        print("U2_NOOP_TRIAL_BINARY readiness-gate=enabled")
+    if no_initial_cycle:
+        print("U2_NOOP_TRIAL_BINARY first-publication-cycle=disabled recovery-cycle=enabled")
+    print("U2_NOOP_TRIAL_BINARY source-sha256=" + source_digest)
+    print("U2_NOOP_TRIAL_BINARY sha256=" + hashlib.sha256(data).hexdigest())
+
+
+if __name__ == "__main__":
+    try:
+        main()
+    except (OSError, ValueError, TypeError, plistlib.InvalidFileException,
+            subprocess.TimeoutExpired):
+        print("U2_NOOP_TRIAL_BINARY rejected")
+        raise SystemExit(1)

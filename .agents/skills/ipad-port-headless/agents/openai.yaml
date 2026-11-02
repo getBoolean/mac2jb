@@ -1,0 +1,3 @@
+interface:
+  display_name: "iPad Port Headless"
+  short_description: "Rules, connection steps, and CLIs for mac2jb iPad hardware work"
