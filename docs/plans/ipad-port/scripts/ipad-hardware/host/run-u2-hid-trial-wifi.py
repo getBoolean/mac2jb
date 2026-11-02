@@ -429,10 +429,17 @@ def main(options, env):
                 # waiting is all the reader does until the publication lands.
                 reader = env["start_reports"]("published")
                 try:
-                    published = env["ask"]("publish-hid " + options["function"])
-                    if published != "OK published-additive":
-                        raise ValueError("broker refused the additive publication (%s)"
-                                         % published)
+                    if options["interfaces"] is not None:
+                        published = env["ask"]("publish-interfaces %d %s"
+                                               % (options["configuration"], options["interfaces"]))
+                        if published != "OK published-interfaces":
+                            raise ValueError("broker refused the interface-list publication (%s)"
+                                             % published)
+                    else:
+                        published = env["ask"]("publish-hid " + options["function"])
+                        if published != "OK published-additive":
+                            raise ValueError("broker refused the additive publication (%s)"
+                                             % published)
                     # The publication's own bus cycle happened before the
                     # appended interface had a class, descriptors or
                     # endpoints, so the configuration descriptor the host read
@@ -881,7 +888,7 @@ def collect_canary(handle):
 
 
 def parse(argv):
-    options = {"reports": None, "mode": FULL_MODE}
+    options = {"reports": None, "mode": FULL_MODE, "interfaces": None}
     for item in argv:
         name, _, value = item.partition("=")
         if not name.startswith("--") or not value:
@@ -901,6 +908,17 @@ def parse(argv):
             not HEX64.fullmatch(options["canary_sha256"]) or
             not HEX64.fullmatch(options["broker_sha256"])):
         raise ValueError("invalid argument")
+    # Optional --interfaces: a comma-separated list the broker's publish-interfaces
+    # command sets as the host-selected configuration's whole interface list
+    # (parent plan U4). When absent, the trial is the unchanged additive publish.
+    # The list must be 1-32 distinct legal names and must include the canary's own
+    # function, or the canary could not find its interface to open.
+    if options["interfaces"] is not None:
+        names = options["interfaces"].split(",")
+        if (not names or len(names) > 32 or len(set(names)) != len(names) or
+                any(not NAME.fullmatch(name) for name in names) or
+                options["function"] not in names):
+            raise ValueError("invalid --interfaces list")
     return options
 
 

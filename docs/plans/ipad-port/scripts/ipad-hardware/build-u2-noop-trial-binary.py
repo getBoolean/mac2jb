@@ -58,6 +58,12 @@ VARIANTS = {
     # time-sync and orphaned the journal; this is the deployable fixed broker.
     # Only the source digest differs from v19.
     "--v20-tvsec-bootsession": "u3-native-additive-function-v20",
+    # v20 behaviour plus the exclusive / usbmux-preserving publication path
+    # (parent plan U4): a publish-interfaces command that replaces one
+    # configuration's whole interface list, and a stored-description restore.
+    # The composite (config 5 + an appended interface) does not come on bus on
+    # this controller; a lighter interface list may.
+    "--v21-interface-list": "u3-native-additive-function-v21",
 }
 # Resolve the installed iPhoneOS SDK instead of pinning an Xcode point release.
 SDK = subprocess.run(["/usr/bin/xcrun", "--sdk", "iphoneos", "--show-sdk-path"],
@@ -98,15 +104,17 @@ def main():
     additive_function = sys.argv[1] in ("--v13-additive-function", "--v14-additive-lease",
                                         "--v15-additive-cycle", "--v16-additive-single-cycle",
                                         "--v17-renewable-lease", "--v18-longer-cap",
-                                        "--v19-cycle-sized-cap", "--v20-tvsec-bootsession")
+                                        "--v19-cycle-sized-cap", "--v20-tvsec-bootsession",
+                                        "--v21-interface-list")
     explicit_cycle = True
     controller_clone = True
     post_clone = True
     settled_recovery = False
     ready_gated = True
+    interface_list = sys.argv[1] in ("--v21-interface-list",)
     no_initial_cycle = sys.argv[1] in ("--v16-additive-single-cycle", "--v17-renewable-lease",
                                    "--v18-longer-cap", "--v19-cycle-sized-cap",
-                                   "--v20-tvsec-bootsession")
+                                   "--v20-tvsec-bootsession", "--v21-interface-list")
     if output.exists() or not BUILD.is_dir() or not Path(SDK).is_dir():
         raise ValueError("unsafe output or missing SDK")
     if plistlib.loads(ENTITLEMENTS.read_bytes()) != EXPECTED_ENTITLEMENTS:
@@ -124,6 +132,7 @@ def main():
         (b"MAC2JB_U2_POST_CLONE=1\0" if post_clone else b"") +
         (b"MAC2JB_U2_CONTROLLER_CLONE=1\0" if controller_clone else b"") +
         (b"MAC2JB_U2_EXPLICIT_BUS_CYCLE=1\0" if explicit_cycle else b"") +
+        (b"MAC2JB_U4_INTERFACE_LIST=1\0" if interface_list else b"") +
         b"".join(path.name.encode("ascii") + b"\0" + path.read_bytes()
                  for path in sources)).hexdigest()
     with tempfile.TemporaryDirectory(prefix="u2-noop-build-", dir=BUILD) as temporary:
@@ -147,6 +156,8 @@ def main():
             defines += ["-D", "MAC2JB_U2_SETTLED_RECOVERY"]
         if additive_function:
             defines += ["-D", "MAC2JB_U3_ADDITIVE_FUNCTION"]
+        if interface_list:
+            defines += ["-D", "MAC2JB_U4_INTERFACE_LIST"]
         run(["/usr/bin/xcrun", "--sdk", "iphoneos", "swiftc",
              "-target", "arm64-apple-ios15.0", "-sdk", SDK,
              "-D", "MAC2JB_ENABLE_U2_NOOP_TRIAL",
