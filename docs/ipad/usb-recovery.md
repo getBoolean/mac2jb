@@ -47,6 +47,8 @@ The broker already heals automatically: bounded re-publication plus owner restar
 
 Build: `python3 …/build-u2-noop-trial-binary.py --v12-learned-profile` (Mac only, signed with platform and set-description entitlements). Deploy: `python3 …/host/replace-u2-broker-wifi.py --replace OLD NEW`. It makes a backup kit first and swaps an allowlisted broker, keeping any journal unchanged. Add new brokers to the allowlists in `host/replace-u2-broker-wifi.py` and `device/u2-replace-broker.py`.
 
+The boot session is derived from `kern.boottime`'s tv_sec only (the first 8 bytes), because wall-clock time-sync rewrites the tv_usec sub-second field without a reboot; digesting the whole value drifts the session mid-boot and orphans the journal at `awaitingVerification`, confirmable by no later broker. Any broker built at or after commit `147bb66` carries this; a broker built before it (variants v13–v19) uses the old full-timeval derivation, so its recorded `bootSession` is not trustworthy across a time-sync and a journal it left behind is only clearable by re-baselining on a fresh boot, not by confirming it. Replacing a pre-fix broker needs a new allowlisted variant built from fixed source, then a baseline re-capture (the device snapshot source hash is pinned in `host/capture-u2-private-baseline.py`).
+
 ## Rules
 
 - Never `StrictHostKeyChecking=no`, default identities or an unpinned target.
