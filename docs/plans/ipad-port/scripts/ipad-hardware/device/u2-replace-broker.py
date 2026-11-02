@@ -143,8 +143,20 @@ def main(mode, old, new):
     if mode == "--inspect":
         print("U2_REPLACE inspect=ready %s->%s %s" % (old, new, before.decode().strip().replace("OK ", "")))
         return
-    if subprocess.run([LAUNCHCTL, "bootout", "system/" + old_label], stdout=subprocess.DEVNULL,
-                      stderr=subprocess.DEVNULL, timeout=10).returncode != 0 or loaded(old_label):
+    # launchctl bootout returns nonzero when a healthy daemon exits nonzero on
+    # its own SIGTERM handler even though the unload succeeded (a crash-looping
+    # daemon returned zero, which is why the earlier swap did not hit this). So
+    # the success test is that the service is actually gone, not the exit code;
+    # a service still loaded after the grace period is a real failure.
+    subprocess.run([LAUNCHCTL, "bootout", "system/" + old_label], stdout=subprocess.DEVNULL,
+                   stderr=subprocess.DEVNULL, timeout=10)
+    gone = not loaded(old_label)
+    for _ in range(20):
+        if gone:
+            break
+        time.sleep(0.25)
+        gone = not loaded(old_label)
+    if not gone:
         raise ValueError("old bootout failed")
     if journal_sha and sha(JOURNAL) != journal_sha:
         raise ValueError("journal changed during bootout")
