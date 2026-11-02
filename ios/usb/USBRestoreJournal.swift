@@ -77,30 +77,51 @@ struct USBRestoreRecord: Codable, Equatable {
     // before additive publication existed.
     let appendedFunctionName: String?
     let appendedFunctionConfiguration: Int?
+    // The exclusive / usbmux-preserving publication (parent plan U4) replaces a
+    // configuration's whole interface list rather than appending one function,
+    // so there is nothing to strip back to the original: restore pushes the
+    // journaled original bytes directly. These names are that replacement list,
+    // and they live beside appendedFunctionConfiguration (which records the
+    // configuration touched by either kind). Mutually exclusive with
+    // appendedFunctionName; both absent once the original is back. Absent
+    // entirely for a record written before interface-list publication existed.
+    let replacedConfigurationInterfaces: [String]?
 
     init(recipe: USBRestoreRecipe, phase: USBRestorePhase,
          leaseDeadlineUptime: UInt64, externalVerificationSHA256: String?,
          appendedFunctionName: String? = nil,
-         appendedFunctionConfiguration: Int? = nil) {
+         appendedFunctionConfiguration: Int? = nil,
+         replacedConfigurationInterfaces: [String]? = nil) {
         self.recipe = recipe
         self.phase = phase
         self.leaseDeadlineUptime = leaseDeadlineUptime
         self.externalVerificationSHA256 = externalVerificationSHA256
         self.appendedFunctionName = appendedFunctionName
         self.appendedFunctionConfiguration = appendedFunctionConfiguration
+        self.replacedConfigurationInterfaces = replacedConfigurationInterfaces
     }
 
     func validate() throws {
         try recipe.validate()
+        // The configuration is recorded for either edit kind, and exactly when
+        // one of them is present. The appended name and the replacement list are
+        // mutually exclusive, and the list is 1-32 distinct legal function names.
+        let hasEdit = appendedFunctionName != nil || replacedConfigurationInterfaces != nil
+        let listValid = replacedConfigurationInterfaces.map { names in
+            (1...32).contains(names.count) && names.allSatisfy(Self.isFunctionName) &&
+                Set(names).count == names.count
+        } ?? true
         guard leaseDeadlineUptime > 0,
               externalVerificationSHA256.map(USBRestoreRecipe.isDigest) ?? true,
               (phase == .restored) == (externalVerificationSHA256 != nil),
-              (appendedFunctionName != nil) == (appendedFunctionConfiguration != nil),
+              hasEdit == (appendedFunctionConfiguration != nil),
+              !(appendedFunctionName != nil && replacedConfigurationInterfaces != nil),
               appendedFunctionName.map(Self.isFunctionName) ?? true,
+              listValid,
               appendedFunctionConfiguration.map({ (1...255).contains($0) }) ?? true,
               // A phase that means the original is back on the bus cannot still
-              // owe a strip.
-              appendedFunctionName == nil ||
+              // owe a strip or a stored-bytes restore.
+              !hasEdit ||
                   (phase != .restored && phase != .awaitingVerification) else {
             throw USBRestoreJournalError.invalidRecipe
         }
@@ -216,7 +237,8 @@ struct USBRestoreJournal {
             leaseDeadlineUptime: deadline,
             externalVerificationSHA256: expected.externalVerificationSHA256,
             appendedFunctionName: expected.appendedFunctionName,
-            appendedFunctionConfiguration: expected.appendedFunctionConfiguration))
+            appendedFunctionConfiguration: expected.appendedFunctionConfiguration,
+            replacedConfigurationInterfaces: expected.replacedConfigurationInterfaces))
     }
 
     private func replace(_ expected: USBRestoreRecord,

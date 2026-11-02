@@ -26,6 +26,21 @@ protocol USBRestoreController {
     // inside one controller write. One write means one function-registration
     // race, the same cost as any other re-publication.
     func republishAppending(_ description: Data, function: String, configuration: Int) throws
+    // Build and check, without writing, a publication that replaces the given
+    // configuration's interface list (parent plan U4). Refused names/config cost
+    // nothing.
+    func validateSettingInterfaces(_ description: Data, interfaces: [String],
+                                   configuration: Int) throws
+    // Publish the journaled original with the given configuration's interface
+    // list replaced by exactly these names. Built from live controller state
+    // inside the backend, proven byte-equal to the journaled original before the
+    // edit, so restore still starts from the stock bytes.
+    func publishSettingInterfaces(_ description: Data, interfaces: [String],
+                                  configuration: Int) throws
+    // Restore a replaced-interface-list publication by pushing the exact stored
+    // original bytes through SetDescription. There is nothing to strip back to,
+    // so this never clones-and-compares the live description.
+    func restoreStored(_ description: Data) throws
 }
 
 extension USBRestoreController {
@@ -45,6 +60,20 @@ extension USBRestoreController {
     }
 
     func republishAppending(_ description: Data, function: String, configuration: Int) throws {
+        throw USBRestoreCoordinatorError.additivePublicationUnsupported
+    }
+
+    func validateSettingInterfaces(_ description: Data, interfaces: [String],
+                                   configuration: Int) throws {
+        throw USBRestoreCoordinatorError.additivePublicationUnsupported
+    }
+
+    func publishSettingInterfaces(_ description: Data, interfaces: [String],
+                                  configuration: Int) throws {
+        throw USBRestoreCoordinatorError.additivePublicationUnsupported
+    }
+
+    func restoreStored(_ description: Data) throws {
         throw USBRestoreCoordinatorError.additivePublicationUnsupported
     }
 }
@@ -207,6 +236,39 @@ struct USBRestoreCoordinator {
         }
     }
 
+    // Publish the original with one configuration's interface list replaced by
+    // exactly these names (parent plan U4: the exclusive / usbmux-preserving
+    // shape). Mirrors publishAdditive: validate first so a refused list writes
+    // nothing durable, record the replacement in the same write that moves to
+    // published so a crash either side still knows to restore, and on any
+    // controller failure restore. Restore pushes the journaled original bytes,
+    // because a replaced interface list cannot be stripped back to it.
+    func publishInterfaces(_ names: [String], configuration: Int) throws {
+        let prepared = try journal.read()
+        try prepared.recipe.validateAgainst(currentIdentity)
+        guard prepared.phase == .prepared,
+              clock.uptimeNanoseconds < prepared.leaseDeadlineUptime else {
+            throw USBRestoreCoordinatorError.leaseExpired
+        }
+        try controller.validateSettingInterfaces(prepared.recipe.originalDescription,
+                                                 interfaces: names,
+                                                 configuration: configuration)
+        try journal.transition(from: prepared, to: USBRestoreRecord(
+            recipe: prepared.recipe, phase: .published,
+            leaseDeadlineUptime: prepared.leaseDeadlineUptime,
+            externalVerificationSHA256: nil,
+            appendedFunctionConfiguration: configuration,
+            replacedConfigurationInterfaces: names))
+        do {
+            try controller.publishSettingInterfaces(prepared.recipe.originalDescription,
+                                                    interfaces: names,
+                                                    configuration: configuration)
+        } catch {
+            try? recover()
+            throw error
+        }
+    }
+
     // Extend the lease because the worker is demonstrably still alive.
     //
     // The lease bounds how long a publication may sit unrestored with a hung or
@@ -288,6 +350,13 @@ struct USBRestoreCoordinator {
     // can know. It cannot lose an interface either: a plain publication is
     // refused unless the live description already is the journaled original.
     private func restoreOriginal(_ record: USBRestoreRecord) throws {
+        // A replaced interface list cannot be stripped back to the original, so
+        // restore pushes the exact stored original bytes. This never republishes
+        // the trial shape and never appends anything.
+        if record.replacedConfigurationInterfaces != nil {
+            try recoveryController.restoreStored(record.recipe.originalDescription)
+            return
+        }
         guard let function = record.appendedFunctionName,
               let configuration = record.appendedFunctionConfiguration else {
             try recoveryController.publish(record.recipe.originalDescription)
@@ -451,7 +520,8 @@ struct USBRestoreCoordinator {
             leaseDeadlineUptime: record.leaseDeadlineUptime,
             externalVerificationSHA256: nil,
             appendedFunctionName: restored ? nil : record.appendedFunctionName,
-            appendedFunctionConfiguration: restored ? nil : record.appendedFunctionConfiguration
+            appendedFunctionConfiguration: restored ? nil : record.appendedFunctionConfiguration,
+            replacedConfigurationInterfaces: restored ? nil : record.replacedConfigurationInterfaces
         )
     }
 }

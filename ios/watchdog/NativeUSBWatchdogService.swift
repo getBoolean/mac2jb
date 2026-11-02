@@ -404,6 +404,39 @@ final class NativeUSBWatchdogService {
                                             configuration: try selectedConfiguration())
             return "published-additive"
         }
+        #endif
+        // Publish the journaled original with the host-selected configuration's
+        // interface list replaced by exactly the given names (parent plan U4:
+        // the usbmux-preserving / exclusive HID shape). Same lease, worker and
+        // journal guards as publish-hid. The journal keeps the unmodified
+        // original; restore pushes it back directly, because a replaced list
+        // cannot be stripped back to it.
+        #if MAC2JB_U4_INTERFACE_LIST
+        if command.hasPrefix("publish-interfaces ") {
+            let rest = command.dropFirst("publish-interfaces ".count)
+            let parts = rest.split(separator: " ", maxSplits: 1)
+            guard parts.count == 2, let requested = Int(parts[0]) else {
+                throw NativeUSBWatchdogError.invalidRequest
+            }
+            let names = parts[1].split(separator: ",").map(String.init)
+            guard publicationEnabled, worker >= 0, let selectedConfiguration else {
+                throw NativeUSBWatchdogError.disabled
+            }
+            // The configuration the request names must be the one the host has
+            // actually selected; the list is checked here so nothing malformed
+            // reaches the controller.
+            let selected = try selectedConfiguration()
+            guard requested == selected,
+                  !names.isEmpty, names.count <= 32, Set(names).count == names.count,
+                  names.allSatisfy(USBRestoreRecord.isFunctionName),
+                  let record = try currentRecord(), record.phase == .prepared else {
+                throw NativeUSBWatchdogError.invalidRequest
+            }
+            try coordinator.publishInterfaces(names, configuration: selected)
+            return "published-interfaces"
+        }
+        #endif
+        #if MAC2JB_U3_ADDITIVE_FUNCTION
         // Take the controller off and on the bus and publish nothing. The
         // publication above already cycled the bus, so the host read the
         // configuration descriptor before the appended interface had a class,

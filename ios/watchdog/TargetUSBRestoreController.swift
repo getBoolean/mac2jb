@@ -89,6 +89,64 @@ struct TargetUSBRestoreController: USBRestoreController {
         }
     }
 
+    // Publish the journaled original with the given configuration's interface
+    // list replaced by exactly these names (parent plan U4). The clone is proven
+    // byte-equal to the journaled original inside the shim before the list is
+    // replaced, so restore still starts from exactly the stock bytes.
+    func publishSettingInterfaces(_ description: Data, interfaces: [String],
+                                  configuration: Int) throws {
+        try settingInterfaces(description, interfaces: interfaces,
+                              configuration: configuration, publish: true)
+    }
+
+    func validateSettingInterfaces(_ description: Data, interfaces: [String],
+                                   configuration: Int) throws {
+        try settingInterfaces(description, interfaces: interfaces,
+                              configuration: configuration, publish: false)
+    }
+
+    private func settingInterfaces(_ description: Data, interfaces: [String],
+                                   configuration: Int, publish: Bool) throws {
+        guard let number = Int32(exactly: configuration), number > 0 else {
+            throw TargetUSBRestoreError.operation(MAC2JBUSBFunctionRejected, 0, 0)
+        }
+        var setStatus: Int32 = 0
+        var busStatus: Int32 = 0
+        let cStrings = interfaces.map { strdup($0) }
+        defer { cStrings.forEach { free($0) } }
+        var pointers: [UnsafePointer<CChar>?] = cStrings.map { UnsafePointer($0) }
+        let result = pointers.withUnsafeMutableBufferPointer { names in
+            description.withUnsafeBytes { bytes -> MAC2JBUSBResult in
+                let base = bytes.bindMemory(to: UInt8.self).baseAddress
+                return MAC2JBUSBCloneSetInterfacesOrPublish(
+                    base, description.count, controllerRegistryID,
+                    names.baseAddress, interfaces.count, number,
+                    publish, publish && cycleBus, &setStatus, &busStatus)
+            }
+        }
+        guard result == MAC2JBUSBSuccess else {
+            throw TargetUSBRestoreError.operation(result, setStatus, busStatus)
+        }
+    }
+
+    // Restore a replaced-interface-list publication by pushing the exact stored
+    // original bytes back through SetDescription. No clone-and-compare: the live
+    // description no longer resembles the original, so nothing can be stripped
+    // back to it; the stored bytes are the journaled original.
+    func restoreStored(_ description: Data) throws {
+        var setStatus: Int32 = 0
+        var busStatus: Int32 = 0
+        let result = description.withUnsafeBytes { bytes -> MAC2JBUSBResult in
+            let base = bytes.bindMemory(to: UInt8.self).baseAddress
+            return MAC2JBUSBSetStoredDescriptionOrPublish(
+                base, description.count, controllerRegistryID, cycleBus,
+                &setStatus, &busStatus)
+        }
+        guard result == MAC2JBUSBSuccess else {
+            throw TargetUSBRestoreError.operation(result, setStatus, busStatus)
+        }
+    }
+
     // Cycle the bus and publish nothing. Publication already cycles the bus,
     // so the host read the configuration descriptor before the appended
     // interface had a class, descriptors or endpoints; configuring it
