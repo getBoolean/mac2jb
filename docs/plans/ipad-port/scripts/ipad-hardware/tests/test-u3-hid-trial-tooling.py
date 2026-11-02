@@ -695,7 +695,8 @@ def options(**overrides):
     values = {"broker": "v13", "function": "hidcanary", "controller": 4294967297,
               "canary_path": "/var/jb/usr/local/bin/hid-canary",
               "canary_sha256": "a" * 64, "broker_sha256": "b" * 64,
-              "reports": None, "configuration": 5, "stock_interfaces": 3,
+              "reports": None, "interfaces": None, "configuration": 5,
+              "stock_interfaces": 3,
               "mode": "full"}
     values.update(overrides)
     return values
