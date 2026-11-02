@@ -13,14 +13,14 @@ execution_after: docs/plans/ipad-port/00-roadmap.md
 
 # iPad Hardware Feasibility Gates - Plan
 
-**Status, 2026-10-31:** U1 and U2 passed; **U3 (HID canary) is next**. Current device state: `docs/ipad/target-device-findings.md`. Gate evidence: `docs/ipad/hardware-matrix.md`. USB recovery mechanism and operation: `docs/ipad/usb-auto-recovery.md` and `docs/ipad/usb-recovery.md`. Product scope: every jailbroken/TrollStore USB-C iPad and iPhone, with the M2 iPad as reference device (see Scope Boundaries). Dated execution history was condensed out of this plan on 2026-10-31; it is in git.
+**Status, 2026-11-02:** U1 and U2 passed. **The userspace private-API HID approach (old U3/U4) is CLOSED: it does not enumerate on this controller.** Five device trials (composite, exclusive, usbmux-preserving, and the stock `Keyboard` name) all left the device off bus (`goOnBus: not on bus`) while device-side ABI calls returned `0x0`. The mechanism is now understood (`IOUSBDeviceController::createUSBDevice` matches each interface of the selected configuration to an **in-kernel IOKit driver** before bringing the config on bus; a userspace-configured function has nothing to bind), and the plan **pivots to a kernel HID-gadget-function approach** — the iOS equivalent of the macOS `usbgadget.kext` path — gated on a hard feasibility check first. Current device state: `docs/ipad/target-device-findings.md`. Gate evidence and the full verdict: `docs/ipad/hardware-matrix.md`. Recovery spine: `docs/ipad/usb-auto-recovery.md`, `docs/ipad/usb-recovery.md`. Product scope: every jailbroken/TrollStore USB-C iPad and iPhone, M2 iPad the reference device. Dated execution history is in git.
 
 ## Goal Capsule
 
-- **Objective:** Prove on the exact M2 iPad Pro target (`iPad14,5` / `J620AP` / `T8112`) running iPadOS 17.0 that direct USB HID is safe and that a reliable Switch-to-iPad IP path exists before the broader port proceeds.
-- **Means:** Build read-only inventory tools first, then an independently recoverable HID canary, then a network baseline and topology bakeoff (KTD1–KTD5).
-- **Authority:** The roadmap's R4–R8 are release gates; this plan may select implementation details but may not weaken them.
-- **Stop conditions:** Stop descriptor work on any unrecoverable USB-function loss. Stop dependent port plans if HID enumeration/restoration or network success thresholds fail after the bounded alternatives here.
+- **Objective:** Determine whether a jailbroken iPad can present a direct USB boot keyboard to an external host, now that the userspace private-API path is proven not to enumerate. The deciding question is no longer "can userspace configure a function" (it can; it just never comes on bus) but **"can the jailbreak's kernel primitives make `createUSBDevice` bind our HID function so the controller brings it on bus"** — and do so recoverably.
+- **Means:** Keep U1 (read-only inventory) and U2 (restoration journal + watchdog + Wi-Fi recovery spine) as the proven safety floor. Replace the userspace HID units with a **kernel-feasibility gate** (can third-party kernel code register/match a gadget function on this Dopamine rootless iPadOS 17.0 build at all), and only on its pass, a kernel HID-gadget-function unit, an enumeration/injection unit, then the unchanged network and capability units.
+- **Authority:** The roadmap's R4–R8 release gates still hold; this plan selects implementation details but may not weaken them. **This plan reverses the prior "no kernel patching" scope boundary** (see Scope Boundaries) because the feasibility evidence shows enumeration requires a kernel-side function match; the reversal is bounded by a feasibility gate and the U2 recovery spine.
+- **Stop conditions:** Stop if the kernel-feasibility gate (new U3) shows the jailbreak cannot register or match a gadget function without an unacceptable stability/brick risk. Stop descriptor/kernel work on any unrecoverable USB-function loss. Fall to the recorded alternatives (another controller/iOS build; accept infeasibility) rather than weakening the direct-HID requirement.
 
 ---
 
@@ -28,61 +28,65 @@ execution_after: docs/plans/ipad-port/00-roadmap.md
 
 ### Summary
 
-Create the smallest possible on-device probes needed to prove the target's USB-device controller, required entitlements, HID endpoints, restoration behavior, cable/power direction, and network topology. Produce versioned capability evidence that later plans consume instead of repeating private-API discovery.
+Having proven the smallest userspace probes and the restoration spine, determine whether direct iPad USB HID is reachable through a **kernel-resident gadget function** that the controller will enumerate, while never losing recoverability. Produce versioned capability evidence (or a signed infeasibility verdict) that later plans consume instead of repeating private-API or kernel discovery.
 
 ### Problem Frame
 
-The current USB backend targets macOS, depends on `usbgadget.kext`, and assumes `usb-drd*` controllers plus `IOUSBDeviceInterfaceUserClient`. Source inspection shows that the kext is not a HID function driver: it attaches to `IOUSBDeviceController` and forwards `SetDeviceConfiguration` from a kernel thread. In the demonstrated macOS path, controller publication creates a named generic `IOUSBDeviceInterface`; userspace then supplies its HID class tuple, descriptors, interrupt endpoint, and reports. Upstream describes the forwarding shim as an entitlement bypass, but equivalent authorized publication and arbitrary-name materialization remain to be proven on iPadOS.
+The userspace private-API path is **closed by evidence, not assumption.** iOS 17 constructs stock device-mode configurations in `configd`, sends them to `IOUSBDeviceController`, and exposes named functions through `IOUSBDeviceInterface`. mac2jb reproduced the full userspace sequence on the exact target — append/replace a function in the selected configuration, open the resulting `IOUSBDeviceInterface` user client, set HID class/subclass/protocol, append standard/nonstandard descriptors, create the interrupt pipe, commit — and **every call returned success, yet the controller never brought the configuration on bus.** Five trials (composite 7-function, exclusive, usbmux-preserving 3-function, and twice with the stock catalog name `Keyboard`) all ended `usb=absent` / `goOnBus: not on bus`.
 
-The evidence therefore supports a **credible implementation path, not proof of iPad HID**. iOS 17 still constructs stock device-mode configurations in `configd`, sends them to `IOUSBDeviceController`, and exposes their named functions through `IOUSBDeviceInterface` services. Historical iOS code publishes a description, opens a stock named interface, and changes its class/subclass/protocol. Current iOS-derived code demonstrates entitled live-description replacement and re-enumeration, while TrollStore 17.0 preserves arbitrary non-banned entitlements. The remaining unknowns include arbitrary-name materialization, the exact generic-interface ABI/authorization, endpoint creation on this controller, USB-C role negotiation with the Switch, and physical host acceptance. Those require the exact-device canary; public sources cannot honestly substitute for it.
+The mechanism is now established. Per Synacktiv's iOS USB reverse-engineering (verified against our evidence), **`IOUSBDeviceController::createUSBDevice` matches each interface of the selected configuration to an in-kernel IOKit driver before the controller goes on bus.** Stock functions enumerate because each has a kernel driver match *plus* a userspace backend (PTP+`ptpd`, audio+`audiomxd`); our canary supplied only a userspace user client with **no kernel driver to bind**, so `createUSBDevice` could not build the interface and the config never enumerated — exactly the `0x0`-everywhere / `missing=none`-served / not-on-bus signature we observed. The macOS reference (`macos_usb_gadget_poc`) defeated this same path by shipping a **kext** that bypasses the `createUSBDevice` entitlement/matching check and publishes from a kernel thread. No public project has made any jailbroken iOS device act as a USB device-mode HID keyboard to an external host.
+
+The port therefore depends on a question we have not answered and that the prior plan deliberately excluded: **can this jailbreak place kernel-side code that `createUSBDevice` will match for a HID function?** Modern iOS does not load third-party kexts; jailbreaks provide kernel read/write and patch-finding, not a kext loader. Whether Dopamine's primitives can register an in-kernel gadget function (or patch the matching path) on iPadOS 17.0 `21A329`, without an unacceptable brick/stability cost, is the load-bearing unknown this plan now exists to settle.
 
 | Evidence level | What is supported | What is not established |
 |---|---|---|
-| Current iOS 17 research | Device mode, `IOUSBDeviceController`, stock named function materialization, and the `IOUSBDeviceInterfaceUserClient` family remain present | Arbitrary generated functions plus the exact target’s selector compatibility and endpoint-operation authorization |
-| Historical iOS source | iOS can publish a description, open a named generic interface, and set its class/subclass/protocol | Modern endpoint creation, HID control handling, and restoration behavior |
-| ARM64 Mac proof of concept | Apple’s generic device-interface stack can create an arbitrary named function; userspace can turn it into a working HID keyboard | Physical-iPad controller access, USB-C role behavior, or Switch compatibility |
-| TrollStore/Dopamine boundary | iPadOS 17.0 can preserve `com.apple.private.usbdevice.setdescription`, IOKit exceptions, and other non-banned entitlements; a rootless package can host the broker | That the kernel accepts each entitlement and operation on the exact build |
+| mac2jb on-device trials (U1–U2 + 5 HID trials) | Read-only inventory; restoration/recovery with no reboot; the userspace HID ABI (open/class/descriptors/pipe/commit all `0x0`) | That a userspace-configured function ever enumerates — **refuted**: it never comes on bus |
+| Synacktiv iOS USB RE (2024), verified here | `createUSBDevice` matches each interface to an in-kernel driver before on-bus; stock functions have kernel + userspace backing | Exactly which registry/match the gadget core requires, and whether jailbreak kernel r/w can satisfy it |
+| macOS `usbgadget.kext` PoC | A kernel-resident shim bypassing the `createUSBDevice` entitlement/match and publishing from a kernel thread makes a HID keyboard enumerate on macOS | Any iOS port; iOS does not load third-party kexts, so the mechanism must be re-achieved via jailbreak kernel primitives |
+| Dopamine 3 rootless + TrollStore boundary | Entitlement preservation and a root launchd daemon (the broker); kernel read/write and patchfinder exist in the jailbreak | That third-party kernel code can register/match a USB gadget function, and that doing so is stable and recoverable on `21A329` |
 
 ### Requirements
 
-**Inventory and authorization**
+**Inventory, authorization, role (unchanged — U1/U2 spine)**
 
-- R1. A read-only probe must bind evidence to the exact `iPad14,5` / `J620AP` / `T8112` target tuple—`ProductType`, board identifier, SoC, Thunderbolt/USB 4 port family, iPadOS build, Dopamine build, TrollStore build, cable/capture-host identity—plus USB controller services, active controller, device-tree `configuration-string`, stock configuration source/digest, active function services, reconstructable restore inputs, user-client classes, and relevant entitlements without changing USB state.
-- R2. The signed probe must resolve private controller APIs at runtime and distinguish missing symbol/ABI, missing entitlement, missing service, user-client denial, controller-role mismatch, and unsupported operation outcomes. It must record the raw operation and `IOReturn` at every boundary instead of trusting the current backend's suppressed return values.
-- R3. Before any description mutation, a direct-cable role/power test must prove that the exact iPad/cable/host combination enters USB peripheral/device role, exposes the selected device-mode controller, and has an acceptable VBUS/charging state. Test both USB-C orientations and a known-good data cable; success while connected to a Mac does not substitute for the Switch-side role test.
+- R1. (Unchanged, **met**) A read-only probe binds evidence to the exact target tuple, controller services, device-tree `configuration-string`, stock configuration source/digest, function services, restore inputs, user-client classes, and entitlements without changing USB state.
+- R2. (Unchanged, **met**) The signed probe resolves private controller APIs at runtime and classifies missing-symbol/ABI, missing-entitlement, missing-service, user-client-denial, controller-role-mismatch, and unsupported-operation outcomes, recording the raw operation and `IOReturn` at every boundary.
+- R3. (Unchanged, **met**) A direct-cable role/power test proves the exact iPad/cable/host enters USB peripheral/device role on the selected controller with acceptable VBUS, in both orientations, Switch-side separately.
 
-**USB HID and restoration**
+**Restoration spine (unchanged — the safety floor for any on-device USB experiment)**
 
-- R4. A canary must present a standards-compliant boot keyboard with one interrupt-IN endpoint and emit bounded eight-byte reports.
-- R5. Before custom HID, the probe package must capture both the live and default controller descriptions when the runtime APIs permit, canonicalize their functions and scalar descriptors, prove a no-op republish round trip, and externally compare descriptors and stock functions. If live readback is unavailable, it may reconstruct from the exact build's configuration plist, device tree, and registry only after external equivalence passes. The first HID attempt appends HID to that recipe, with exclusive HID allowed only as a recorded fallback.
-- R6. Every mutation must persist and fsync a checksummed restore recipe before publishing the new configuration.
-- R7. A separately supervised watchdog/controller broker must be the sole controller writer and restore the recipe on timeout, crash, cancellation, disconnect, invalid state, service update, or service death.
-- R8. The canary must hold a short watchdog-issued mutation lease, send a neutral report on every controlled exit, and leave journal deletion solely to the watchdog after external restore verification.
-- R9. The function-publication gate passes only if appending a unique function name produces the matching generic `IOUSBDeviceInterface`, its user client opens with the least privilege required, and the class/descriptor/pipe operations needed for HID succeed on the exact device. A successful controller description call without that usable function path is a failure. `IOHIDUserDevice` is explicitly out of scope because it creates a local virtual HID device, not a USB peripheral function.
-- R10. The HID gate must capture descriptors and relevant HID control requests on a generic host before the Switch test. It must propagate every publication, interface-open, descriptor, endpoint, buffer, and commit error; a successful neutral write alone is not proof of enumeration or standards compliance.
+- R5. (Scope updated) Before any mutation, the broker captures/validates the stock description and proves a no-op republish round trip. The stored-description restore (push the exact journaled stock bytes) is proven to recover the device with **no reboot**, including after an interface-list publication. Kernel-side experiments inherit this spine unchanged.
+- R6. Every mutation persists and fsyncs a checksummed restore recipe before publishing.
+- R7. A separately supervised watchdog/broker is the sole controller writer and restores on timeout, crash, cancellation, disconnect, invalid state, service update, or service death — now extended to restore after a kernel-side experiment or a kernel fault, as far as a userspace broker can.
+- R8. The canary/injector holds a short watchdog-issued lease, sends a neutral report on every controlled exit, and leaves journal deletion to the watchdog after external restore verification.
 
-**Network and decision evidence**
+**Direct USB HID — kernel-gadget path (replaces the userspace HID requirements)**
 
-- R11. The test harness must measure wired Mac baseline and iPad candidate topology latency, jitter, loss, bind behavior, and full ns2jb outcomes under the same Switch conditions.
-- R12. Wi-Fi passes when its full-attempt success rate is no worse than 10 percentage points below the wired baseline, with a minimum of 20 attempts per topology and no new repeatable failure mode attributable to transport.
-- R13. If Wi-Fi fails R12, test at most two direct-cable alternatives: a composite HID/network configuration recognized by the Switch, then a documented supported adapter topology that preserves direct iPad HID.
-- R14. The final report must declare each gate pass/fail/inconclusive and include raw, redactable evidence sufficient to reproduce the decision.
-- R15. The canonical capability record must be signed locally by the probe package, bind its enrolled public-key fingerprint and schema version, and fail validation after any edit or when imported for a different target tuple.
+- R4. (Unchanged target) The device must present a standards-compliant boot keyboard with one interrupt-IN endpoint and emit bounded eight-byte reports — now via a kernel-matched function, not userspace configuration alone.
+- R9. (**Reframed**) The function-publication gate passes only if a HID function appended to the selected configuration is **matched by an in-kernel driver such that `createUSBDevice` brings the configuration on bus** and the host enumerates it. A userspace description/user-client call that returns success without the controller going on bus is a failure — this is the exact failure the five closed trials recorded. `IOHIDUserDevice` remains out of scope (local virtual HID, not a USB peripheral function).
+- R10. The HID gate must capture descriptors and relevant HID control requests on a generic host before the Switch test, and propagate every kernel-registration, match, enumeration, endpoint, and report-injection error. A neutral write without host-side enumeration is not proof. `boot_session`/lifecycle and the Wi-Fi SSH lifeline remain the observation channel while USB is off bus.
+- **R16 (new). Kernel-code feasibility and safety.** Before any kernel-side gadget work, prove on the exact build whether the jailbreak's kernel primitives can (a) register an in-kernel function/driver that `createUSBDevice` matches, or (b) patch the matching/entitlement path, and do so **reversibly and without persistent instability**. Record the exact kernel primitive used (Dopamine KRW/patchfinder surface), its iOS-build dependence, and a measured recovery (clean state after the kernel change is removed and after a reboot). A kernel change that cannot be cleanly removed, or that risks a boot loop, fails this gate.
+- **R17 (new). Report injection into the kernel function.** Once a kernel-matched HID function enumerates, prove a userspace path (held under the U2 lease) that sources the corrected 8-byte boot-keyboard reports to that function and that the host receives correct press/release sequences — so enumeration is not merely by a driver that sources its own reports.
+
+**Network and decision evidence (unchanged)**
+
+- R11–R15. (Unchanged) Wired/Wi-Fi topology measurement and thresholds, the bounded fallbacks, the pass/fail/inconclusive report with reproducible evidence, and the locally signed, tuple-bound capability record.
 
 ### Acceptance Examples
 
-- AE1. **Covers R1–R3.** Given an unsigned or under-entitled probe, when it observes controller arrival and attempts a read-only open, then it changes no state and reports the exact role, symbol, service, entitlement, or user-client boundary that failed.
-- AE2. **Covers R4–R10.** Given the entitled canary and a USB descriptor host, when it configures, types `MAC2JB`, and exits, then the host receives correct press/release reports and the original USB description is restored.
-- AE3. **Covers R6–R8.** Given an active canary, when its process is killed before cleanup, then the watchdog restores the journaled description and retains evidence until verification succeeds.
-- AE4. **Covers R11–R13.** Given identical Switch and host-profile conditions, when wired and Wi-Fi batches run, then the report selects Wi-Fi only if R12 passes; otherwise it records the bounded fallback results.
+- AE1. **Covers R1–R3.** (Met) An under-entitled probe changes no state and reports the exact failing boundary.
+- AE2. **Covers R4, R9, R10, R16, R17.** Given a kernel-matched HID function and a USB descriptor host, when the controller brings it on bus, the canary types `MAC2JB`, and exits, then the host receives correct press/release reports and the original USB description is restored — with the kernel change cleanly removed afterward.
+- AE3. **Covers R5–R8.** (Spine met) Given an active experiment, when its process is killed or a kernel change is backed out, the watchdog restores the journaled description and retains evidence until verification; a reboot path is always available as the ultimate restore.
+- AE4. **Covers R11–R13.** (Unchanged) Wired vs Wi-Fi batches select Wi-Fi only if R12 passes; otherwise the bounded fallbacks are recorded.
+- **AE5 (new). Covers R16.** Given the kernel-feasibility probe, when the jailbreak cannot register or match a gadget function (or cannot do so reversibly), then the gate records an evidenced infeasibility verdict and the plan stops at the recorded alternatives rather than forcing an unsafe kernel change.
 
 ### Scope Boundaries
 
-- The canary does not type a real bootstrap until descriptor restoration has passed on a generic USB host and then the Switch keyboard screen.
+- **Kernel work is now IN scope, reversing the prior boundary — bounded by a feasibility gate.** The 2026-10-28 plan excluded kernel patching and system-process injection ("the target should first use preserved entitlements plus the jailbreak service boundary"). That userspace boundary has been exhausted and proven insufficient (the `createUSBDevice` kernel-match requirement). This plan therefore permits jailbreak kernel read/write and gadget-function registration/patching **only** behind the R16 feasibility-and-safety gate, only on the reference device first, and only on top of the U2 recovery spine. It does **not** permit disabling AMFI broadly, persistent kernel patches that survive a clean removal, or anything that risks an unrecoverable device.
+- The canary does not type a real bootstrap until restoration has passed on a generic host and then the Switch keyboard screen.
 - This plan does not build the production UI, Node runtime, or homebrew features.
-- Kernel patching and system-process injection are not added: TrollStore documents that it cannot provide the latter, and the target should first use preserved entitlements plus the jailbreak service boundary.
-- Each gate is proven on the reference M2 iPad first. The owner's product goal is all jailbroken/TrollStore USB-C iPads and iPhones, with Lightning as a stretch goal. Code must therefore avoid baking in reference-device constants: product/build pins, the `AppleT8112USBXDCI` class, the function list and the owner map belong in a per-device profile captured on that device. Qualifying another model or iOS build means capturing its profile and rerunning U2 (normal, worker-kill, watchdog-kill) and the later gates on it. Hubs and general adapter configurations stay deferred; the single adapter topology permitted by R13 is only a bounded release-gate fallback.
-- A Mac relay, Bluetooth keyboard emulation, or separate USB microcontroller does not satisfy this plan's direct-iPad HID gate. If the bounded direct path fails, record the stop decision rather than silently changing the product requirement.
+- Each gate is proven on the reference M2 iPad (`iPad14,5` / `T8112`, iPadOS 17.0) first. Reference-device constants (product/build pins, `AppleT8112USBXDCI`, the function list, the owner map, **and now the exact kernel offsets/primitives**) belong in a per-device/per-build profile, never baked in. Qualifying another model/build means recapturing that profile and rerunning U2 and the HID gates there — **kernel work is especially build-specific**, so a kernel success on `21A329` does not transfer without re-derivation.
+- A Mac relay, Bluetooth keyboard emulation, or separate USB microcontroller does not satisfy the direct-iPad HID gate. If the bounded kernel path fails R16, record the stop decision (and the "another device/controller" alternative) rather than silently changing the product requirement.
 
 ---
 
@@ -90,50 +94,48 @@ The evidence therefore supports a **credible implementation path, not proof of i
 
 ### Key Technical Decisions
 
-- KTD1. **Separate observation from mutation.** `mac2jb-ios-probe` is read-only and safe to run before any recovery mechanism; `mac2jb-usbd-canary` is a separate entitled executable.
-- KTD2. **Prefer controller readback, then reconstruct.** Probe `IOUSBDeviceDescriptionCreateFromController`, `IOUSBDeviceDescriptionCreateFromDefaultsAndController`, related copy/serialization functions, and their CF types through runtime symbol resolution on the target. Journal canonical live/default manifests plus controller/source identity, hashes, boot session, and state. Fall back to build-pinned plist/device-tree/registry reconstruction only when readback is unavailable and external equivalence is demonstrated.
-- KTD3. **Prefer additive HID after a no-op round trip.** Reconstruct current functions, prove external descriptor/function equivalence, then append the generic interface. The upstream Mac POC warns that replacement can break network sharing until reboot.
-- KTD4. **Make restoration independently live and single-writer.** The hardware phase ships a minimal rootless probe package with a separately supervised watchdog/controller broker. It alone opens the controller for writes, owns journal creation/deletion, and survives the canary/main-service lifecycle.
-- KTD5. **Decide networking with exploit outcomes.** RTT alone is diagnostic; the pass/fail metric is the paired full-attempt success batch in R12.
-- KTD6. **Test the generic function path before HID semantics.** The macOS kext forwards controller configuration from kernel context; it does not implement HID or a function driver. On that stack, the backend appends an arbitrary name, waits for a generic `IOUSBDeviceInterface`, opens its user client, and configures class, descriptors, pipes, and reports from userspace. Reproduce both materialization and configuration on the iPad one operation at a time, and stop if the generic service, open, or endpoint path differs.
-- KTD7. **Do not copy a private ABI blindly.** Load private symbols dynamically, verify CF type IDs and signatures through harmless calls, and build an exact-device operation matrix. Historical vtable offsets, user-client type `123`, `PublishConfiguration`, `Poke`, random `USBDeviceFunction` names, and hard-coded `usb-drd*` order are observations to test, not iPad constants.
-- KTD8. **Reuse HID semantics, replace the transport.** Reuse the corrected 9-byte HID descriptor, 65-byte report descriptor, boot-keyboard tuple, bounded eight-byte validation, no-replay rule, and three neutral attempts as fixtures. Isolate the macOS `libusbd` backend, its destructive `RemoveAllConfigurations` behavior, ignored errors, `0xA0/255` power declaration, absent VID, and SmileBASIC-specific case encoding.
-- KTD9. **Republishing is an explicit state transition.** A recent iOS-derived implementation reads the controller's current description, marks its info dictionary with `AllowMultipleCreates`, calls `SetDescription`, and performs an off/on-bus cycle. Treat that as a candidate sequence to validate on the target; never omit the flag or re-enumeration merely because an API returned success.
+- KTD1. (Unchanged) **Separate observation from mutation.** The read-only probe is distinct from any entitled/kernel writer.
+- KTD2. (Unchanged) **Prefer controller readback, then reconstruct.** Journal canonical live/default manifests plus identity, hashes, boot session, state.
+- KTD4. (Unchanged, **proven**) **Restoration is independently live and single-writer.** The broker alone opens the controller, owns the journal, survives the canary lifecycle, and the stored-description restore recovers the device with no reboot. This spine now wraps kernel-side experiments.
+- KTD5. (Unchanged) **Decide networking with exploit outcomes**, not RTT alone.
+- **KTD3 — SUPERSEDED.** "Prefer additive HID after a no-op round trip" assumed userspace configuration of an appended function would enumerate. It does not: five trials proved the userspace path never brings the configuration on bus (see the U3 verdict in `docs/ipad/hardware-matrix.md`).
+- **KTD6 — SUPERSEDED / corrected.** "Test the generic function path before HID semantics" was done and passed at the ABI level (R9's open/configure) but the generic userspace function is never matched by the kernel, so it never enumerates. The decision is replaced by KTD10.
+- KTD7. (Unchanged) **Do not copy a private ABI blindly.** Resolve symbols dynamically, verify CF types, build an exact-device operation matrix — now extended to kernel offsets/primitives, which must be verified per build and never hard-coded.
+- KTD8. (Partly retained) **Reuse HID semantics, replace the transport.** The corrected 9-byte HID descriptor, 65-byte report descriptor, boot-keyboard tuple, 8-byte validation, no-replay rule, and neutral-report fixtures are reused as the reports a kernel-matched function must carry (R17). The macOS `libusbd` userspace backend remains isolated as reference.
+- **KTD10 (new). Enumeration requires a kernel function match; settle feasibility before building.** `createUSBDevice` binds each interface to an in-kernel driver. The achievable path is to make the jailbreak place/patch a kernel-side HID gadget function the controller will match (the iOS analogue of `usbgadget.kext`). Because iOS loads no third-party kexts, this means kernel read/write + patchfinder (Dopamine) registering a function or patching the match/entitlement path — a far larger, build-specific, higher-risk effort than userspace. **Gate it (R16) before investing in the function itself.**
+- **KTD11 (new). Keep the userspace broker as the recovery authority even for kernel experiments.** The kernel change is the smallest possible, is applied behind the broker's lease, and is removable; the broker + stored-description restore + the reboot path remain the layered safety net. Prefer a kernel change that is purely additive to the match path and self-reverts on removal.
 
 ### High-Level Technical Design
 
 ```mermaid
-sequenceDiagram
-  participant P as Read-only probe
-  participant W as Restore watchdog
-  participant C as HID canary
-  participant U as USB controller
-  participant H as Descriptor host or Switch
-  P->>U: Inspect services description and clients
-  P-->>W: Capability record
-  C->>W: Submit restore recipe and planned hash
-  W-->>C: Journal durable and lease granted
-  W->>U: Publish additive HID description
-  H-->>C: Enumerate interface
-  C->>H: Press and neutral reports
-  C->>W: Finish or cancel
-  W->>U: Restore captured functions
-  W->>U: Verify restore
-  W-->>C: Clear journal only after match
+flowchart TB
+  U1[U1 read-only inventory - PASS] --> U2[U2 restoration journal + watchdog - PASS]
+  U2 --> CLOSED[Userspace HID old U3/U4 - CLOSED: never enumerates]
+  U2 --> FEAS{U3 kernel-feasibility gate R16}
+  FEAS -->|cannot register/match or not reversible| STOP[Record infeasibility; alternatives: other device / accept]
+  FEAS -->|reversible kernel match possible| KFN[U4 kernel HID gadget function]
+  KFN --> ENUM{U5 host enumerates + reports inject R9 R10 R17}
+  ENUM -->|no| STOP
+  ENUM -->|yes| NET[U6 network topology R11-R13]
+  NET --> CAP[U7 capability contract / signed verdict]
 ```
 
 ```mermaid
-flowchart TB
-  BASE[Mac wired baseline] --> WIFI[iPad Wi-Fi batch]
-  WIFI --> PASS{R12 passes?}
-  PASS -->|yes| SELECT[Select Wi-Fi topology]
-  PASS -->|no| COMP[Composite HID/network canary]
-  COMP --> CPASS{Recognized and stable?}
-  CPASS -->|yes| SELECT2[Select composite topology]
-  CPASS -->|no| ADAPTER[One supported adapter topology]
-  ADAPTER --> APASS{Direct HID and R12 pass?}
-  APASS -->|yes| SELECT3[Select adapter topology]
-  APASS -->|no| STOP[Fail release gate]
+sequenceDiagram
+  participant B as Broker (U2, recovery authority)
+  participant K as Kernel gadget function (new)
+  participant C as HID report injector
+  participant U as USB controller (createUSBDevice)
+  participant H as Descriptor host or Switch
+  C->>B: Submit restore recipe + take lease
+  B->>K: Place/enable kernel function match (reversible, behind lease)
+  B->>U: Publish HID configuration
+  U->>K: createUSBDevice matches the function -> go on bus
+  H-->>C: Enumerate interface
+  C->>H: Press + neutral reports (R17)
+  C->>B: Finish or cancel
+  B->>K: Remove kernel function match
+  B->>U: Restore stock description; verify; reboot path if needed
 ```
 
 ### Output Structure
@@ -141,13 +143,12 @@ flowchart TB
 ```text
 ios/
   entitlements/
-  probes/
-  usb/
-  watchdog/
-packaging/ios/
-  probe-rootless/
+  probes/            # U1 (done)
+  usb/               # shim: description edits + stored-description restore (done)
+  watchdog/          # U2 broker (done)
+  kernel/            # NEW: kernel-feasibility probe + gadget-function match/patch
 scripts/
-  ipad-hardware/
+  ipad-hardware/     # host runners, recovery, enumeration capture (reused)
 docs/ipad/
   hardware-matrix.md
   usb-recovery.md
@@ -155,114 +156,90 @@ docs/ipad/
 
 ### Risks and Mitigations
 
-- An iPad USB misconfiguration can remove usbmux/network functions until reboot. Require a backup, verified reboot path, additive-first configuration, watchdog, and one mutation per reviewed step.
-- The service entitlement names may differ from Mac evidence. Record actual registry classes and open failures before editing entitlements; do not grant broad wildcard exceptions.
-- Possessing `com.apple.private.usbdevice.setdescription` may still leave the controller or function user client inaccessible. Use a staged entitlement matrix and stop at the first failing authorization layer instead of weakening AMFI or injecting into a system process.
-- The iPad can be USB host or peripheral, and controller behavior remains ProductType-specific. Bind evidence to `iPad14,5`, the exact cable, orientation, peer, controller ancestry, and observed data/power roles.
-- Existing iOS configurations are named driver compositions and some extended modes cannot coexist. Treat composite HID plus NCM as a separate experiment after Wi-Fi failure, not a descriptor-only assumption.
-- ns2jb has inherent variability. Use paired batches under controlled conditions and preserve attempt-level outcomes instead of declaring success from one run.
+- **Kernel work can brick the device or boot-loop it.** This is the dominant new risk and dwarfs the userspace risks. Mitigate: the R16 gate proves reversibility first; every kernel change is applied behind the broker lease and is removable; a reboot always restores stock USB (the custom description does not survive reboot); the owner is on hand for kernel experiments; never apply a persistent kernel patch.
+- **iOS loads no third-party kexts; the jailbreak may simply not expose a way to register/match a gadget function.** This may be a hard dead end. R16 is designed to discover it cheaply and record an evidenced infeasibility verdict rather than forcing an unsafe workaround.
+- **Kernel offsets/primitives are build-specific.** A success on iPadOS 17.0 `21A329` does not transfer. Keep all kernel specifics in a per-build profile; re-derive for any other device/build; treat the reference result as a single data point, not the product verdict.
+- **A kernel-matched function may source its own reports.** Enumeration alone is not the goal; R17 requires proving our 8-byte reports reach the host. Mitigate: design the function so a userspace injector (under the lease) supplies reports, and verify press/release on the host.
+- (Retained) A USB misconfiguration can remove usbmux/network functions until reboot; the audio re-registration race can hold the device off bus. Mitigate with the broker's owner-restart recovery (`recover-u2-over-wifi`, proven) and the reboot path.
+- (Retained) ns2jb variability; paired batches; preserve attempt-level outcomes.
 
 ### Sources and Research
 
-- **Focused feasibility note:** [`research/usb-hid-ipad-feasibility.md`](research/usb-hid-ipad-feasibility.md). It traces the controller, entitlement, generic-interface, endpoint, and physical proof boundaries and defines the exact-device evidence needed to close the claim.
-- **Repository evidence:** `sender.c`, `keyboard.c`, `commands.c`, `vendor/libusbd/src/plat/macos/impl.c`, `vendor/macos_usb_gadget_poc/`, `scripts/test-keyboard.cjs`, and `scripts/test-usb-controller-ownership.sh`. The kext matches only `IOUSBDeviceController` and forwards `SetDeviceConfiguration`; it does not implement HID. The userspace backend appends an arbitrary function name, finds the resulting generic `IOUSBDeviceInterface`, sets HID descriptors, creates the interrupt pipe, and writes reports. It still destructively removes stock configurations, suppresses several errors, and does not restore them.
-- **Apple-derived device-mode API header:** <https://github.com/nabla-c0d3/iphone-dataprotection/blob/master/ramdisk_tools/IOUSBDeviceControllerLib.h>. It documents controller arrival/off-bus operations plus live/default description creation; treat it as historical API evidence, not an iPadOS 17 ABI contract.
-- **Historical iOS use:** <https://github.com/nabla-c0d3/iphone-dataprotection/blob/master/ramdisk_tools/restored_external.c>. It publishes an iOS USB description, matches `IOUSBDeviceInterface` by `USBDeviceFunction`, and configures the private interface; it does not prove modern iPad HID or restoration.
-- **Current iOS stack research:** <https://www.synacktiv.com/publications/ios-a-journey-in-the-usb-networking-stack>. It traces `USBDeviceConfiguration.plist`, `USBDeviceConfiguration.bundle`, `IOUSBDeviceDescriptionCreateFromDefaultsAndController`, named driver binding, and iOS 17 NCM/RemoteXPC behavior.
-- **Recent iOS-derived read/republish example:** <https://github.com/Lakr233/vphone-cli/blob/main/VPhoneDaemon/Native/vphoned_usb.m>. It dynamically resolves the private API, reads the controller description, sets `AllowMultipleCreates`, republishes it, and cycles the bus in a virtual iPhone guest; this is current adjacent evidence, not physical-iPad proof.
-- **Adjacent ARM64 HID proof:** <https://github.com/shinyquagsire23/macos_usb_gadget_poc>. It implements a macOS HID keyboard with the related stack, identifies `com.apple.private.usbdevice.setdescription`, and warns about losing network functions until reboot or additive reconstruction.
-- **Target signing boundary:** <https://github.com/opa334/TrollStore>. It lists iOS 17.0 support and preservation of arbitrary entitlements, subject to platform restrictions and exact IOKit access.
-- **Entitlement continuity:** <https://newosxbook.com/ent.php?exec=configd&osVer=iOS18>. Current `configd` still carries `com.apple.private.usbdevice.setdescription`; this corroborates continued controller authorization but does not replace an iPadOS 17.0 signed probe.
-- **Adjacent-family device-tree clue:** <https://gist.github.com/zhuowei/bb8a56aaeab47af6e1fb826b8ca14168>. An extracted M1 iPad13,4/T8103 tree contains `usb-drd0`, high- and SuperSpeed port nodes, and `stdMuxPTPEthValIDA`; use it only to seed live discovery because it is neither the target SoC nor the target iPadOS 17 build.
-- **Exact-model port specification:** Apple identifies the 12.9-inch iPad Pro (6th generation) as an M2 model with a Thunderbolt/USB 4 port: <https://support.apple.com/en-us/111841>.
-- **Dual-role/power behavior:** <https://support.apple.com/en-ie/108894>. Apple documents iPad as a computer-connected device, accessory host, power source, and power sink, including connection-order-sensitive charging between USB-C iPads; the Switch data role still requires direct measurement.
+- **Settled verdict and evidence (this repo):** `docs/ipad/target-device-findings.md` (Current state), `docs/ipad/hardware-matrix.md` (U3 verdict + the five trials), `docs/ipad/usb-auto-recovery.md`.
+- **Current iOS stack RE (the mechanism):** <https://www.synacktiv.com/publications/ios-a-journey-in-the-usb-networking-stack> — `createUSBDevice` matches each interface of the selected configuration to an in-kernel IOKit driver before bringing the config on bus; stock functions are kernel-driver-backed. This is the basis for the pivot.
+- **Adjacent ARM64 HID proof (the mechanism to re-achieve on iOS):** <https://github.com/shinyquagsire23/macos_usb_gadget_poc> — a macOS kext that bypasses the `createUSBDevice` entitlement/match and publishes from a kernel thread; the explicit model for a kernel-resident gadget function.
+- **Dopamine (kernel primitives available on the target):** the jailbreak provides kernel read/write and patchfinding on iPadOS 17.0, not a kext loader; U3 must establish exactly what of the gadget match path those primitives can reach. (Capture the primitive surface on-device; do not assume.)
+- **Userspace references (now reference-only):** `vendor/libusbd/src/plat/macos/impl.c`, `vendor/macos_usb_gadget_poc/`, the historical iOS `restored_external.c`, and `IOUSBDeviceControllerLib.h` — the userspace ABI these describe is proven to open/configure a function but not to enumerate it on this controller.
+- **TrollStore/signing boundary:** <https://github.com/opa334/TrollStore> — entitlement preservation; it explicitly cannot provide system-process injection, which is why the kernel path goes through the jailbreak's KRW, not TrollStore.
 
 ---
 
 ## Implementation Units
 
-### U1. Add the read-only target inventory
+### U1. Read-only target inventory — DONE
 
-- **Goal:** Discover the exact USB services and authorization failures without mutating device state.
-- **Requirements:** R1–R3, R14
-- **Dependencies:** None
-- **Files:** `ios/probes/`, `ios/entitlements/`, `docs/ipad/hardware-matrix.md`, `ios/tests/ProbeResultTests.swift` (the U1 collection scripts were removed after U1 passed; they are in git history)
-- **Approach:** Record the exact target tuple; enumerate controller ancestry, stock function services, device-tree configuration, and configuration-plist digest; dynamically resolve candidate controller/description APIs; and serialize a redacted JSON capability record. Use separate minimally entitled probe builds to classify symbol, service, controller-open, function-open, and entitlement outcomes. Observe controller arrival while directly attached to a capture host and the Switch with both cable orientations, but validate that no set-description, command, off-bus, or registry-write path is reachable from this binary.
-- **Test scenarios:**
-  - Run without private entitlements and identify the first denied open while producing a valid report.
-  - Run with `com.apple.private.usbdevice.setdescription` and exact candidate IOKit user-client exceptions in separate signed builds; record each successfully opened class without a write call.
-  - Record controller arrival/absence, ancestry, VBUS/charging indication, and peer identity for a Mac capture host and the Switch, in both USB-C orientations.
-  - Resolve `CreateFromController`, `CreateFromDefaultsAndController`, `SetDescription`, `SendCommand`, `GoOffAndOnBus`, and related copy functions with `dlopen`/`dlsym`; verify CF type IDs through read-only calls and report missing/incompatible symbols without dereferencing guessed vtables.
-  - Redact serials, UDIDs, MACs, and filesystem roots from a shareable report while retaining hashes and versions.
-- **Verification:** Two consecutive probes produce equivalent target/controller/function topology, the peer-role matrix is complete, and an external capture shows no USB re-enumeration.
+- **Plan and evidence:** [`01-u1-readonly-inventory.md`](01-u1-readonly-inventory.md) — **PASS 2026-10-30** (R1–R3, U1-scoped R14). Unchanged by the pivot; the inventory and per-device profile remain the foundation.
 
-- **Plan and evidence:** [`01-u1-readonly-inventory.md`](01-u1-readonly-inventory.md) — **PASS 2026-10-30** for R1–R3 and the U1-scoped R14 decision, with the measured authorization, peer/role and evidence tables.
+### U2. Restoration journal and watchdog — DONE (now the safety spine for kernel work)
 
-### U2. Implement the restoration journal and watchdog
+- **Plan and evidence:** [`01-u2-usb-restoration.md`](01-u2-usb-restoration.md) — **PASS 2026-10-31**. The broker, journal, Wi-Fi SSH recovery tooling, owner-restart heal, and stored-description restore all recover the device with no reboot (proven again across the five HID trials). Mechanism: [`../../ipad/usb-auto-recovery.md`](../../ipad/usb-auto-recovery.md). **This unit is the precondition and recovery authority for every kernel experiment below** (R5–R8).
 
-- **Goal:** Make restoration provable before any custom descriptor is published.
-- **Requirements:** R5–R8
-- **Dependencies:** U1
-- **Files:** `ios/watchdog/`, `ios/usb/USBRestoreJournal.*`, `ios/tests/USBRestoreJournalTests.*`, `packaging/ios/probe-rootless/`
-- **Approach:** Build the minimal rootless probe package. Capture live and default descriptions through target-validated APIs when available; canonicalize device scalars, configurations, ordered function names, source hashes, controller identity, and external descriptor observations. If readback is unavailable, reconstruct a build-pinned recipe from the configuration plist, device tree, and registry and mark its provenance. Validate whether republishing requires `AllowMultipleCreates` and a bounded off/on-bus cycle. Implement atomic journal creation plus file/parent fsync, restrictive ownership, lifecycle states, leases, hash/boot/source validation, and idempotent external restore verification. The watchdog is the only journal/controller writer.
-- **Execution note:** Test journal corruption and watchdog restarts against fixtures before granting it a controller entitlement.
-- **Test scenarios:**
-  - Reject a truncated, wrong-owner, wrong-controller, or wrong-boot journal without applying its payload.
-  - Restore the same valid journal twice and report the second pass as already restored.
-  - Preserve a failed journal and surface recovery-required instead of deleting evidence.
-  - Kill and restart the watchdog, canary, and future main-service stand-in independently; prevent concurrent writers and restore on lease expiry.
-  - Compare live-readback, default-plus-controller, and externally captured descriptors; reject a reconstructed fallback whose functions or scalar descriptors differ.
-- **Verification:** The watchdog passes fixture fault injection and completes a no-op republish/restore against the captured live description, with usbmux/trust/charging and any active network function externally recovered.
+### U3 (old). Userspace additive HID canary — CLOSED (does not enumerate)
 
-- **Plan and evidence:** [`01-u2-usb-restoration.md`](01-u2-usb-restoration.md) — **PASS 2026-10-31**, with the trial-design comparison, lifecycle timings, registry census and passing-trial measurements. Mechanism: [`../../ipad/usb-auto-recovery.md`](../../ipad/usb-auto-recovery.md).
+- **Verdict:** CLOSED 2026-11-02. The userspace approach — append/replace a function, open its `IOUSBDeviceInterface` user client, configure HID from userspace — materializes the interface and returns `0x0` for every operation, but the controller never brings the configuration on bus (`goOnBus: not on bus`). Composite, exclusive, and usbmux-preserving shapes, and the invented and stock (`Keyboard`) names, all failed identically.
+- **Why:** `createUSBDevice` requires an in-kernel driver match per interface (see Problem Frame). A userspace-configured function has none. Full detail and the five trials: [`01-u3-hid-canary.md`](01-u3-hid-canary.md) (closure notice), `docs/ipad/hardware-matrix.md` (U3 verdict), `docs/ipad/target-device-findings.md`.
+- **Reusable outputs:** the HID fixtures/report descriptor, the host enumeration-capture tooling, the interface-list publish path, and the stored-description restore all carry forward to the kernel path.
 
-### U3. Build the additive HID canary
+### U4 (old). Exclusive / usbmux-preserving userspace HID — CLOSED (same failure)
 
-- **Goal:** Enumerate a direct USB boot keyboard and send bounded reports without losing original functions.
-- **Requirements:** R4–R10
+- **Verdict:** CLOSED 2026-11-02. Tested as part of the five trials; `[PTP, AppleUSBMux, Mac2jbCanary]` and `[AppleUSBMux, Keyboard]` failed exactly like the composite — not a count ceiling, not a name/definition problem. Same root cause and cross-references as above.
+
+### U3. Kernel-code feasibility and safety gate (NEW — the make-or-break unit)
+
+- **Goal:** Settle, on the exact build and before building any gadget function, whether the jailbreak's kernel primitives can make `createUSBDevice` match a HID function **reversibly and without persistent instability** — or produce an evidenced infeasibility verdict.
+- **Requirements:** R16, and R5–R8 (the experiment runs behind the broker/recovery spine)
 - **Dependencies:** U1, U2
-- **Plan:** ordered tasks in [`01-u3-hid-canary.md`](01-u3-hid-canary.md), which inherits R4–R10, AE2, AE3 and KTD1–KTD9 unchanged. It extends the U2 broker with an additive publication path, proves function materialization and each interface operation separately, captures enumeration on a generic host before the Switch, and reuses the repository's corrected HID fixtures.
-- **Verification:** unchanged — thirty generic-host cycles and thirty direct Switch keyboard-screen cycles pass with exact descriptor/report capture and externally verified restoration. A neutral endpoint write without host-side enumeration evidence does not count.
-
-### U4. Characterize exclusive-HID fallback only if needed
-
-- **Goal:** Determine whether exclusive HID can satisfy R4–R10 when additive configuration is unsupported.
-- **Requirements:** R4–R10, R14
-- **Dependencies:** U3 additive failure with retained evidence
-- **Files:** `ios/usb/`, `docs/plans/ipad-port/scripts/ipad-hardware/run-exclusive-canary.sh`, `docs/ipad/hardware-matrix.md`
-- **Approach:** Reuse the same journal/watchdog and constrain the experiment to one descriptor host followed by the Switch; record which standard functions disappear and require verified restoration after every cycle. Do not copy the current backend's remote-wakeup/power declaration, absent VID, or success-on-error behavior.
+- **Files:** `ios/kernel/` (new, read-only kernel-surface probe first), `docs/ipad/hardware-matrix.md`, per-build kernel profile under the device profile
+- **Approach:** First, a **read-only kernel-surface probe**: using the Dopamine KRW/patchfinder primitives available to a root context, locate the gadget-stack objects involved in `createUSBDevice`'s interface→driver matching (the function-driver registry/match table, the entitlement check the macOS kext bypassed) and record what is reachable, at what offsets, for this build only. Then design the *smallest* candidate change — register an in-kernel function match for one named HID interface, or patch the match/entitlement path — and evaluate it **in principle and in reversibility** before any live publication: can it be applied and cleanly removed from userspace via KRW, does removal restore the exact prior kernel state, and does a reboot restore stock regardless. Do not publish a HID configuration in this unit; this unit decides whether U4 is safe to attempt.
 - **Test scenarios:**
-  - Refuse to run without a valid captured description and armed watchdog.
-  - Restore after normal exit, SIGKILL, cable removal, and watchdog restart.
-  - Verify usbmux/charging/trust behavior returns to the captured state after each cycle.
-- **Verification:** Either the fallback passes the U3 cycle matrix or the USB gate is marked failed; it never becomes an unverified release path.
+  - Enumerate and record the reachable gadget-match structures and the entitlement check, bound to `21A329` offsets; confirm two reads agree and nothing is written.
+  - Apply and then remove the smallest candidate kernel change with the device idle (no publication); verify the kernel state is byte-identical before and after, and that USB/usbmux are unaffected.
+  - Force a worst case (remove the change while "applied", kill the applier) and confirm the broker + reboot path still restore stock.
+- **Verification:** Either (pass) a specific, reversible kernel primitive that can register/match a gadget function is identified and demonstrated to apply+remove cleanly with the device idle, recorded in the per-build profile; or (fail) an evidenced verdict that the jailbreak cannot do this safely, which stops the HID path and routes to the alternatives in the Definition of Done. **No HID publication happens until this gate passes.**
 
-### U5. Benchmark and select the network topology
+### U4. Kernel HID gadget function (NEW — only if U3 passes)
 
-- **Goal:** Prove an IP path that meets R11–R13 while the iPad remains the direct HID device.
-- **Requirements:** R11–R14
-- **Dependencies:** U3 or U4 USB gate pass
-- **Files:** `docs/plans/ipad-port/scripts/ipad-hardware/network-benchmark.cjs`, `docs/plans/ipad-port/scripts/ipad-hardware/run-ns2jb-batch.cjs`, `docs/ipad/hardware-matrix.md`, `scripts/tests/network-benchmark.test.cjs`
-- **Approach:** Automate attempt identifiers, route/interface capture, RTT/loss/jitter samples, host logs, 4/4 result, and failure stage. Run Mac wired baseline and iPad Wi-Fi first. Enter bounded alternatives only on R12 failure; for composite HID/network, inventory the exact build's permitted named configurations and treat iOS extended-mode switching, function coexistence, and Switch host support as separate gates.
+- **Goal:** Make a HID boot-keyboard function, appended to the selected configuration, be matched by the kernel so `createUSBDevice` brings the configuration on bus.
+- **Requirements:** R4, R9, R16
+- **Dependencies:** U3 pass
+- **Files:** `ios/kernel/`, `ios/usb/` (publish path, reused), `ios/watchdog/` (broker integration)
+- **Approach:** Using only the primitive U3 proved reversible, register/enable the kernel function match for one HID interface, behind the broker lease, then publish the HID configuration via the existing interface-list path and cycle the bus. Keep the change minimal and self-reverting on lease end/worker death; the broker removes the kernel match as part of restore. Observe on-bus via the device syslog (`handleUSBConnectionDone`, no `goOnBus: not on bus`) and the Wi-Fi lifeline, since usbmux may be absent during the hold.
 - **Test scenarios:**
-  - Produce deterministic summaries from synthetic pass, timeout, bind-failure, and partial-verification logs.
-  - Reject mixed host profiles, firmware, or Switch states within a comparison batch.
-  - Covers AE4. Select or reject each topology strictly from R12 and preserve raw attempt records.
-- **Verification:** The report names one topology passing R12 or fails the release gate with at least 20 comparable attempts per tested topology.
+  - With the kernel match enabled, publish `[AppleUSBMux, <HID>]`; confirm the controller goes on bus (the opposite of the five closed trials) and the host sees a device.
+  - Kill the injector / expire the lease mid-hold; confirm the broker removes the kernel match and the stored-description restore returns stock (owner-restart heal available for the audio race).
+  - Confirm the kernel match is gone after restore and after a reboot.
+- **Verification:** The controller brings the HID configuration on bus with the kernel match present, and does not when it is absent (the discriminating result), with restoration verified externally.
 
-### U6. Publish the capability contract
+### U5. Host enumeration and report injection (NEW — the HID proof)
 
-- **Goal:** Give later plans stable controller, entitlement, restoration, and network inputs.
+- **Goal:** Prove the host enumerates the kernel-matched keyboard and receives our `MAC2JB` reports, generic host first, then the Switch.
+- **Requirements:** R4, R9, R10, R17
+- **Dependencies:** U4 pass
+- **Files:** `scripts/ipad-hardware/` (enumeration capture + report reader, reused), `ios/kernel/` + `ios/usb/` (report injection path)
+- **Approach:** Reuse the host enumeration-capture and seized report-reader tooling. Capture descriptors (class 3 / subclass 1 / protocol 1, one interrupt-IN endpoint), then inject the corrected 8-byte boot-keyboard reports under the lease and compare the host-observed press/release sequence against the fixtures. Only after a generic host passes, repeat on the Switch keyboard screen.
+- **Test scenarios:** descriptor match; `MAC2JB` press/release captured on the Mac; non-enumeration and empty-capture reported distinctly (reusing the existing labels); Switch recognition.
+- **Verification:** 30 generic-host cycles and 30 Switch keyboard-screen cycles pass with exact descriptor/report capture and externally verified restoration; a neutral write without host enumeration does not count.
+
+### U6. Benchmark and select the network topology — UNCHANGED (renumbered from U5)
+
+- **Goal / Requirements / Approach / Verification:** as before (R11–R14); gated on the HID USB gate (now U5) passing. Files and test scenarios unchanged (`scripts/ipad-hardware/network-benchmark.cjs`, `run-ns2jb-batch.cjs`, `docs/ipad/hardware-matrix.md`).
+
+### U7. Publish the capability contract (or signed infeasibility verdict) — UPDATED (renumbered from U6)
+
+- **Goal:** Give later plans stable controller/entitlement/restoration/kernel/network inputs — or a signed, tuple-bound **infeasibility verdict** if U3 or U5 fails.
 - **Requirements:** R2, R14, R15
-- **Dependencies:** U1–U5
-- **Files:** `ios/hardware-capabilities.schema.json`, `docs/ipad/hardware-matrix.md`, `docs/ipad/usb-recovery.md`, `docs/plans/ipad-port/scripts/ipad-hardware/validate-report.cjs`, `docs/plans/ipad-port/scripts/ipad-hardware/sign-report.cjs`
-- **Approach:** Define a canonical schema containing hardware identity hashes, supported configuration mode, controller selection rules, required entitlement classes, watchdog guarantees, selected network topology, metrics, unsupported outcomes, signing algorithm, and enrolled public-key fingerprint. Generate a device-local report-signing key in root-owned probe state, export only its public key, sign canonical bytes, and bind later release imports to the enrolled fingerprint.
-- **Test scenarios:**
-  - Validate the accepted target record and reject missing restore or network evidence.
-  - Reject a record from a different device/OS build when used for a mutating test.
-  - Reject edited bytes, an unknown signing key, a substituted public key, a non-canonical encoding, or a signature from a different schema/target tuple.
-  - Render the redacted markdown summary from the machine record without leaking device identifiers.
-- **Verification:** Later child plans can authenticate and consume the schema without re-probing, trusting an unbound embedded key, or using hard-coded controller names.
+- **Dependencies:** U1–U6 (or U1–U3 plus a stop verdict)
+- **Approach / Test scenarios:** as before, extended so the canonical schema can also encode an evidenced "direct HID infeasible on this build via the kernel path" result (with the reason: no reversible kernel match) that later plans consume without re-probing. Signing, tuple binding, and redaction unchanged.
 
 ---
 
@@ -270,21 +247,24 @@ docs/ipad/
 
 | Gate | Pass condition |
 |---|---|
-| Read-only safety | Probe causes no re-enumeration and makes no configuration call |
-| Exact target and role | ProductType/board/port/cable/peer tuple is recorded; the iPad reaches peripheral/device role with the direct Switch path |
-| Authorization and ABI | Required symbols, controller calls, named-function binding, and user-client operations succeed only in the least-privileged broker; every denial/error is classified |
-| Additive or fallback HID | Generic capture validates descriptors/control behavior, then the Switch directly recognizes a boot keyboard and exact press-neutral reports arrive |
-| Restoration | 30 normal cycles plus every crash/disconnect case restore externally captured descriptors, usbmux/trust/charging, and prior network functions |
-| Network | R12 passes for one topology using comparable 20-attempt minimum batches |
-| Evidence | Canonical schema and enrolled-key signature validate, raw logs are retained locally, and shareable report is redacted |
+| Read-only safety (U1) | **Met.** Probe causes no re-enumeration and makes no configuration call |
+| Exact target and role (U1) | **Met.** Tuple recorded; iPad reaches peripheral/device role on the direct path |
+| Restoration spine (U2) | **Met.** Normal + crash/disconnect cases restore externally-captured descriptors, usbmux/trust/charging, and prior functions with no reboot |
+| Userspace HID (old U3/U4) | **CLOSED/failed.** Userspace-configured function never enumerates; recorded verdict, not a release path |
+| Kernel feasibility (U3, R16) | A specific reversible kernel primitive registers/matches a gadget function and applies+removes cleanly with the device idle — or an evidenced infeasibility verdict stops the path |
+| Kernel HID on bus (U4) | Controller goes on bus with the kernel match present and not without it; restoration verified |
+| HID enumeration + injection (U5) | Generic host then Switch enumerate the keyboard and receive exact `MAC2JB` press/neutral reports; restoration verified |
+| Network (U6) | R12 passes for one topology over comparable 20-attempt batches |
+| Evidence (U7) | Canonical schema + enrolled-key signature validate (capability record or signed infeasibility verdict); raw logs retained; shareable report redacted |
 
 ---
 
 ## Definition of Done
 
-- U1–U6 are complete and the signed target capability record is committed without private device identifiers.
-- Direct HID and restoration pass; otherwise the roadmap is explicitly stopped.
-- One network topology passes R12; otherwise the roadmap is explicitly stopped.
-- Recovery instructions have been exercised from a failed journal and a reboot/re-jailbreak.
-- No experimental broad entitlement, system injection, device dump, or raw identifier remains in the repository.
-- The final verdict remains “plausible but unproven” until the exact-device U1–U4 evidence passes; public adjacent proofs alone cannot advance dependent plans.
+- U1–U2 complete (done). The userspace HID verdict is recorded and cross-referenced.
+- **The R16 kernel-feasibility gate (U3) has a decision:** either a reversible kernel gadget-match primitive is proven and recorded in the per-build profile, or a signed infeasibility verdict is produced.
+- If feasible: U4 brings the kernel-matched HID on bus, U5 passes enumeration + `MAC2JB` injection on a generic host and the Switch, and restoration is exercised from a failed journal, a backed-out kernel change, and a reboot/re-jailbreak.
+- If infeasible: the plan stops at the recorded alternatives — **(a) try another controller/iOS build** (capture its profile, re-derive kernel specifics, rerun U2→U5), or **(b) accept that direct iPad HID is not reachable on this build** — and does not substitute a Mac relay / Bluetooth / microcontroller for the direct-HID requirement.
+- One network topology passes R12 (only on the feasible branch); otherwise the roadmap is explicitly stopped.
+- No broad entitlement, **persistent kernel patch**, system injection, device dump, or raw identifier remains in the repository; every kernel change is removable and is removed.
+- The final verdict remains "plausible but unproven" until the exact-device U3–U5 evidence passes; the macOS kext proof and the Synacktiv mechanism are supporting evidence, not substitutes for the on-device kernel result.

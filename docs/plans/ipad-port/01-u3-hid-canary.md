@@ -12,6 +12,8 @@ execution_after: docs/plans/ipad-port/01-hardware-feasibility.md
 
 # iPad HID Canary (U3) - Plan
 
+> **CLOSED 2026-11-02 — superseded by the kernel-gadget pivot.** This userspace additive/exclusive HID approach was executed in full and **does not enumerate** on this controller: across five device trials (composite, exclusive, usbmux-preserving, and the stock `Keyboard` name) the interface materializes and every userspace operation returns `0x0`, but the controller never brings the configuration on bus (`goOnBus: not on bus`). Root cause: `IOUSBDeviceController::createUSBDevice` matches each interface to an **in-kernel IOKit driver** before going on bus, and a userspace-configured function has none to bind. The parent plan has pivoted to a kernel HID-gadget-function approach (new U3 feasibility gate → U4/U5). See the verdict in [`../../ipad/hardware-matrix.md`](../../ipad/hardware-matrix.md) (U3 verdict + the five trials), [`../../ipad/target-device-findings.md`](../../ipad/target-device-findings.md) (Current state), and the refactored [parent plan](01-hardware-feasibility.md). **This document is retained as the record of what was tried and proven; its ordered tasks below are history, not live work.** Reusable from it: the HID fixtures/report descriptor, the host enumeration-capture tooling, the interface-list publish path, and the stored-description restore.
+
 Expands U3 of [the hardware feasibility plan](01-hardware-feasibility.md) into ordered tasks. The parent plan owns the Product Contract; this plan owns HOW. It inherits R4–R10, AE2, AE3 and KTD1–KTD9 unchanged, and adds no product scope.
 
 ## Goal Capsule
