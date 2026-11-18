@@ -434,6 +434,8 @@ sudo ipad2jb some text  # letters, digits and spaces
 
 it publishes a single "Standard Keyboard" usb configuration, answers the host's hid class requests, waits for the host to poll, types, and restores the saved stock usb description. an interrupted run is restored by the next one. on macos, approve the ipad as a keyboard (privacy & security) or the keystrokes are held back.
 
+`ios/ipad2jb/test.sh` runs the host tests on a mac: the whole run (`core.c`) against fake usb and keyboard devices, with sanitizers. `iokit.c` is the only part that talks to the iPad.
+
 ## help and source
 
 use the console and session logs to investigate failures.
