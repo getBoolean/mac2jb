@@ -113,6 +113,20 @@ MAC2JBUSBResult MAC2JBUSBCloneSetInterfacesOrPublish(
     int32_t *setReturn, int32_t *busReturn
 );
 
+// As MAC2JBUSBCloneSetInterfacesOrPublish, then reduce ConfigurationDescriptors
+// to that one edited configuration (Apple's single-configuration profile shape:
+// Description "Standard Keyboard", DefaultConfiguration true). The controller
+// starts the USB stack only after every function named in any configuration has
+// registered, so this leaves it waiting on exactly the listed functions.
+// Restore is MAC2JBUSBSetStoredDescriptionOrPublish of the journaled original.
+MAC2JBUSBResult MAC2JBUSBCloneSetSoleConfigurationOrPublish(
+    const uint8_t *livePlist, size_t livePlistLength,
+    uint64_t expectedControllerRegistryID,
+    const char *const *interfaceNames, size_t interfaceCount, int32_t configurationNumber,
+    bool publish, bool cycleBus,
+    int32_t *setReturn, int32_t *busReturn
+);
+
 // Restore an interface-list-replacement publication by pushing the exact stored
 // stock description bytes back through SetDescription, with no clone-and-compare
 // (the live description no longer resembles the original, so nothing can be
@@ -184,6 +198,15 @@ MAC2JBUSBResult MAC2JBUSBSetSoleFunctionInDescriptionData(
 // configuration are untouched. No IOKit; caller owns *out and frees it with
 // MAC2JBUSBFreeCapturedDescription.
 MAC2JBUSBResult MAC2JBUSBSetConfigurationInterfacesInDescriptionData(
+    const uint8_t *plist, size_t plistLength,
+    const char *const *interfaceNames, size_t interfaceCount,
+    int32_t configurationNumber, uint8_t **out, size_t *outLength
+);
+
+// Pure form of the sole-configuration edit, for host tests: replace the given
+// configuration's interface list, then keep only that configuration. Caller
+// owns *out and frees it with MAC2JBUSBFreeCapturedDescription.
+MAC2JBUSBResult MAC2JBUSBSetSoleConfigurationInDescriptionData(
     const uint8_t *plist, size_t plistLength,
     const char *const *interfaceNames, size_t interfaceCount,
     int32_t configurationNumber, uint8_t **out, size_t *outLength

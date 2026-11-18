@@ -19,16 +19,25 @@ private struct NativeClock: USBMonotonicClock {
 private final class NativeExternalVerifier: USBExternalRestoreVerifier {
     var suppliedProof: String?
     let snapshotProvider: () throws -> TargetUSBRestoreSnapshot
+    // The controller writes BcdUSBVersion and MPS0 itself from the negotiated
+    // link speed, so a correct restore can differ from the journal in exactly
+    // these two fields (2026-11-17: journaled 528/64 while the Switch 2 link
+    // was reporting USB 2, live 784/9 after it renegotiated SuperSpeed+). They
+    // may differ only when the live pair is the learned profile's healthy pair.
+    let healthySpeedFields: (bcdUSB: Int, mps0: Int)?
 
-    init(snapshotProvider: @escaping () throws -> TargetUSBRestoreSnapshot) {
+    init(snapshotProvider: @escaping () throws -> TargetUSBRestoreSnapshot,
+         healthySpeedFields: (bcdUSB: Int, mps0: Int)? = nil) {
         self.snapshotProvider = snapshotProvider
+        self.healthySpeedFields = healthySpeedFields
     }
 
     func verifyRestored(_ recipe: USBRestoreRecipe) throws -> String {
         let current = try snapshotProvider()
         try recipe.validateAgainst(current.identity)
         guard Self.originalFieldsMatch(current.liveDescription,
-                                       recipe.originalDescription),
+                                       recipe.originalDescription,
+                                       healthySpeedFields: healthySpeedFields),
               let suppliedProof,
               USBRestoreRecipe.isDigest(suppliedProof) else {
             throw NativeUSBWatchdogError.unavailable
@@ -36,13 +45,21 @@ private final class NativeExternalVerifier: USBExternalRestoreVerifier {
         return suppliedProof
     }
 
-    private static func originalFieldsMatch(_ live: Data, _ original: Data) -> Bool {
+    private static func originalFieldsMatch(_ live: Data, _ original: Data,
+                                            healthySpeedFields: (bcdUSB: Int, mps0: Int)? = nil) -> Bool {
         guard var current = (try? PropertyListSerialization.propertyList(
                     from: live, options: [], format: nil)) as? [String: Any],
-              let saved = (try? PropertyListSerialization.propertyList(
+              var saved = (try? PropertyListSerialization.propertyList(
                     from: original, options: [], format: nil)) as? [String: Any],
               saved["AllowMultipleCreates"] == nil else {
             return false
+        }
+        if let healthy = healthySpeedFields,
+           current["BcdUSBVersion"] as? Int == healthy.bcdUSB,
+           current["MPS0"] as? Int == healthy.mps0,
+           saved["BcdUSBVersion"] is Int, saved["MPS0"] is Int {
+            saved["BcdUSBVersion"] = healthy.bcdUSB
+            saved["MPS0"] = healthy.mps0
         }
         // Stock shape is the journaled original; allow only the replacement flag on top.
         if current.count == saved.count + 1 {
@@ -190,7 +207,9 @@ final class NativeUSBWatchdogService {
         self.restartOwner = restartOwner
         self.healPolicy = healPolicy
         self.deviceProfile = deviceProfile
-        verifier = NativeExternalVerifier(snapshotProvider: verificationSnapshotProvider)
+        verifier = NativeExternalVerifier(
+            snapshotProvider: verificationSnapshotProvider,
+            healthySpeedFields: deviceProfile.map { ($0.healthyBcdUSB, $0.healthyMPS0) })
         journal = USBRestoreJournal(directory: stateDirectory, expectedOwner: expectedOwner)
         coordinator = USBRestoreCoordinator(
             journal: journal, currentIdentity: currentIdentity,
@@ -412,8 +431,14 @@ final class NativeUSBWatchdogService {
         // original; restore pushes it back directly, because a replaced list
         // cannot be stripped back to it.
         #if MAC2JB_U4_INTERFACE_LIST
-        if command.hasPrefix("publish-interfaces ") {
-            let rest = command.dropFirst("publish-interfaces ".count)
+        // publish-sole-configuration takes the same arguments and also removes
+        // every other configuration, so the controller goes on bus once just
+        // the listed functions have registered (IOUSBDeviceController waits for
+        // every function named in any configuration).
+        let soleConfiguration = command.hasPrefix("publish-sole-configuration ")
+        if command.hasPrefix("publish-interfaces ") || soleConfiguration {
+            let rest = command.dropFirst(soleConfiguration ? "publish-sole-configuration ".count
+                                                           : "publish-interfaces ".count)
             let parts = rest.split(separator: " ", maxSplits: 1)
             guard parts.count == 2, let requested = Int(parts[0]) else {
                 throw NativeUSBWatchdogError.invalidRequest
@@ -432,8 +457,9 @@ final class NativeUSBWatchdogService {
                   let record = try currentRecord(), record.phase == .prepared else {
                 throw NativeUSBWatchdogError.invalidRequest
             }
-            try coordinator.publishInterfaces(names, configuration: selected)
-            return "published-interfaces"
+            try coordinator.publishInterfaces(names, configuration: selected,
+                                              soleConfiguration: soleConfiguration)
+            return soleConfiguration ? "published-sole-configuration" : "published-interfaces"
         }
         #endif
         #if MAC2JB_U3_ADDITIVE_FUNCTION

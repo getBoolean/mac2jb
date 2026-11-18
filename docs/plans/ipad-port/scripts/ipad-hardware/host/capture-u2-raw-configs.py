@@ -66,7 +66,7 @@ def parse(data):
     return configurations
 
 
-def capture():
+def read_configurations():
     checked(SOURCE, SOURCE_SHA256, 32 * 1024)
     checked(BINARY, BINARY_SHA256, 1024 * 1024)
     if not BASE.is_dir() or stat.S_IMODE(BASE.stat().st_mode) != 0o700:
@@ -75,11 +75,15 @@ def capture():
                             stderr=subprocess.DEVNULL, timeout=10)
     if result.returncode != 0 or len(result.stdout) > 128 * 1024:
         raise ValueError("raw descriptor helper unavailable")
-    configurations = parse(result.stdout)
+    return result.stdout, parse(result.stdout)
+
+
+def capture():
+    data, configurations = read_configurations()
     active = [item for item in configurations if item[0] == 5]
     if len(active) != 1:
         raise ValueError("active configuration absent")
-    return result.stdout, configurations, active[0]
+    return data, configurations, active[0]
 
 
 def main():

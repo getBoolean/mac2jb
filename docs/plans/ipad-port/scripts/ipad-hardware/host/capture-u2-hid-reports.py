@@ -23,7 +23,10 @@ Each outcome the reader distinguishes is surfaced verbatim and gets its own
 exit code, because a tooling fault read as a hardware result would turn "we
 could not look" into "the device sent nothing".
 
-Usage: --out-dir DIR [--name NAME] [--deadline N] [--max-reports N]
+Usage: --out-dir DIR [--name NAME] [--deadline N] [--max-reports N] [--open=shared]
+
+`--open=shared` listens without seizing (Input Monitoring is enough), so the
+keystrokes also reach the focused window. The default seizes the keyboard.
        [--vendor 0xNNNN --product 0xNNNN]
 Exit: 0 reports recorded, 2 none arrived before the deadline, 3 permission
 denied, 4 no matching device, 5 several matching devices, 6 no learned profile,
@@ -81,6 +84,35 @@ def identifiers(options, fetch=None):
         return None
 
 
+SIGNED_NAME = "u2-hid-report-reader-signed"
+SIGNING_IDENTIFIER = "dev.mac2jb.u2-hid-report-reader"
+
+
+def signing_identity():
+    """The SHA-1 of this Mac's first Apple Development code-signing identity, or None."""
+    try:
+        listing = subprocess.run(["/usr/bin/security", "find-identity", "-v", "-p", "codesigning"],
+                                 stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, timeout=30)
+    except (OSError, subprocess.SubprocessError):
+        return None
+    for line in listing.stdout.decode("utf-8", "replace").splitlines():
+        found = re.search(r"\b([0-9A-F]{40})\b\s+\"Apple Development: ", line)
+        if found:
+            return found.group(1)
+    return None
+
+
+def compile_reader(output):
+    with tempfile.TemporaryDirectory(prefix="u2-hid-reader-cache-", dir=BUILD) as cache:
+        result = subprocess.run(
+            ["/usr/bin/xcrun", "swiftc", str(SOURCE), "-o", str(output)],
+            stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, timeout=600,
+            env=dict(os.environ, CLANG_MODULE_CACHE_PATH=str(Path(cache) / "clang"),
+                     SWIFT_MODULE_CACHE_PATH=str(Path(cache) / "swift")))
+    if result.returncode != 0 or not Path(output).is_file():
+        raise ValueError("report reader compile failed")
+
+
 def reader_binary():
     """Compile once to a stable path under the ignored build tree.
 
@@ -93,23 +125,46 @@ def reader_binary():
     """
     digest = hashlib.sha256(SOURCE.read_bytes()).hexdigest()
     BUILD.mkdir(mode=0o700, parents=True, exist_ok=True)
-    info = BUILD.lstat()
+    info = BUILD.resolve().lstat()
     # Shared with the other host tools' artifacts, so the mode is not pinned;
     # what matters is that it is a real directory this user owns and that no
     # other user can write a binary into it.
     if (not stat.S_ISDIR(info.st_mode) or info.st_uid != os.getuid() or
             stat.S_IMODE(info.st_mode) & 0o022):
         raise ValueError("unsafe report reader build directory")
-    binary = BUILD / ("u2-hid-report-reader-" + digest[:16])
-    if not binary.is_file():
-        with tempfile.TemporaryDirectory(prefix="u2-hid-reader-", dir=BUILD) as cache:
-            result = subprocess.run(
-                ["/usr/bin/xcrun", "swiftc", str(SOURCE), "-o", str(binary)],
-                stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, timeout=600,
-                env=dict(os.environ, CLANG_MODULE_CACHE_PATH=str(Path(cache) / "clang"),
-                         SWIFT_MODULE_CACHE_PATH=str(Path(cache) / "swift")))
-        if result.returncode != 0 or not binary.is_file():
-            raise ValueError("report reader compile failed")
+    identity = signing_identity()
+    if identity is None:
+        # No signing identity: the unsigned binary's identity is its bytes, so
+        # the source digest goes in the name and a changed source needs the
+        # Input Monitoring grant again.
+        # Resolved, because macOS keys the Input Monitoring grant to the binary's real path.
+        binary = BUILD.resolve() / ("u2-hid-report-reader-" + digest[:16])
+        if not binary.is_file():
+            compile_reader(binary)
+    else:
+        # Signed with a stable identity and identifier at one fixed path, so
+        # TCC matches the grant by its code requirement, not its bytes: a
+        # rebuilt reader keeps the owner's single Input Monitoring grant. The
+        # source digest is kept beside it to decide when to rebuild.
+        binary = BUILD.resolve() / SIGNED_NAME
+        stamp = BUILD.resolve() / (SIGNED_NAME + ".source-sha256")
+        current = stamp.read_text().strip() if stamp.is_file() else ""
+        if not binary.is_file() or current != digest:
+            with tempfile.TemporaryDirectory(prefix="u2-hid-reader-", dir=BUILD) as staging:
+                built = Path(staging) / SIGNED_NAME
+                compile_reader(built)
+                signed = subprocess.run(
+                    ["/usr/bin/codesign", "--force", "--sign", identity,
+                     "--identifier", SIGNING_IDENTIFIER, "--timestamp=none", str(built)],
+                    stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, timeout=120)
+                verified = subprocess.run(["/usr/bin/codesign", "--verify", "--strict", str(built)],
+                                          stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                                          timeout=60)
+                if signed.returncode != 0 or verified.returncode != 0:
+                    raise ValueError("report reader signing failed (%s)" %
+                                     signed.stderr.decode("utf-8", "replace").strip()[-160:])
+                os.replace(built, binary)
+            stamp.write_text(digest + "\n")
     reader = binary.lstat()
     if (not stat.S_ISREG(reader.st_mode) or reader.st_uid != os.getuid() or
             stat.S_IMODE(reader.st_mode) & 0o022):
@@ -119,7 +174,8 @@ def reader_binary():
 
 def parse(argv):
     options = {"name": "reports.txt", "deadline": DEFAULT_DEADLINE,
-               "max-reports": DEFAULT_MAXIMUM, "vendor": None, "product": None}
+               "max-reports": DEFAULT_MAXIMUM, "vendor": None, "product": None,
+               "open": "seize"}
     for item in argv:
         name, _, value = item.partition("=")
         if not name.startswith("--") or not value:
@@ -135,6 +191,8 @@ def parse(argv):
     options["name"] = str(options["name"])
     if not NAME.fullmatch(options["name"]):
         raise ValueError("the reports file name must be one plain component")
+    if options["open"] not in ("seize", "shared"):
+        raise ValueError("--open takes seize or shared")
     if not 1 <= options["deadline"] <= 600 or not 1 <= options["max-reports"] <= 4096:
         raise ValueError("the deadline and the report maximum are both bounded")
     return options
@@ -157,7 +215,8 @@ def main(argv):
     binary = reader_binary()
     result = subprocess.run(
         [str(binary), "0x%04x" % pair[0], "0x%04x" % pair[1],
-         str(options["deadline"]), str(options["max-reports"]), str(target)],
+         str(options["deadline"]), str(options["max-reports"]), str(target)] +
+        (["--shared"] if options["open"] == "shared" else []),
         stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
         timeout=options["deadline"] + 60)
     text = result.stdout.decode("ascii", "replace")

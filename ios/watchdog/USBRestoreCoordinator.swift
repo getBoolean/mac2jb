@@ -37,6 +37,13 @@ protocol USBRestoreController {
     // edit, so restore still starts from the stock bytes.
     func publishSettingInterfaces(_ description: Data, interfaces: [String],
                                   configuration: Int) throws
+    // The same interface-list publication with every other configuration
+    // removed, so the controller waits only on the listed functions before it
+    // goes on bus. Restore is the same stored-bytes republish.
+    func validateSettingSoleConfiguration(_ description: Data, interfaces: [String],
+                                          configuration: Int) throws
+    func publishSettingSoleConfiguration(_ description: Data, interfaces: [String],
+                                         configuration: Int) throws
     // Restore a replaced-interface-list publication by pushing the exact stored
     // original bytes through SetDescription. There is nothing to strip back to,
     // so this never clones-and-compares the live description.
@@ -70,6 +77,16 @@ extension USBRestoreController {
 
     func publishSettingInterfaces(_ description: Data, interfaces: [String],
                                   configuration: Int) throws {
+        throw USBRestoreCoordinatorError.additivePublicationUnsupported
+    }
+
+    func validateSettingSoleConfiguration(_ description: Data, interfaces: [String],
+                                          configuration: Int) throws {
+        throw USBRestoreCoordinatorError.additivePublicationUnsupported
+    }
+
+    func publishSettingSoleConfiguration(_ description: Data, interfaces: [String],
+                                         configuration: Int) throws {
         throw USBRestoreCoordinatorError.additivePublicationUnsupported
     }
 
@@ -243,16 +260,26 @@ struct USBRestoreCoordinator {
     // published so a crash either side still knows to restore, and on any
     // controller failure restore. Restore pushes the journaled original bytes,
     // because a replaced interface list cannot be stripped back to it.
-    func publishInterfaces(_ names: [String], configuration: Int) throws {
+    //
+    // soleConfiguration also removes every other configuration (Apple's
+    // standardKeyboard shape). The journal record is the same: restore pushes
+    // the journaled original either way.
+    func publishInterfaces(_ names: [String], configuration: Int,
+                           soleConfiguration: Bool = false) throws {
         let prepared = try journal.read()
         try prepared.recipe.validateAgainst(currentIdentity)
         guard prepared.phase == .prepared,
               clock.uptimeNanoseconds < prepared.leaseDeadlineUptime else {
             throw USBRestoreCoordinatorError.leaseExpired
         }
-        try controller.validateSettingInterfaces(prepared.recipe.originalDescription,
-                                                 interfaces: names,
-                                                 configuration: configuration)
+        let original = prepared.recipe.originalDescription
+        if soleConfiguration {
+            try controller.validateSettingSoleConfiguration(original, interfaces: names,
+                                                            configuration: configuration)
+        } else {
+            try controller.validateSettingInterfaces(original, interfaces: names,
+                                                     configuration: configuration)
+        }
         try journal.transition(from: prepared, to: USBRestoreRecord(
             recipe: prepared.recipe, phase: .published,
             leaseDeadlineUptime: prepared.leaseDeadlineUptime,
@@ -260,9 +287,13 @@ struct USBRestoreCoordinator {
             appendedFunctionConfiguration: configuration,
             replacedConfigurationInterfaces: names))
         do {
-            try controller.publishSettingInterfaces(prepared.recipe.originalDescription,
-                                                    interfaces: names,
-                                                    configuration: configuration)
+            if soleConfiguration {
+                try controller.publishSettingSoleConfiguration(original, interfaces: names,
+                                                               configuration: configuration)
+            } else {
+                try controller.publishSettingInterfaces(original, interfaces: names,
+                                                        configuration: configuration)
+            }
         } catch {
             try? recover()
             throw error

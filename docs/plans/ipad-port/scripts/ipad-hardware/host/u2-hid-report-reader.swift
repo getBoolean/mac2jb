@@ -52,6 +52,20 @@ private let usage = Int(kHIDUsage_GD_Keyboard)
 // lets the seize happen before the first keystroke rather than after it.
 private let arrivalPollSeconds = 0.1
 
+// Opt-in listen-only mode (`--shared` as a sixth argument). Input Monitoring
+// covers listening to a keyboard but not seizing one: on 2026-11-17 the grant
+// was in place and IOHIDManagerOpen succeeded, yet the seize was refused. A
+// shared open records the same reports, and the keystrokes ALSO reach the
+// focused window, so it is never the default and must be asked for.
+private var sharedOpen = false
+private var openOptions: IOOptionBits {
+    IOOptionBits(sharedOpen ? kIOHIDOptionsTypeNone : kIOHIDOptionsTypeSeizeDevice)
+}
+// Which step refused and its raw IOReturn, printed with any refusal so a
+// permission failure names its cause instead of being inferred.
+private var refusalStage = "none"
+private var refusalStatus: IOReturn = 0
+
 private enum Outcome: String {
     case recorded = "reports-recorded"
     case silent = "no-reports"
@@ -83,6 +97,7 @@ private struct Result {
     let reports: [String]
     let malformed: Int
     let deadlineReached: Bool
+    var leadingNeutral = 0
 }
 
 private func hexLine(_ bytes: [UInt8]) -> String {
@@ -114,6 +129,12 @@ private final class ReportCollector {
     let maximum: Int
     var reports: [String] = []
     var malformed = 0
+    // All-zero reports seen before the first key press. The canary offers
+    // neutral reports until the host polls and for a settle period after, so
+    // keeping them would fill the bound before the typed sequence starts. They
+    // are counted, not recorded: the count shows the host was polling, and
+    // everything from the first non-neutral report on is kept as received.
+    var leadingNeutral = 0
 
     init(maximum: Int) { self.maximum = maximum }
 
@@ -123,6 +144,10 @@ private final class ReportCollector {
         guard reports.count < maximum else { return }
         guard bytes.count == reportLength else {
             malformed += 1
+            return
+        }
+        if reports.isEmpty && bytes.allSatisfy({ $0 == 0 }) {
+            leadingNeutral += 1
             return
         }
         reports.append(hexLine(bytes))
@@ -166,6 +191,7 @@ private func capture(
     // Asked before the device is touched at all: with the grant refused there
     // is nothing to seize reports with, and saying so is the whole answer.
     guard inputMonitoringGranted() else {
+        refusalStage = "access-check"
         return Result(outcome: .permission, reports: [], malformed: 0,
                       deadlineReached: false)
     }
@@ -181,6 +207,7 @@ private func capture(
         IOHIDManagerClose(manager, IOOptionBits(kIOHIDOptionsTypeNone))
     }
     let opened = IOHIDManagerOpen(manager, IOOptionBits(kIOHIDOptionsTypeNone))
+    if opened != kIOReturnSuccess { refusalStage = "manager-open"; refusalStatus = opened }
     if isPermissionDenied(opened) {
         return Result(outcome: .permission, reports: [], malformed: 0,
                       deadlineReached: false)
@@ -201,7 +228,11 @@ private func capture(
                       deadlineReached: true)
     }
     // Seized, never shared: see the file comment. A refusal here ends the run.
-    let seize = IOHIDDeviceOpen(device, IOOptionBits(kIOHIDOptionsTypeSeizeDevice))
+    let seize = IOHIDDeviceOpen(device, openOptions)
+    if seize != kIOReturnSuccess {
+        refusalStage = sharedOpen ? "device-open-shared" : "device-open-seize"
+        refusalStatus = seize
+    }
     if isPermissionDenied(seize) {
         return Result(outcome: .permission, reports: [], malformed: 0,
                       deadlineReached: false)
@@ -214,7 +245,7 @@ private func capture(
     let buffer = UnsafeMutablePointer<UInt8>.allocate(capacity: reportLength)
     defer {
         buffer.deallocate()
-        IOHIDDeviceClose(device, IOOptionBits(kIOHIDOptionsTypeSeizeDevice))
+        IOHIDDeviceClose(device, openOptions)
     }
     IOHIDDeviceRegisterInputReportCallback(
         device,
@@ -248,15 +279,21 @@ private func capture(
                       ? silentOutcome(accessGranted: inputMonitoringGranted())
                       : .recorded,
                   reports: collector.reports, malformed: collector.malformed,
-                  deadlineReached: reached)
+                  deadlineReached: reached, leadingNeutral: collector.leadingNeutral)
 }
 
 private func summary(_ result: Result) -> [String] {
     var lines = ["\(prefix) outcome=\(result.outcome.rawValue) " +
                  "reports=\(result.reports.count) " +
                  "malformed=\(result.malformed) " +
-                 "seized=\(result.outcome.seized ? "yes" : "no") " +
+                 "leading-neutral=\(result.leadingNeutral) " +
+                 "seized=\(result.outcome.seized && !sharedOpen ? "yes" : "no") " +
+                 "open=\(sharedOpen ? "shared" : "seize") " +
                  "deadline=\(result.deadlineReached ? "reached" : "not-reached")"]
+    if refusalStage != "none" {
+        lines.append("\(prefix) refused-stage=\(refusalStage) " +
+                     String(format: "status=0x%08x", UInt32(bitPattern: refusalStatus)))
+    }
     if result.outcome == .permission {
         // What the operator has to grant, and for which binary. macOS also
         // attributes the request to the application that launched this binary,
@@ -317,8 +354,13 @@ private func selfTest() {
     collector.append([UInt8](repeating: 0, count: reportLength))
     collector.append([1, 2, 3])
     precondition(collector.malformed == 1)
-    precondition(collector.reports.count == 1)
+    precondition(collector.reports.isEmpty && collector.leadingNeutral == 1,
+                 "neutral reports before the first key press are counted, not recorded")
     collector.append([UInt8](repeating: 1, count: reportLength))
+    collector.append([UInt8](repeating: 0, count: reportLength))
+    precondition(collector.reports.count == 2 &&
+                 collector.reports[1] == hexLine([UInt8](repeating: 0, count: reportLength)),
+                 "after the first key press a neutral report is a key release and is kept")
     collector.append([UInt8](repeating: 2, count: reportLength))
     precondition(collector.reports.count == 2, "the maximum is a bound, not a hint")
     // The permission refusal says what to grant and for which binary.
@@ -349,10 +391,14 @@ private func selfTest() {
 }
 
 private func run() -> Int32 {
-    let arguments = Array(CommandLine.arguments.dropFirst())
+    var arguments = Array(CommandLine.arguments.dropFirst())
     if arguments == ["--self-test"] {
         selfTest()
         return 0
+    }
+    if arguments.count == 6, arguments[5] == "--shared" {
+        sharedOpen = true
+        arguments.removeLast()
     }
     guard arguments.count == 5,
           let vendor = parseIdentifier(arguments[0]),

@@ -331,7 +331,31 @@ private final class USBMonitor {
             "type": "ready",
             "windowSeconds": Int(duration),
         ])
-        let runResult = CFRunLoopRunInMode(.defaultMode, duration, false)
+        // SIGTERM ends the observation early instead of killing the process:
+        // the run loop stops and the normal end-of-window path below still
+        // records final presence and emits every buffered event. A caller that
+        // already knows the outcome (the HID runner waits for USB to return)
+        // therefore does not have to sit out the whole window.
+        var stopRequested = false
+        signal(SIGTERM, SIG_IGN)
+        let stopSource = DispatchSource.makeSignalSource(signal: SIGTERM, queue: .main)
+        let runLoop = CFRunLoopGetCurrent()
+        stopSource.setEventHandler {
+            stopRequested = true
+            CFRunLoopStop(runLoop)
+        }
+        stopSource.resume()
+        var runResult = CFRunLoopRunResult.timedOut
+        let deadline = Date().addingTimeInterval(duration)
+        // Run in short slices so the main queue (and the signal handler on it)
+        // is serviced even if a slice returns without the stop flag set.
+        while !stopRequested {
+            let remaining = deadline.timeIntervalSinceNow
+            if remaining <= 0 { runResult = .timedOut; break }
+            runResult = CFRunLoopRunInMode(.defaultMode, min(remaining, 0.25), false)
+            if runResult != .timedOut && runResult != .handledSource && !stopRequested { break }
+        }
+        stopSource.cancel()
         record("arrived", devices: drain(matchedIterator))
         record("terminated", devices: drain(terminatedIterator))
         let stillPresent = try currentDevices().contains {
@@ -340,7 +364,9 @@ private final class USBMonitor {
         if !stillPresent {
             recordSyntheticEvent("missing-at-window-end", target: target)
         }
-        let windowCompleted = runResult == .timedOut
+        // A requested stop is a complete observation of the period the caller
+        // asked about; only a run loop that ended for any other reason is not.
+        let windowCompleted = stopRequested || runResult == .timedOut
         if !windowCompleted {
             recordSyntheticEvent("observation-window-incomplete", target: target)
         }
@@ -367,6 +393,7 @@ private final class USBMonitor {
             "lifecycleObservationPassed": lifecyclePassed,
             "observationScope": observationScope,
             "schemaVersion": schemaVersion,
+            "stopReason": stopRequested ? "requested" : "window",
             "type": "summary",
             "windowCompleted": windowCompleted,
         ])

@@ -106,8 +106,11 @@ IDENTIFIER_SHAPES = (re.compile(r"\b[0-9A-Fa-f]{8}-[0-9A-Fa-f]{16}\b"),
                      re.compile(r"\b[0-9A-Fa-f]{40}\b"),
                      re.compile(r"\b[0-9A-Fa-f]{24,25}\b"))
 PREFIX = "U2_HID_ENUM"
-NODE = re.compile(r"^\s*\+-o ", re.MULTILINE)
-PROPERTY = re.compile(r'^\s*"([^"]+)" = (.+)$')
+# ioreg prefixes nested and sibling nodes with tree characters ("  | +-o",
+# "  |   \"Key\" = ..."), so both patterns allow them; with several HID devices
+# attached the iPad's node is drawn with them and was otherwise never parsed.
+NODE = re.compile(r"^[\s|]*\+-o ", re.MULTILINE)
+PROPERTY = re.compile(r'^[\s|]*"([^"]+)" = (.+)$')
 
 
 def assert_identifier_free(text):
@@ -425,11 +428,8 @@ def host_registry():
 
 
 def live_capture():
-    """The raw configuration descriptors, or None when this host enumerates nothing."""
-    try:
-        return RAW["capture"]()[0]
-    except (OSError, ValueError, subprocess.SubprocessError):
-        return None
+    """Read all advertised configurations. Helper failures remain capture errors."""
+    return RAW["read_configurations"]()[0]
 
 
 def parse(argv):

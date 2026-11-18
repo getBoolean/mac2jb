@@ -64,6 +64,13 @@ private struct Arguments {
     let socketPath: String
     let leaseSeconds: Double
     let mode: HIDCanaryMode
+    // `--hold-until-released yes`: after typing, hold the keyboard neutral
+    // until standard input reaches end-of-file (the caller's signal that its
+    // measurements are done), bounded by HIDCanaryRun.releaseWaitSeconds.
+    let holdUntilReleased: Bool
+    // `--text <string>`: what the full run types; default is the canary's own
+    // MAC2JB sequence, which the Mac trial runner compares against.
+    let text: String?
 
     // --function <name> --controller <registry entry id> [--socket <path>]
     // [--lease-seconds <n>] [--mode full|open-only|configure-only]. The
@@ -88,6 +95,13 @@ private struct Arguments {
         socketPath = values["--socket"] ?? BrokerSocketLease.defaultSocketPath
         leaseSeconds = Double(values["--lease-seconds"] ?? "")
             ?? BrokerSocketLease.maximumLeaseSeconds
+        text = values["--text"]
+        if let text, HIDKeyboard.keystrokes(for: text) == nil { return nil }
+        switch values["--hold-until-released"] {
+        case nil, "no": holdUntilReleased = false
+        case "yes": holdUntilReleased = true
+        default: return nil
+        }
     }
 }
 
@@ -96,6 +110,22 @@ private struct Arguments {
 private var interrupted: sig_atomic_t = 0
 
 private func noteInterrupt(_ signal: Int32) { interrupted = 1 }
+
+// True once standard input has reached end-of-file: the runner closes the
+// canary's input when it no longer needs the keyboard published. Checked
+// without blocking, so the hold loop keeps its own pace and lease checks.
+private var releasedByCaller = false
+
+private func callerReleased() -> Bool {
+    if releasedByCaller { return true }
+    var descriptor = pollfd(fd: STDIN_FILENO, events: Int16(POLLIN), revents: 0)
+    while poll(&descriptor, 1, 0) > 0 {
+        var buffer = [UInt8](repeating: 0, count: 64)
+        let count = read(STDIN_FILENO, &buffer, buffer.count)
+        if count <= 0 { releasedByCaller = true; break }
+    }
+    return releasedByCaller
+}
 
 private func describe(_ ledger: MAC2JBUSBFunctionLedger) -> String {
     let names = ["interface-open", "set-class", "set-subclass", "set-protocol",
@@ -209,9 +239,15 @@ enum HIDCanaryMain {
         // either way, because the lease rules do not change with the mode - one
         // neutral report on a controlled exit, and the lease handed back.
         let summary = HIDCanaryRun(sink: transport(session, handles: handles),
-                                   lease: lease, reports: arguments.mode.reportsToWrite,
+                                   lease: lease,
+                                   reports: arguments.mode == .full && arguments.text != nil
+                                       ? (HIDKeyboard.reports(for: arguments.text!) ?? [])
+                                       : arguments.mode.reportsToWrite,
                                    visibility: pipeVisibility(session, handles: handles),
-                                   shouldStop: { interrupted != 0 }).run()
+                                   shouldStop: { interrupted != 0 },
+                                   awaitHostPolling: true,
+                                   released: arguments.holdUntilReleased
+                                       ? { callerReleased() } : nil).run()
         // The wait's own answer, on its own line and before the report counts:
         // "configured and the host enumerated it" is a strictly stronger
         // result than "configured", so every mode that gets this far reports
@@ -221,6 +257,9 @@ enum HIDCanaryMain {
         // so both are printed: zero with a waited-on raw return is "the host
         // has not selected a configuration containing this interface yet", and
         // the endpoint's size is the host's active configuration containing it.
+        var classLog = [CChar](repeating: 0, count: 4096)
+        _ = MAC2JBUSBFunctionClassCommandLog(&classLog, classLog.count)
+        line(String(cString: classLog))
         line("enumeration host=\(summary.enumeration.state.label) " +
              "polls=\(summary.enumeration.polls) " +
              "max-packet=\(summary.enumeration.lastMaxPacketSize) " +
@@ -337,26 +376,15 @@ enum HIDCanaryMain {
                         &callReturn)
                 }
             case .setClassCommandCallbacks(let flagA, let flagB, let flagC):
-                // The kernel needs a port to deliver class commands to and a
-                // reference block to carry back. The canary runs no run loop,
-                // so it hands over a bare receive port and a zero callout: the
-                // registration is what is being configured here, not callback
-                // handling.
-                var port: mach_port_t = 0
-                guard mach_port_allocate(mach_task_self_, MACH_PORT_RIGHT_RECEIVE,
-                                         &port) == KERN_SUCCESS else {
-                    line("stopped before=class-callbacks reason=no-port")
-                    return false
-                }
-                var reference = [UInt64](repeating: 0, count: 8)
-                reference[0] = UInt64(port)
-                result = reference.withUnsafeBufferPointer {
-                    MAC2JBUSBFunctionSetClassCommandCallbacks(
-                        session,
-                        UInt32(MAC2JBUSBFunctionSelectorSetClassCommandCallbacks.rawValue),
-                        port, $0.baseAddress, UInt32($0.count),
-                        flagA, flagB, flagC, &callReturn)
-                }
+                // Serve the class requests instead of only registering for
+                // them: the shim completes each one (libusbd's selector 9), so
+                // the host's SET_IDLE/SET_PROTOCOL/GET_* succeed rather than
+                // stall. The Switch 2 selected the keyboard but never polled it
+                // while these were stalled; macOS tolerated the stalls.
+                result = MAC2JBUSBFunctionServeClassCommands(
+                    session, UInt32(MAC2JBUSBFunctionSelectorSetClassCommandCallbacks.rawValue),
+                    9, handles.bufferAddress, handles.bufferSize,
+                    flagA, flagB, flagC, &callReturn)
             case .createPipe(let endpoint):
                 var pipeID: UInt64 = 0
                 result = MAC2JBUSBFunctionCreatePipe(

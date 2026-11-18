@@ -222,6 +222,46 @@ static bool set_configuration_interfaces(CFMutableDictionaryRef info, CFArrayRef
     return set;
 }
 
+// Reduce the description to the one configuration just edited, in the shape of
+// Apple's own single-configuration profiles (USBDeviceConfiguration.plist's
+// standardKeyboard is exactly {Description, Interfaces [AppleUSBMux, Keyboard],
+// DefaultConfiguration true}). IOUSBDeviceController::createUSBDevice creates a
+// function nub for every interface named in every configuration and starts the
+// USB stack only once each of those functions has registered, so a description
+// that keeps the eight stock configurations also keeps every stock function the
+// registration race can strand. Isolating the edited configuration leaves the
+// controller waiting on exactly the listed functions. Device scalars are kept;
+// the journaled original stays the restore target. A configuration carrying an
+// InterfaceAssociation is refused, since its interface indices would not
+// survive the list replacement.
+static bool isolate_configuration(CFMutableDictionaryRef info, int32_t configurationNumber) {
+    if (!info || configurationNumber < 1 || configurationNumber > 255) return false;
+    CFTypeRef value = CFDictionaryGetValue(info, CFSTR("ConfigurationDescriptors"));
+    if (!value || CFGetTypeID(value) != CFArrayGetTypeID()) return false;
+    CFArrayRef configurations = (CFArrayRef)value;
+    CFIndex target = (CFIndex)configurationNumber - 1;
+    if (target >= CFArrayGetCount(configurations)) return false;
+    CFTypeRef entry = CFArrayGetValueAtIndex(configurations, target);
+    if (!entry || CFGetTypeID(entry) != CFDictionaryGetTypeID()) return false;
+    if (CFDictionaryContainsKey((CFDictionaryRef)entry, CFSTR("InterfaceAssociation"))) return false;
+    CFMutableDictionaryRef sole = CFDictionaryCreateMutableCopy(kCFAllocatorDefault, 0,
+                                                               (CFDictionaryRef)entry);
+    CFMutableArrayRef only = CFArrayCreateMutable(kCFAllocatorDefault, 1, &kCFTypeArrayCallBacks);
+    bool set = sole && only;
+    if (set) {
+        CFDictionaryRemoveValue(sole, CFSTR("ExtendedConfiguration"));
+        CFDictionaryRemoveValue(sole, CFSTR("LockedConfiguration"));
+        CFDictionaryRemoveValue(sole, CFSTR("AccessoryResistorSwap"));
+        CFDictionarySetValue(sole, CFSTR("Description"), CFSTR("Standard Keyboard"));
+        CFDictionarySetValue(sole, CFSTR("DefaultConfiguration"), kCFBooleanTrue);
+        CFArrayAppendValue(only, sole);
+        CFDictionarySetValue(info, CFSTR("ConfigurationDescriptors"), only);
+    }
+    if (sole) CFRelease(sole);
+    if (only) CFRelease(only);
+    return set;
+}
+
 // Shared body of the pure entry points: decode, apply the one edit, encode.
 // The pure path and the clone path go through these same edit helpers, so
 // there is one implementation of each edit. `mode` selects which.
@@ -304,10 +344,10 @@ MAC2JBUSBResult MAC2JBUSBSetSoleFunctionInDescriptionData(
                                  configurationNumber, MAC2JB_EDIT_SOLE, out, outLength);
 }
 
-MAC2JBUSBResult MAC2JBUSBSetConfigurationInterfacesInDescriptionData(
+static MAC2JBUSBResult set_interfaces_description_data(
     const uint8_t *plist, size_t plistLength,
     const char *const *interfaceNames, size_t interfaceCount,
-    int32_t configurationNumber, uint8_t **out, size_t *outLength
+    int32_t configurationNumber, bool soleConfiguration, uint8_t **out, size_t *outLength
 ) {
     if (!out || !outLength) return MAC2JBUSBInvalidInput;
     *out = NULL;
@@ -343,7 +383,9 @@ MAC2JBUSBResult MAC2JBUSBSetConfigurationInterfacesInDescriptionData(
     }
     if (!built) { result = MAC2JBUSBInvalidInput; goto release_names; }
     if (!set_configuration_interfaces((CFMutableDictionaryRef)decoded, names,
-                                      configurationNumber)) {
+                                      configurationNumber) ||
+        (soleConfiguration &&
+         !isolate_configuration((CFMutableDictionaryRef)decoded, configurationNumber))) {
         result = MAC2JBUSBFunctionRejected;
         goto release_names;
     }
@@ -364,6 +406,24 @@ release_names:
 finished:
     CFRelease(decoded);
     return result;
+}
+
+MAC2JBUSBResult MAC2JBUSBSetConfigurationInterfacesInDescriptionData(
+    const uint8_t *plist, size_t plistLength,
+    const char *const *interfaceNames, size_t interfaceCount,
+    int32_t configurationNumber, uint8_t **out, size_t *outLength
+) {
+    return set_interfaces_description_data(plist, plistLength, interfaceNames, interfaceCount,
+                                           configurationNumber, false, out, outLength);
+}
+
+MAC2JBUSBResult MAC2JBUSBSetSoleConfigurationInDescriptionData(
+    const uint8_t *plist, size_t plistLength,
+    const char *const *interfaceNames, size_t interfaceCount,
+    int32_t configurationNumber, uint8_t **out, size_t *outLength
+) {
+    return set_interfaces_description_data(plist, plistLength, interfaceNames, interfaceCount,
+                                           configurationNumber, true, out, outLength);
 }
 
 MAC2JBUSBResult MAC2JBUSBCaptureControllerRegistryID(uint64_t *controllerRegistryID) {
@@ -739,6 +799,7 @@ static MAC2JBUSBResult reconstruct_or_clone(
     int32_t expectedConfigurationNumber,
     const char *const *replacementInterfaces,
     size_t replacementInterfaceCount,
+    bool soleConfiguration,
     int32_t *setReturn,
     int32_t *busReturn
 ) {
@@ -750,6 +811,8 @@ static MAC2JBUSBResult reconstruct_or_clone(
     }
     // The append name and the replacement list are mutually exclusive edits.
     if (functionName && replacementInterfaces) return MAC2JBUSBInvalidInput;
+    // Isolating a configuration only makes sense for a replaced interface list.
+    if (soleConfiguration && !replacementInterfaces) return MAC2JBUSBInvalidInput;
     // Refuse a malformed added name before any controller user client opens.
     if (functionName && !mac2jb_usb_function_name_is_legal(functionName)) return MAC2JBUSBFunctionRejected;
     if (expectedFunctionName && !mac2jb_usb_function_name_is_legal(expectedFunctionName))
@@ -935,7 +998,8 @@ static MAC2JBUSBResult reconstruct_or_clone(
                 replacementInterfaces[index], kCFStringEncodingUTF8);
             if (name) { CFArrayAppendValue(names, name); CFRelease(name); } else built = false;
         }
-        bool set = built && set_configuration_interfaces(info, names, configurationNumber);
+        bool set = built && set_configuration_interfaces(info, names, configurationNumber) &&
+            (!soleConfiguration || isolate_configuration(info, configurationNumber));
         if (names) CFRelease(names);
         if (!set) {
             result = MAC2JBUSBFunctionRejected;
@@ -1016,7 +1080,7 @@ MAC2JBUSBResult MAC2JBUSBReconstructOrPublish(
 ) {
     return reconstruct_or_clone(livePlist, livePlistLength,
                                 expectedControllerRegistryID, publish, cycleBus,
-                                false, NULL, 0, NULL, 0, NULL, 0, setReturn, busReturn);
+                                false, NULL, 0, NULL, 0, NULL, 0, false, setReturn, busReturn);
 }
 
 MAC2JBUSBResult MAC2JBUSBCloneOrPublish(
@@ -1030,7 +1094,7 @@ MAC2JBUSBResult MAC2JBUSBCloneOrPublish(
                                 expectedControllerRegistryID, publish, cycleBus,
                                 true, NULL, 0,
                                 expectedFunctionName, expectedConfigurationNumber,
-                                NULL, 0, setReturn, busReturn);
+                                NULL, 0, false, setReturn, busReturn);
 }
 
 MAC2JBUSBResult MAC2JBUSBCloneAppendFunctionOrPublish(
@@ -1044,7 +1108,7 @@ MAC2JBUSBResult MAC2JBUSBCloneAppendFunctionOrPublish(
     return reconstruct_or_clone(livePlist, livePlistLength,
                                 expectedControllerRegistryID, publish, cycleBus,
                                 true, functionName, configurationNumber,
-                                NULL, 0, NULL, 0, setReturn, busReturn);
+                                NULL, 0, NULL, 0, false, setReturn, busReturn);
 }
 
 MAC2JBUSBResult MAC2JBUSBCloneSetInterfacesOrPublish(
@@ -1058,7 +1122,24 @@ MAC2JBUSBResult MAC2JBUSBCloneSetInterfacesOrPublish(
     return reconstruct_or_clone(livePlist, livePlistLength,
                                 expectedControllerRegistryID, publish, cycleBus,
                                 true, NULL, configurationNumber, NULL, 0,
-                                interfaceNames, interfaceCount, setReturn, busReturn);
+                                interfaceNames, interfaceCount, false, setReturn, busReturn);
+}
+
+// The interface-list publication with every other configuration removed: see
+// isolate_configuration. Same clone, byte-equality proof and controller checks;
+// restore is the same stored-bytes republish of the journaled original.
+MAC2JBUSBResult MAC2JBUSBCloneSetSoleConfigurationOrPublish(
+    const uint8_t *livePlist, size_t livePlistLength,
+    uint64_t expectedControllerRegistryID,
+    const char *const *interfaceNames, size_t interfaceCount, int32_t configurationNumber,
+    bool publish, bool cycleBus,
+    int32_t *setReturn, int32_t *busReturn
+) {
+    if (!interfaceNames) return MAC2JBUSBInvalidInput;
+    return reconstruct_or_clone(livePlist, livePlistLength,
+                                expectedControllerRegistryID, publish, cycleBus,
+                                true, NULL, configurationNumber, NULL, 0,
+                                interfaceNames, interfaceCount, true, setReturn, busReturn);
 }
 
 // Restore for a configuration whose interface list was replaced: push the
@@ -1172,10 +1253,10 @@ MAC2JBUSBResult MAC2JBUSBCloneRepublishAppendedFunctionOrPublish(
     MAC2JBUSBResult result = reconstruct_or_clone(
         livePlist, livePlistLength, expectedControllerRegistryID, publish,
         cycleBus, true, functionName, configurationNumber,
-        functionName, configurationNumber, NULL, 0, setReturn, busReturn);
+        functionName, configurationNumber, NULL, 0, false, setReturn, busReturn);
     if (result != MAC2JBUSBFunctionRejected) return result;
     return reconstruct_or_clone(livePlist, livePlistLength,
                                 expectedControllerRegistryID, publish, cycleBus,
                                 true, functionName, configurationNumber,
-                                NULL, 0, NULL, 0, setReturn, busReturn);
+                                NULL, 0, NULL, 0, false, setReturn, busReturn);
 }

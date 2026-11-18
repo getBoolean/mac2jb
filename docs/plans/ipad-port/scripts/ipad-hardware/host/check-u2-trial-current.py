@@ -19,7 +19,7 @@ import sys
 ROOT = Path(__file__).resolve().parents[6]
 HOST = ROOT / "docs/plans/ipad-port/scripts/ipad-hardware/host"
 BASE = ROOT / "build/ipad-hardware/u2-v9-trial-baseline"
-MANIFEST_SHA256 = "c545419e946c2eb674665a93a29ababd17de4872d08c53cdc02c494aa97c409a"
+MANIFEST_SHA256 = "c0edf4194b0327a50438af724eaa6cdf3db36934374ac318059a49084c083cc2"
 
 
 def check(phase):

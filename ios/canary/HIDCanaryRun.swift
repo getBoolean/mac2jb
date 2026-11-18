@@ -42,6 +42,10 @@ struct PipeReportTransport: HIDReportSink {
     // configuration, so it has not collected the report. Neither says the host
     // is gone, and no other raw return is waited on.
     static let notYetEnumerated: Set<Int32> = [notEnumerated, writeTimedOut]
+    // The pipe was aborted by a bus reset or configuration change.
+    static let aborted = Int32(bitPattern: 0xE00002EB)
+    // What the host-polling readiness wait treats as "not polling yet".
+    static let reenumerating: Set<Int32> = [notEnumerated, writeTimedOut, aborted]
 
     let stage: ([UInt8]) -> Bool
     let submit: (UInt32) -> (ioReturn: Int32, transferred: UInt64)
@@ -191,6 +195,29 @@ struct HIDCanaryRun {
     static let enumerationWaitSeconds: Double = 560
     static let enumerationPollMicroseconds: UInt32 = 500_000
 
+    // Selecting the configuration (max-packet > 0) does not mean the host's HID
+    // driver is polling the interrupt IN endpoint yet: it still has to read the
+    // report descriptor and start its reads. The 2026-11-17 sole-configuration
+    // trial enumerated and then timed out every report (0xE00002D6) within a
+    // second, before any poll. So typing waits until one neutral report - all
+    // zeros, which types nothing - is actually collected, retrying only on
+    // that timeout, lease-checked before every attempt, bounded here.
+    static let hostPollingWaitSeconds: Double = 60
+    // Polling starts before the host's input system has attached to the new
+    // keyboard: in trial 5 macOS published the keyboard service to
+    // WindowServer only for the ~6 s before the restore, and reports typed in
+    // the first milliseconds of polling never appeared as keystrokes. So after
+    // the first collected neutral report the canary keeps offering neutral
+    // reports for this long, paces the typed reports, and holds the neutral
+    // state briefly before exiting (its exit is what triggers the restore).
+    static let hostSettleSeconds: Double = 3
+    static let interReportMicroseconds: UInt32 = 30_000
+    static let postTypingHoldSeconds: Double = 1
+    // Upper bound on the event-driven hold: the caller releases the canary as
+    // soon as its own measurements are done; this only bounds a caller that
+    // never does.
+    static let releaseWaitSeconds: Double = 120
+
     let sink: HIDReportSink
     let lease: CanaryLease
     let reports: [[UInt8]]
@@ -203,10 +230,18 @@ struct HIDCanaryRun {
     // list runs out: a signal must take effect during the writing, not after
     // it. Defaulted, so a caller that cannot be interrupted says nothing.
     var shouldStop: () -> Bool = { false }
+    // Wait for the host to collect one neutral report before typing (see
+    // hostPollingWaitSeconds). The device entry point turns it on.
+    var awaitHostPolling = false
+    // Event-driven post-typing hold: when set, the canary keeps the keyboard
+    // neutral until this reports true (the caller closed the canary's input),
+    // instead of for a fixed postTypingHoldSeconds.
+    var released: (() -> Bool)? = nil
     // The clock and the pause the enumeration wait is bounded by, injected so
     // the Mac tests observe the bound without waiting on a real one.
     var now: () -> UInt64 = { clock_gettime_nsec_np(CLOCK_UPTIME_RAW) }
     var pause: () -> Void = { usleep(HIDCanaryRun.enumerationPollMicroseconds) }
+    var interReportPause: () -> Void = { usleep(HIDCanaryRun.interReportMicroseconds) }
 
     func run() -> HIDCanarySummary {
         // Committing the configuration makes the device re-present itself, so
@@ -219,6 +254,14 @@ struct HIDCanaryRun {
         }
         var written = 0
         var stop = HIDCanaryStop.completed
+        if awaitHostPolling, !reports.isEmpty {
+            if let notPolling = waitForHostPolling() {
+                return finish(reportsWritten: 0, stop: notPolling, enumeration: enumeration)
+            }
+            if let settleStop = holdNeutral(seconds: Self.hostSettleSeconds) {
+                return finish(reportsWritten: 0, stop: settleStop, enumeration: enumeration)
+            }
+        }
         for report in reports {
             // A requested stop is a controlled exit: the neutral report and
             // the lease release below still happen.
@@ -227,12 +270,18 @@ struct HIDCanaryRun {
             // the one thing the broker cannot restore from.
             guard lease.isHeld() else { stop = .leaseLost; break }
             guard HIDKeyboard.isValidReport(report) else { stop = .invalidReport; break }
+            if awaitHostPolling && written > 0 { interReportPause() }
             switch sink.write(report).outcome {
             case .delivered: written += 1
             case .failed: stop = .writeFailed
             case .disconnected: stop = .disconnected
             }
             if stop != .completed { break }
+        }
+        if awaitHostPolling, stop == .completed, written > 0 {
+            let holdStop = released.map { holdNeutral(seconds: Self.releaseWaitSeconds, until: $0) }
+                ?? holdNeutral(seconds: Self.postTypingHoldSeconds)
+            if let holdStop { stop = holdStop }
         }
         return finish(reportsWritten: written, stop: stop, enumeration: enumeration)
     }
@@ -300,6 +349,57 @@ struct HIDCanaryRun {
         case .leaseLost: return .leaseLost
         case .interrupted: return .interrupted
         }
+    }
+
+    // Offers the neutral report until the host collects one. Returns nil once
+    // delivered, or the stop that ended the wait: only a timed-out write is
+    // retried; a refusal, a disconnect, a lost lease or the deadline end it.
+    private func waitForHostPolling() -> HIDCanaryStop? {
+        let budget = UInt64(Self.hostPollingWaitSeconds * 1_000_000_000)
+        let start = now()
+        while true {
+            guard !shouldStop() else { return .interrupted }
+            guard lease.isHeld() else { return .leaseLost }
+            let answer = sink.write(HIDKeyboard.neutralReport)
+            switch answer.outcome {
+            case .delivered: return nil
+            case .disconnected, .failed:
+                // The runner's bus cycle re-presents the device after the
+                // commit, which aborts the pipe (0xE00002EB) and leaves it
+                // unenumerated (0xE0000001) until the host selects the
+                // configuration again. The second sole-configuration trial
+                // exited on exactly that while the Mac's HID driver was already
+                // sending SET_IDLE/SET_PROTOCOL. Those, and a timeout, are
+                // waited out within the same budget; anything else stops.
+                guard PipeReportTransport.reenumerating.contains(answer.rawReturn),
+                      now() - start < budget else {
+                    return answer.outcome == .disconnected ? .disconnected : .writeFailed
+                }
+                if answer.rawReturn != PipeReportTransport.writeTimedOut { pause() }
+            }
+        }
+    }
+
+    // Keeps the host's view neutral for a while: offers the neutral report,
+    // paced, until the time is up. A timed-out offer just means the host did
+    // not poll in that slice; a refusal, a disconnect or a lost lease ends it.
+    private func holdNeutral(seconds: Double,
+                             until done: () -> Bool = { false }) -> HIDCanaryStop? {
+        let budget = UInt64(seconds * 1_000_000_000)
+        let start = now()
+        while now() - start < budget && !done() {
+            guard !shouldStop() else { return .interrupted }
+            guard lease.isHeld() else { return .leaseLost }
+            let answer = sink.write(HIDKeyboard.neutralReport)
+            switch answer.outcome {
+            case .delivered: break
+            case .disconnected: return .disconnected
+            case .failed:
+                guard answer.rawReturn == PipeReportTransport.writeTimedOut else { return .writeFailed }
+            }
+            interReportPause()
+        }
+        return nil
     }
 
     // Every exit path ends here: one neutral report while the lease is held,

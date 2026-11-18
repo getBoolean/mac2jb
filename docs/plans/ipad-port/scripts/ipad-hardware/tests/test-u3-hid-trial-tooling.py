@@ -989,7 +989,8 @@ def gate_modes():
     # byte-for-byte is no longer the invariant worth holding.
     budget = RUNNER["lease_budget_seconds"]()
     base = "--function hidcanary --controller 4294967297 --lease-seconds %d" % budget
-    assert RUNNER["canary_arguments"](options()) == base
+    # The full run also asks the canary to hold the keyboard until released.
+    assert RUNNER["canary_arguments"](options()) == base + " --hold-until-released yes"
     for mode in ("open-only", "configure-only"):
         assert RUNNER["canary_arguments"](options(mode=mode)) == (
             base + " --mode " + mode), mode
@@ -1154,10 +1155,15 @@ def report_capture():
         built = re.search(r"reader=(\S+)", text)
         assert built, text
         binary = Path(built.group(1))
-        assert binary.parent == REPORTS["BUILD"], binary
+        assert binary.parent == REPORTS["BUILD"].resolve(), binary
         assert binary.is_file() and binary.name.startswith("u2-hid-report-reader-"), binary
         digest = hashlib.sha256(READER.read_bytes()).hexdigest()
-        assert binary.name.endswith(digest[:16]), (binary, digest[:16])
+        if binary.name == REPORTS["SIGNED_NAME"]:
+            # Signed at a fixed path: the source digest lives in the stamp.
+            stamp = binary.parent / (REPORTS["SIGNED_NAME"] + ".source-sha256")
+            assert stamp.read_text().strip() == digest, (binary, digest[:16])
+        else:
+            assert binary.name.endswith(digest[:16]), (binary, digest[:16])
         assert REPORTS["reader_binary"]() == binary, "a second call reuses the same binary"
     print("PASS HID report capture wrapper outcomes and missing precondition")
 

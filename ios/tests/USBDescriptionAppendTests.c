@@ -526,6 +526,48 @@ int main(void) {
               "set-interfaces refuses a NULL list");
     }
 
+    // Sole-configuration form: the edited configuration is the only one left,
+    // in Apple's standardKeyboard shape, and the device fields are unchanged.
+    {
+        const char *const keyboard[] = {"AppleUSBMux", "Keyboard"};
+        uint8_t *bytes = NULL;
+        size_t length = 0;
+        check(MAC2JBUSBSetSoleConfigurationInDescriptionData(
+                  CFDataGetBytePtr(input), (size_t)CFDataGetLength(input), keyboard, 2,
+                  TARGET_CONFIGURATION, &bytes, &length) == MAC2JBUSBSuccess,
+              "sole-configuration edit succeeds");
+        CFDictionaryRef sole = (bytes ? decode(bytes, length) : NULL);
+        if (sole) {
+            CFArrayRef configs = configurations_of(sole);
+            check(configs && CFArrayGetCount(configs) == 1,
+                  "sole-configuration leaves exactly one configuration");
+            if (configs && CFArrayGetCount(configs) == 1) {
+                CFDictionaryRef only = (CFDictionaryRef)CFArrayGetValueAtIndex(configs, 0);
+                CFArrayRef names = (CFArrayRef)CFDictionaryGetValue(only, CFSTR("Interfaces"));
+                check(names && CFArrayGetCount(names) == 2 &&
+                      CFEqual(CFArrayGetValueAtIndex(names, 0), CFSTR("AppleUSBMux")) &&
+                      CFEqual(CFArrayGetValueAtIndex(names, 1), CFSTR("Keyboard")),
+                      "the sole configuration carries exactly the given list");
+                check(CFDictionaryGetValue(only, CFSTR("DefaultConfiguration")) == kCFBooleanTrue,
+                      "the sole configuration is the default");
+                check(!CFDictionaryContainsKey(only, CFSTR("ExtendedConfiguration")),
+                      "the sole configuration drops ExtendedConfiguration");
+            }
+            CFIndex expected = CFDictionaryGetCount(original);
+            check(CFDictionaryGetCount(sole) == expected,
+                  "sole-configuration keeps every device-level field");
+            CFRelease(sole);
+        }
+        MAC2JBUSBFreeCapturedDescription(bytes);
+        uint8_t *refused = (uint8_t *)1; size_t refusedLength = 1;
+        check(MAC2JBUSBSetSoleConfigurationInDescriptionData(
+                  CFDataGetBytePtr(input), (size_t)CFDataGetLength(input), keyboard, 2,
+                  CONFIGURATION_COUNT + 1, &refused, &refusedLength) == MAC2JBUSBFunctionRejected,
+              "sole-configuration refuses a configuration out of range");
+        check(refused == NULL && refusedLength == 0,
+              "a refused sole-configuration clears the out buffer");
+    }
+
     CFRelease(input);
     CFRelease(original);
     if (failures) {

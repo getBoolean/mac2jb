@@ -56,6 +56,20 @@ private final class RecordingSink: HIDReportSink {
 // endpoint's size is "it has"; the last answer repeats forever. Nothing here
 // writes a report, which is the point: the wait's mechanism is no longer the
 // mechanism of typing.
+// Answers from a script, then timeouts forever; records every report offered.
+private final class ScriptedSink: HIDReportSink {
+    private var script: [HIDReportWrite]
+    private(set) var written: [[UInt8]] = []
+    init(script: [HIDReportWrite]) { self.script = script }
+    func write(_ report: [UInt8]) -> HIDReportWrite {
+        written.append(report)
+        if script.isEmpty {
+            return HIDReportWrite(outcome: .failed, rawReturn: PipeReportTransport.writeTimedOut)
+        }
+        return script.removeFirst()
+    }
+}
+
 private final class FakeVisibility: HIDPipeVisibility {
     // A shim result that is not success, for a query the build will not answer.
     static let refusedResult: Int32 = 9
@@ -223,6 +237,97 @@ enum HIDReportTests {
                     "the wait may not even look without the lease: \(visible.polls)")
         try require(lease.released && lease.releasedNeutral == false,
                     "the lease must still be given up: \(summary)")
+        // Caller-chosen text: ipad2jb maps to the US-layout keycodes, upper
+        // case adds Shift, and anything outside letters, digits and space is
+        // refused.
+        do {
+            let typed = HIDKeyboard.reports(for: "ipad2jb") ?? []
+            let expected: [[UInt8]] = [0x0C, 0x13, 0x04, 0x07, 0x1F, 0x0D, 0x05].flatMap {
+                [HIDKeyboard.report(modifiers: 0, keycode: $0), HIDKeyboard.neutralReport]
+            }
+            try require(typed == expected, "ipad2jb keycodes: \(typed)")
+            try require(HIDKeyboard.reports(for: "MAC2JB") == HIDKeyboard.canaryReports(),
+                        "upper case matches the fixed canary sequence")
+            try require(HIDKeyboard.reports(for: "a-b") == nil && HIDKeyboard.reports(for: "") == nil,
+                        "unsupported characters and empty text are refused")
+            try require(typed.allSatisfy(HIDKeyboard.isValidReport), "every report is valid")
+        }
+        // Host-polling readiness: timed-out neutral offers are retried, typing
+        // starts only after one is collected, and a refusal ends the wait.
+        do {
+            let timeouts = ScriptedSink(script: [
+                HIDReportWrite(outcome: .failed, rawReturn: PipeReportTransport.writeTimedOut),
+                HIDReportWrite(outcome: .failed, rawReturn: PipeReportTransport.writeTimedOut)]
+                + Array(repeating: HIDReportWrite(outcome: .delivered, rawReturn: 0), count: 40))
+            let readyClock = FakeClock(stepMilliseconds: 500)
+            var readyRun = HIDCanaryRun(sink: timeouts, lease: FakeLease(heldChecks: .max),
+                                        reports: [valid], visibility: FakeVisibility(),
+                                        awaitHostPolling: true)
+            readyRun.now = { readyClock.pause(); return readyClock.now() }
+            readyRun.pause = {}
+            readyRun.interReportPause = {}
+            let ready = readyRun.run()
+            let firstTyped = timeouts.written.firstIndex(of: valid)
+            try require(ready.stop == .completed && ready.reportsWritten == 1 &&
+                        firstTyped != nil && firstTyped! >= 4 &&
+                        timeouts.written[..<firstTyped!].allSatisfy { $0 == HIDKeyboard.neutralReport },
+                        "typing waits for polling and a neutral settle period: \(ready) \(timeouts.written)")
+            let cycled = ScriptedSink(script: [
+                HIDReportWrite(outcome: .failed, rawReturn: PipeReportTransport.writeTimedOut),
+                HIDReportWrite(outcome: .failed, rawReturn: PipeReportTransport.aborted),
+                HIDReportWrite(outcome: .disconnected, rawReturn: PipeReportTransport.notEnumerated)]
+                + Array(repeating: HIDReportWrite(outcome: .delivered, rawReturn: 0), count: 40))
+            let cycleClock = FakeClock(stepMilliseconds: 500)
+            var survivor = HIDCanaryRun(sink: cycled, lease: FakeLease(heldChecks: .max),
+                                        reports: [valid], visibility: FakeVisibility(),
+                                        awaitHostPolling: true)
+            survivor.now = { cycleClock.pause(); return cycleClock.now() }
+            survivor.pause = {}
+            survivor.interReportPause = {}
+            let survived = survivor.run()
+            try require(survived.stop == .completed && survived.reportsWritten == 1 &&
+                        cycled.written.contains(valid),
+                        "a bus cycle during readiness is waited out: \(survived)")
+            // Event-driven hold: neutral reports continue after typing until
+            // the caller releases, then the run ends at once.
+            do {
+                let holdSink = ScriptedSink(script:
+                    Array(repeating: HIDReportWrite(outcome: .delivered, rawReturn: 0), count: 400))
+                let holdClock = FakeClock(stepMilliseconds: 100)
+                var checks = 0
+                var holder = HIDCanaryRun(sink: holdSink, lease: FakeLease(heldChecks: .max),
+                                          reports: [valid], visibility: FakeVisibility(),
+                                          awaitHostPolling: true,
+                                          released: { checks += 1; return checks > 20 })
+                holder.now = { holdClock.pause(); return holdClock.now() }
+                holder.pause = {}
+                holder.interReportPause = {}
+                let held = holder.run()
+                let typedAt = holdSink.written.firstIndex(of: valid) ?? -1
+                let afterTyping = holdSink.written.count - typedAt - 1
+                try require(held.stop == .completed && held.reportsWritten == 1 &&
+                            typedAt >= 0 && afterTyping >= 20 && checks == 21,
+                            "the post-typing hold lasts until release: \(held) after=\(afterTyping) checks=\(checks)")
+            }
+            let refused = ScriptedSink(script: [
+                HIDReportWrite(outcome: .failed, rawReturn: Int32(bitPattern: 0xE00002C2))])
+            let stopped = HIDCanaryRun(sink: refused, lease: FakeLease(heldChecks: .max),
+                                       reports: [valid], visibility: FakeVisibility(),
+                                       awaitHostPolling: true).run()
+            try require(stopped.stop == .writeFailed && stopped.reportsWritten == 0 &&
+                        !refused.written.contains(valid),
+                        "a non-timeout refusal ends the readiness wait untyped: \(stopped)")
+            let clock = FakeClock(stepMilliseconds: 1000)
+            let never = ScriptedSink(script: [])
+            var waiting = HIDCanaryRun(sink: never, lease: FakeLease(heldChecks: .max),
+                                       reports: [valid], visibility: FakeVisibility(),
+                                       awaitHostPolling: true)
+            waiting.now = { clock.pause(); return clock.now() }
+            waiting.interReportPause = {}
+            let expired = waiting.run()
+            try require(expired.stop == .writeFailed && !never.written.contains(valid),
+                        "the readiness wait is bounded: \(expired)")
+        }
         // The enumeration wait takes the first lease check, so one report needs
         // two: the wait's poll and the loop's own check before the write. The
         // poll itself writes nothing, so the first write is the first report.

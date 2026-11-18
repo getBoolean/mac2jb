@@ -64,6 +64,17 @@ VARIANTS = {
     # The composite (config 5 + an appended interface) does not come on bus on
     # this controller; a lighter interface list may.
     "--v21-interface-list": "u3-native-additive-function-v21",
+    # v21 flags plus publish-sole-configuration: the interface list replaces the
+    # selected configuration and every other configuration is removed (Apple's
+    # standardKeyboard shape). IOUSBDeviceController goes on bus only after every
+    # function named in any configuration registers; no v13-v21 HID trial ever
+    # reached startUSBStack while its description was live because stock
+    # functions from the other configurations stayed unregistered.
+    "--v22-sole-configuration": "u3-native-additive-function-v22",
+    # v22 plus a verifier that accepts the controller's own link-speed fields
+    # (BcdUSBVersion/MPS0) when they equal the learned healthy pair; installed
+    # as /var/jb/usr/libexec/ipad2jb/usb-broker (label dev.ipad2jb.usbbroker).
+    "--v23-ipad2jb": "u3-native-additive-function-v23",
 }
 # Resolve the installed iPhoneOS SDK instead of pinning an Xcode point release.
 SDK = subprocess.run(["/usr/bin/xcrun", "--sdk", "iphoneos", "--show-sdk-path"],
@@ -105,16 +116,17 @@ def main():
                                         "--v15-additive-cycle", "--v16-additive-single-cycle",
                                         "--v17-renewable-lease", "--v18-longer-cap",
                                         "--v19-cycle-sized-cap", "--v20-tvsec-bootsession",
-                                        "--v21-interface-list")
+                                        "--v21-interface-list", "--v22-sole-configuration", "--v23-ipad2jb")
     explicit_cycle = True
     controller_clone = True
     post_clone = True
     settled_recovery = False
     ready_gated = True
-    interface_list = sys.argv[1] in ("--v21-interface-list",)
+    interface_list = sys.argv[1] in ("--v21-interface-list", "--v22-sole-configuration", "--v23-ipad2jb")
     no_initial_cycle = sys.argv[1] in ("--v16-additive-single-cycle", "--v17-renewable-lease",
                                    "--v18-longer-cap", "--v19-cycle-sized-cap",
-                                   "--v20-tvsec-bootsession", "--v21-interface-list")
+                                   "--v20-tvsec-bootsession", "--v21-interface-list",
+                                   "--v22-sole-configuration", "--v23-ipad2jb")
     if output.exists() or not BUILD.is_dir() or not Path(SDK).is_dir():
         raise ValueError("unsafe output or missing SDK")
     if plistlib.loads(ENTITLEMENTS.read_bytes()) != EXPECTED_ENTITLEMENTS:

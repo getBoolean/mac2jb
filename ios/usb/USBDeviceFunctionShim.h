@@ -237,6 +237,18 @@ MAC2JBUSBFunctionResult MAC2JBUSBFunctionSetClassCommandCallbacks(
     uint32_t asyncReferenceCount,
     bool flagA, bool flagB, bool flagC, int32_t *callReturn);
 
+// Register for class commands on a notification port served on a private
+// dispatch queue, and complete every request with completeSelector (libusbd's
+// selector 9): IN requests get up to 64 bytes from bufferAddress (zeros; 1 for
+// HID GET_PROTOCOL), OUT requests a zero-length success. Requests are logged.
+MAC2JBUSBFunctionResult MAC2JBUSBFunctionServeClassCommands(
+    MAC2JBUSBFunctionSession *session, uint32_t registerSelector, uint32_t completeSelector,
+    uint64_t bufferAddress, uint64_t bufferSize,
+    bool flagA, bool flagB, bool flagC, int32_t *callReturn);
+
+// One line describing every class command served so far and its completion.
+size_t MAC2JBUSBFunctionClassCommandLog(char *out, size_t capacity);
+
 // An interrupt-IN pipe for the keyboard reports. unknownArgument is the
 // reference's fifth scalar, undocumented there; it passes 0.
 MAC2JBUSBFunctionResult MAC2JBUSBFunctionCreatePipe(

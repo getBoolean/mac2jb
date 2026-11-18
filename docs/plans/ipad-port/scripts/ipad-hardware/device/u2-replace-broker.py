@@ -40,6 +40,10 @@ BROKERS = {
     "v19": ("dev.mac2jb.u2.additivev19", "eddb506f52c5bd913438ef4fb44007368e9fe89fa1fa47f8a4569c8d15c0a224"),
     "v20": ("dev.mac2jb.u2.additivev20", "df0ac6a4fb2f24c639a8ffc703e01e3c8fbfba37e4f59e3c628a60a79f038c6d"),
     "v21": ("dev.mac2jb.u2.additivev21", "81889579a0eaddc935f3c575e46caa7518d1da5f5cca9462ec82174bcb2b39e0"),
+    "v22": ("dev.mac2jb.u2.additivev22", "9420e25cc412f6dd9edafe1b6087fd7909018d33af5fed309921499a3e1486f0"),
+    # v22 plus the link-speed-tolerant verifier, under its readable name.
+    "v23": ("dev.ipad2jb.usbbroker", "7ce33843f03639eb7af35d529ba0d2c8eb1fd517d2c1d89296072f2cc6866be9",
+            "/var/jb/usr/libexec/ipad2jb/usb-broker"),
 }
 
 
@@ -56,8 +60,14 @@ def binary_path(digest):
 SAFE_MODE = {"_MSSafeMode": "1", "_SafeMode": "1"}
 
 
-def description(label, digest):
-    return {"Label": label, "ProgramArguments": [binary_path(digest), "--serve-noop-trial"],
+def broker_path(key):
+    """An entry's explicit install path, or the digest-derived hidden name."""
+    entry = BROKERS[key]
+    return entry[2] if len(entry) > 2 else binary_path(entry[1])
+
+
+def description(label, path):
+    return {"Label": label, "ProgramArguments": [path, "--serve-noop-trial"],
             "RunAtLoad": True, "KeepAlive": True, "ThrottleInterval": 2, "UserName": "root",
             "EnvironmentVariables": SAFE_MODE, "JetsamProperties": JETSAM}
 
@@ -117,13 +127,14 @@ def create(path, data, mode):
 def main(mode, old, new):
     if os.geteuid() != 0 or mode not in ("--inspect", "--replace") or old not in BROKERS or new not in BROKERS or old == new:
         raise ValueError("fixed root mode and allowlisted brokers required")
-    old_label, old_sha = BROKERS[old]
-    new_label, new_sha = BROKERS[new]
+    old_label, old_sha = BROKERS[old][:2]
+    new_label, new_sha = BROKERS[new][:2]
+    old_path, new_path = broker_path(old), broker_path(new)
     old_plist, new_plist = DAEMONS + old_label + ".plist", DAEMONS + new_label + ".plist"
-    if (sha(binary_path(old_sha)) != old_sha or not loaded(old_label) or
-            plistlib.loads(open(old_plist, "rb").read()) != description(old_label, old_sha)):
+    if (sha(old_path) != old_sha or not loaded(old_label) or
+            plistlib.loads(open(old_plist, "rb").read()) != description(old_label, old_path)):
         raise ValueError("old broker stage changed")
-    if os.path.lexists(binary_path(new_sha)) or os.path.lexists(new_plist) or loaded(new_label):
+    if os.path.lexists(new_path) or os.path.lexists(new_plist) or loaded(new_label):
         raise ValueError("new broker already present")
     journal_sha = None
     if os.path.lexists(JOURNAL):
@@ -172,8 +183,9 @@ def main(mode, old, new):
     finally:
         os.close(directory)
     os.unlink(old_plist)
-    create(binary_path(new_sha), binary, 0o755)
-    create(new_plist, plistlib.dumps(description(new_label, new_sha), fmt=plistlib.FMT_XML), 0o644)
+    os.makedirs(os.path.dirname(new_path), mode=0o755, exist_ok=True)
+    create(new_path, binary, 0o755)
+    create(new_plist, plistlib.dumps(description(new_label, new_path), fmt=plistlib.FMT_XML), 0o644)
     if subprocess.run([LAUNCHCTL, "bootstrap", "system", new_plist], stdout=subprocess.DEVNULL,
                       stderr=subprocess.DEVNULL, timeout=10).returncode != 0:
         raise ValueError("new bootstrap failed")

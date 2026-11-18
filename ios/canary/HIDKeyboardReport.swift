@@ -59,6 +59,33 @@ enum HIDKeyboard {
 
     static var canaryText: String { String(canaryKeystrokes.map(\.character)) }
 
+    // Keystrokes for caller-chosen text (`--text`): letters (upper case via
+    // left Shift), digits and space, in the US layout. Anything else returns
+    // nil so the caller refuses rather than typing something unintended.
+    static func keystrokes(for text: String) -> [(modifiers: UInt8, keycode: UInt8)]? {
+        guard !text.isEmpty, text.count <= 64 else { return nil }
+        var result: [(modifiers: UInt8, keycode: UInt8)] = []
+        for scalar in text.unicodeScalars {
+            let value = scalar.value
+            switch value {
+            case 0x61...0x7A: result.append((0, UInt8(0x04 + value - 0x61)))          // a-z
+            case 0x41...0x5A: result.append((leftShift, UInt8(0x04 + value - 0x41)))  // A-Z
+            case 0x31...0x39: result.append((0, UInt8(0x1E + value - 0x31)))          // 1-9
+            case 0x30: result.append((0, 0x27))                                        // 0
+            case 0x20: result.append((0, 0x2C))                                        // space
+            default: return nil
+            }
+        }
+        return result
+    }
+
+    // A press and its release for each character of `text`.
+    static func reports(for text: String) -> [[UInt8]]? {
+        keystrokes(for: text)?.flatMap {
+            [report(modifiers: $0.modifiers, keycode: $0.keycode), neutralReport]
+        }
+    }
+
     // A press and its release for each character: a held key that is never
     // released is exactly the failure the neutral report exists to prevent.
     static func canaryReports() -> [[UInt8]] {

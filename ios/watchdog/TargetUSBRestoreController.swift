@@ -105,8 +105,23 @@ struct TargetUSBRestoreController: USBRestoreController {
                               configuration: configuration, publish: false)
     }
 
+    func publishSettingSoleConfiguration(_ description: Data, interfaces: [String],
+                                         configuration: Int) throws {
+        try settingInterfaces(description, interfaces: interfaces,
+                              configuration: configuration, publish: true,
+                              soleConfiguration: true)
+    }
+
+    func validateSettingSoleConfiguration(_ description: Data, interfaces: [String],
+                                          configuration: Int) throws {
+        try settingInterfaces(description, interfaces: interfaces,
+                              configuration: configuration, publish: false,
+                              soleConfiguration: true)
+    }
+
     private func settingInterfaces(_ description: Data, interfaces: [String],
-                                   configuration: Int, publish: Bool) throws {
+                                   configuration: Int, publish: Bool,
+                                   soleConfiguration: Bool = false) throws {
         guard let number = Int32(exactly: configuration), number > 0 else {
             throw TargetUSBRestoreError.operation(MAC2JBUSBFunctionRejected, 0, 0)
         }
@@ -118,7 +133,9 @@ struct TargetUSBRestoreController: USBRestoreController {
         let result = pointers.withUnsafeMutableBufferPointer { names in
             description.withUnsafeBytes { bytes -> MAC2JBUSBResult in
                 let base = bytes.bindMemory(to: UInt8.self).baseAddress
-                return MAC2JBUSBCloneSetInterfacesOrPublish(
+                let edit = soleConfiguration ? MAC2JBUSBCloneSetSoleConfigurationOrPublish
+                                             : MAC2JBUSBCloneSetInterfacesOrPublish
+                return edit(
                     base, description.count, controllerRegistryID,
                     names.baseAddress, interfaces.count, number,
                     publish, publish && cycleBus, &setStatus, &busStatus)

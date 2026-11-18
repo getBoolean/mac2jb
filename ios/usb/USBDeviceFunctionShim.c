@@ -3,8 +3,10 @@
 
 #include <CoreFoundation/CoreFoundation.h>
 #include <IOKit/IOKitLib.h>
+#include <dispatch/dispatch.h>
 #include <dlfcn.h>
 #include <mach/mach.h>
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -458,6 +460,122 @@ MAC2JBUSBFunctionResult MAC2JBUSBFunctionSetClassCommandCallbacks(
                                            asyncReferenceCount, arguments, 3,
                                            NULL, NULL),
                   callReturn);
+}
+
+// ---- Class-command service ------------------------------------------------
+// The kernel posts each class request for the interface (SET_IDLE,
+// SET_PROTOCOL, GET_REPORT, ...) to the port registered with selector 8 and
+// waits for userspace to complete it with selector 9. A request that is never
+// completed is stalled. libusbd (vendor/libusbd/src/plat/macos/impl.c) completes
+// every one with {1, length, buffer address, 0, token} - the macOS mac2jb
+// keyboard that the Switch accepts relies on exactly that - so this does the
+// same, answering IN requests with sensible bytes and OUT requests with a
+// zero-length success. Requests and completion results are logged.
+
+#define MAC2JB_CLASS_LOG_MAX 32
+
+typedef struct {
+    uint8_t bmRequestType, bRequest;
+    uint16_t wValue, wIndex, wLength;
+    uint32_t replyLength;
+    int32_t completion;
+    uint64_t first;
+} MAC2JBClassCommandEntry;
+
+typedef struct {
+    MAC2JBUSBFunctionSession *session;
+    uint32_t completeSelector;
+    uint64_t bufferAddress;
+    uint64_t bufferSize;
+    uint32_t count;
+    MAC2JBClassCommandEntry entries[MAC2JB_CLASS_LOG_MAX];
+} MAC2JBClassCommandService;
+
+static MAC2JBClassCommandService classService;
+
+static void classCommandCallout(void *refcon, IOReturn result, void **args, uint32_t numArgs) {
+    (void)result;
+    MAC2JBClassCommandService *service = (MAC2JBClassCommandService *)refcon;
+    if (!service || !args || numArgs < 5) return;
+    uint64_t *arguments = (uint64_t *)args;
+    uint8_t bmRequestType = (uint8_t)((arguments[1] >> 24) & 0xFF);
+    uint8_t bRequest = (uint8_t)((arguments[1] >> 16) & 0xFF);
+    uint16_t wValue = (uint16_t)(arguments[1] & 0xFFFF);
+    uint16_t wIndex = (uint16_t)((arguments[2] >> 16) & 0xFFFF);
+    uint16_t wLength = (uint16_t)(arguments[2] & 0xFFFF);
+    uint32_t length = 0;
+    if ((bmRequestType & 0x80) && wLength > 0 && service->bufferAddress != 0) {
+        length = wLength;
+        if (length > 64) length = 64;
+        if (length > service->bufferSize) length = (uint32_t)service->bufferSize;
+        uint8_t *reply = (uint8_t *)(uintptr_t)service->bufferAddress;
+        memset(reply, 0, length);
+        // HID class requests: GET_PROTOCOL answers report protocol (1),
+        // GET_IDLE answers 0 (infinite), GET_REPORT an all-keys-up report.
+        if (bmRequestType == 0xA1 && bRequest == 0x03 && length >= 1) reply[0] = 1;
+    }
+    uint64_t complete[5] = { 1, length, service->bufferAddress, 0, arguments[4] };
+    kern_return_t status = service->session->callScalar(
+        service->session->connection, service->completeSelector, complete, 5, NULL, NULL);
+    if (service->count < MAC2JB_CLASS_LOG_MAX) {
+        MAC2JBClassCommandEntry *entry = &service->entries[service->count];
+        entry->bmRequestType = bmRequestType; entry->bRequest = bRequest;
+        entry->wValue = wValue; entry->wIndex = wIndex; entry->wLength = wLength;
+        entry->replyLength = length; entry->completion = status; entry->first = arguments[0];
+    }
+    service->count++;
+}
+
+typedef IONotificationPortRef (*NotificationPortCreate)(mach_port_t);
+typedef mach_port_t (*NotificationPortGetMachPort)(IONotificationPortRef);
+typedef void (*NotificationPortSetDispatchQueue)(IONotificationPortRef, dispatch_queue_t);
+
+MAC2JBUSBFunctionResult MAC2JBUSBFunctionServeClassCommands(
+    MAC2JBUSBFunctionSession *session, uint32_t registerSelector, uint32_t completeSelector,
+    uint64_t bufferAddress, uint64_t bufferSize,
+    bool flagA, bool flagB, bool flagC, int32_t *callReturn
+) {
+    MAC2JBUSBFunctionResult gate = begin(
+        session, MAC2JBUSBFunctionOperationSetClassCommandCallbacks, callReturn);
+    if (gate != MAC2JBUSBFunctionSuccess) return gate;
+    NotificationPortCreate create = (NotificationPortCreate)dlsym(session->iokit, "IONotificationPortCreate");
+    NotificationPortGetMachPort machPort = (NotificationPortGetMachPort)dlsym(
+        session->iokit, "IONotificationPortGetMachPort");
+    NotificationPortSetDispatchQueue setQueue = (NotificationPortSetDispatchQueue)dlsym(
+        session->iokit, "IONotificationPortSetDispatchQueue");
+    if (!create || !machPort || !setQueue) return MAC2JBUSBFunctionMissingAPI;
+    IONotificationPortRef port = create(MACH_PORT_NULL);
+    if (!port) return MAC2JBUSBFunctionMissingAPI;
+    setQueue(port, dispatch_queue_create("ipad2jb.class-commands", DISPATCH_QUEUE_SERIAL));
+    memset(&classService, 0, sizeof(classService));
+    classService.session = session;
+    classService.completeSelector = completeSelector;
+    classService.bufferAddress = bufferAddress;
+    classService.bufferSize = bufferSize;
+    uint64_t reference[kOSAsyncRef64Count] = {0};
+    reference[kIOAsyncReservedIndex] = machPort(port);
+    reference[kIOAsyncCalloutFuncIndex] = (uint64_t)(uintptr_t)classCommandCallout;
+    reference[kIOAsyncCalloutRefconIndex] = (uint64_t)(uintptr_t)&classService;
+    uint64_t arguments[3] = { flagA, flagB, flagC };
+    return finish(session, MAC2JBUSBFunctionOperationSetClassCommandCallbacks,
+                  session->callAsyncScalar(session->connection, registerSelector,
+                                           machPort(port), reference, kOSAsyncRef64Count,
+                                           arguments, 3, NULL, NULL),
+                  callReturn);
+}
+
+size_t MAC2JBUSBFunctionClassCommandLog(char *out, size_t capacity) {
+    if (!out || capacity == 0) return 0;
+    size_t used = (size_t)snprintf(out, capacity, "class-commands count=%u", classService.count);
+    uint32_t shown = classService.count < MAC2JB_CLASS_LOG_MAX ? classService.count : MAC2JB_CLASS_LOG_MAX;
+    for (uint32_t index = 0; index < shown && used < capacity; index++) {
+        MAC2JBClassCommandEntry *e = &classService.entries[index];
+        used += (size_t)snprintf(out + used, capacity - used,
+                                 " [%02x %02x %04x %04x %04x first=%llu reply=%u io=0x%08x]",
+                                 e->bmRequestType, e->bRequest, e->wValue, e->wIndex, e->wLength,
+                                 (unsigned long long)e->first, e->replyLength, (uint32_t)e->completion);
+    }
+    return used < capacity ? used : capacity - 1;
 }
 
 MAC2JBUSBFunctionResult MAC2JBUSBFunctionCreatePipe(

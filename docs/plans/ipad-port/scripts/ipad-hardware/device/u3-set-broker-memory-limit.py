@@ -33,7 +33,7 @@ import sys
 
 
 LAUNCHCTL = "/var/jb/bin/launchctl"
-LABEL = re.compile(r"dev\.mac2jb\.u2\.[a-z0-9]{1,24}\Z")
+LABEL = re.compile(r"dev\.(ipad2jb\.usbbroker|mac2jb\.u2\.[a-z0-9]{1,24})\Z")
 TAG = "U3_BROKER_MEMLIMIT "
 GET, SET = 8, 7
 DEFAULT_MB = 96

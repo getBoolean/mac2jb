@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Swap one allowlisted U2 broker for another over pinned root Wi-Fi SSH (usage: OLD NEW).
+"""Swap one allowlisted U2 broker for another over pinned root Wi-Fi SSH (usage: OLD NEW [--ipad-check]).
 
 Effect: makes a fresh Wi-Fi restore kit first (journal and every U2 file),
 then runs device/u2-replace-broker.py --inspect and, with --transition,
@@ -32,17 +32,53 @@ BINARIES = {"v12": ("u2-native-noop-trial-v12-learned-profile", "9629611372c6f57
             # v19 behaviour rebuilt from the tv_sec-only boot-session source.
             "v20": ("u3-native-additive-function-v20", "df0ac6a4fb2f24c639a8ffc703e01e3c8fbfba37e4f59e3c628a60a79f038c6d"),
             # v20 plus the interface-list publication and stored-description restore.
-            "v21": ("u3-native-additive-function-v21", "81889579a0eaddc935f3c575e46caa7518d1da5f5cca9462ec82174bcb2b39e0")}
+            "v21": ("u3-native-additive-function-v21", "81889579a0eaddc935f3c575e46caa7518d1da5f5cca9462ec82174bcb2b39e0"),
+            # v21 plus publish-sole-configuration (Apple's standardKeyboard shape).
+            "v22": ("u3-native-additive-function-v22", "9420e25cc412f6dd9edafe1b6087fd7909018d33af5fed309921499a3e1486f0"),
+            # v22 plus the link-speed-tolerant verifier, installed as
+            # /var/jb/usr/libexec/ipad2jb/usb-broker (label dev.ipad2jb.usbbroker).
+            "v23": ("u3-native-additive-function-v23", "7ce33843f03639eb7af35d529ba0d2c8eb1fd517d2c1d89296072f2cc6866be9")}
 SUPPORT = runpy.run_path(str(HOST / "u2_trial_support.py"))
 
 
-def main(mode, old, new):
+# --ipad-check: for an iPad cabled to a host other than this Mac (owner-approved
+# standalone use, 2026-11-17). Instead of Mac USB, the iPad itself must show the
+# controller on bus and configured by its host, with every learned-profile
+# function registered, before and after the swap. Read-only; uses the helpers
+# of the installed /var/jb/usr/bin/ipad2jb command.
+IPAD_CHECK = r'''
+import json, sys
+sys.argv = ["x"]
+exec(open("/var/jb/usr/bin/ipad2jb").read().split('if __name__ == "__main__":')[0])
+_, state = controller()
+expected = set(json.load(open(PROFILE))["functions"])
+missing = sorted(expected - registered_functions())
+ok = (state.get("OnBus") is True and state.get("DeviceState") == "Configured"
+      and isinstance(state.get("SelectedConfiguration"), int) and state["SelectedConfiguration"] > 0
+      and not missing)
+print("IPAD_USB %s on-bus=%s state=%s selected=%s missing=%s" % (
+    "ok" if ok else "bad", state.get("OnBus"), state.get("DeviceState"),
+    state.get("SelectedConfiguration"), ",".join(missing) or "none"))
+'''
+
+
+def ipad_usb_healthy(ssh):
+    result = subprocess.run([*ssh, "/var/jb/usr/bin/python3 -I -S -B -c " + shlex.quote(IPAD_CHECK)],
+                            stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, timeout=90)
+    line = result.stdout.decode("ascii", "replace").strip()
+    print(line)
+    return line.startswith("IPAD_USB ok ")
+
+
+def main(mode, old, new, ipad_check=False):
     name, digest = BINARIES[new]
     binary = (ROOT / "build/ipad-hardware" / name).read_bytes()
     if hashlib.sha256(binary).hexdigest() != digest:
         raise ValueError("new binary changed")
-    if not SUPPORT["usb_present"]():
-        raise ValueError("Mac USB not healthy")
+    usb_ok = ((lambda: ipad_usb_healthy(runpy.run_path(str(HOST / "backup-u2-wifi-restore-kit.py"))
+                                        ["ssh_command"]())) if ipad_check else SUPPORT["usb_present"])
+    if not usb_ok():
+        raise ValueError("USB not healthy (%s)" % ("iPad check" if ipad_check else "Mac"))
     backup = subprocess.run([sys.executable, str(HOST / "backup-u2-wifi-restore-kit.py")],
                             stdout=subprocess.PIPE, timeout=400)
     print(backup.stdout.decode(), end="")
@@ -58,15 +94,18 @@ def main(mode, old, new):
         print(result.stdout.decode("ascii", "replace"), end="")
         if result.returncode:
             raise ValueError("device step failed")
-    if not SUPPORT["usb_present"]():
-        raise ValueError("Mac USB not healthy afterwards")
+    if not usb_ok():
+        raise ValueError("USB not healthy afterwards (%s)" % ("iPad check" if ipad_check else "Mac"))
 
 
 if __name__ == "__main__":
     try:
-        if len(sys.argv) != 4 or sys.argv[1] not in ("--inspect", "--replace"):
-            raise ValueError("usage: --inspect|--replace OLD NEW")
-        main(*sys.argv[1:4])
+        arguments = sys.argv[1:]
+        ipad_check = "--ipad-check" in arguments
+        arguments = [item for item in arguments if item != "--ipad-check"]
+        if len(arguments) != 3 or arguments[0] not in ("--inspect", "--replace"):
+            raise ValueError("usage: --inspect|--replace OLD NEW [--ipad-check]")
+        main(*arguments, ipad_check=ipad_check)
     except (OSError, ValueError, KeyError, subprocess.SubprocessError) as error:
         print("U2_REPLACE rejected (%s)" % error)
         raise SystemExit(1)

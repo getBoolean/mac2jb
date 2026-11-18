@@ -4,6 +4,17 @@
 Usage: --broker vNN --function NAME --controller REGISTRY_ID
        --canary-path /var/jb/... --canary-sha256 HEX --broker-sha256 HEX
        --configuration N --stock-interfaces N [--mode MODE]
+       [--interfaces A,B [--sole-configuration=yes]] [--window-seconds=N]
+       [--shared-reader=yes]
+
+`--sole-configuration=yes` (with `--interfaces`) sends
+`publish-sole-configuration`: the interface list replaces the host-selected
+configuration and every other configuration is removed, matching Apple's
+single-configuration `standardKeyboard` profile. IOUSBDeviceController starts the
+USB stack only after every function named in any configuration registers, so the
+stock configurations' audio/iAP/Valeria functions can otherwise keep the trial
+description off the bus. The host then sees configuration 1 with the listed
+interfaces, and the enumeration capture is told so.
 
 `--mode` picks which of the canary's staged gates to attempt, defaulting to the
 full run so an existing invocation is unchanged. `open-only` stops after the
@@ -114,6 +125,7 @@ import runpy
 import secrets
 import select
 import shlex
+import signal
 import subprocess
 import sys
 import tempfile
@@ -319,6 +331,11 @@ def canary_arguments(options):
             " --lease-seconds " + str(BROKER_LEASE_CAP_SECONDS))
     if options["mode"] != FULL_MODE:
         text += " --mode " + shlex.quote(options["mode"])
+    else:
+        # Hold the keyboard after typing until the runner releases it, instead
+        # of a fixed interval that either ends before the descriptor capture
+        # (trial 9) or wastes time.
+        text += " --hold-until-released yes"
     return text
 
 
@@ -430,9 +447,14 @@ def main(options, env):
                 reader = env["start_reports"]("published")
                 try:
                     if options["interfaces"] is not None:
-                        published = env["ask"]("publish-interfaces %d %s"
-                                               % (options["configuration"], options["interfaces"]))
-                        if published != "OK published-interfaces":
+                        verb = ("publish-sole-configuration" if options["sole_configuration"]
+                                else "publish-interfaces")
+                        published = env["ask"]("%s %d %s" % (verb, options["configuration"],
+                                                             options["interfaces"]))
+                        expected = ("OK published-sole-configuration"
+                                    if options["sole_configuration"]
+                                    else "OK published-interfaces")
+                        if published != expected:
                             raise ValueError("broker refused the interface-list publication (%s)"
                                              % published)
                     else:
@@ -503,7 +525,7 @@ def main(options, env):
         # lease-renewal.txt is already written by finish_renewal, so that the
         # failure paths record it too; renewal_log is kept for the summary line.
         env["evidence"]("lifecycle.ndjson", lifecycle[:16384])
-        env["evidence"]("canary.txt", canary[1][:8192])
+        env["evidence"]("canary.txt", canary[1][:262144])
         env["evidence"]("report-capture.txt", reports[1].encode("ascii")[:8192])
         env["evidence"]("enumeration.txt", capture[1].encode("ascii"))
         live_after = LIVE_STATUS_FRAGMENT in after
@@ -630,15 +652,20 @@ def live_environment(options):
             # The long window, because this trial changes the description: the
             # device is measured at 29-72 s to come back on bus, so a window
             # that ends sooner records the absence and never the reattach.
-            window = SUPPORT["TRIAL_WINDOW_SECONDS"]
+            # --window-seconds shortens it for the sole-configuration shape,
+            # whose USB returns within seconds of the restore.
+            window = options["window_seconds"] or SUPPORT["TRIAL_WINDOW_SECONDS"]
             process, ready = SUPPORT["arm_monitor"](binary, profile["usbVendorID"],
                                                     profile["usbProductID"], window)
             try:
                 result = callable_body()
             finally:
-                # The monitor buffers its events and emits them when the window
-                # ends, so it is waited out rather than cut short: ending it
-                # early would discard the reattach it was armed to record.
+                # The body has already waited for USB to come back (or given
+                # up), so the observation is over: SIGTERM makes the monitor
+                # stop now and flush every buffered event and its summary,
+                # instead of sitting out the rest of the window.
+                if process.poll() is None:
+                    process.send_signal(signal.SIGTERM)
                 tail = process.communicate(timeout=window + 10)[0]
         return result, ready + tail
 
@@ -651,10 +678,13 @@ def live_environment(options):
 
     def start_canary():
         """The lease holder, left running: it is the broker's worker."""
+        # stdin is a pipe the runner holds open: closing it is the canary's
+        # release signal (`--hold-until-released yes`), sent by collect_canary
+        # once nothing more needs the keyboard published.
         process = subprocess.Popen(
             [*ssh, shlex.quote(options["canary_path"]) + " " +
              canary_arguments(options)],
-            stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, bufsize=0)
+            stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, bufsize=0)
         # `scanned` is how far await_line has examined `output`; nothing may be
         # left in a Python-level buffer, which is why bufsize is 0.
         return {"process": process, "output": b"", "scanned": 0}
@@ -735,7 +765,8 @@ def live_environment(options):
         return subprocess.Popen(
             [sys.executable, str(HOST / "capture-u2-hid-reports.py"),
              "--out-dir=%s" % trial, "--name=%s-%s" % (stage, REPORTS_FILE),
-             "--deadline=%d" % REPORT_DEADLINE_SECONDS],
+             "--deadline=%d" % REPORT_DEADLINE_SECONDS] +
+            (["--open=shared"] if options["shared_reader"] else []),
             stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
 
     def collect_reports(process):
@@ -755,9 +786,13 @@ def live_environment(options):
                                                     "published-" + REPORTS_FILE)
 
     def start_capture(stage, observed, live):
+        # A sole-configuration publication leaves one configuration, so the host
+        # selects 1, and every listed interface but the keyboard is stock.
+        sole = options["sole_configuration"]
         argv = [sys.executable, str(HOST / "capture-u2-hid-enumeration.py"),
-                "--configuration=%d" % options["configuration"],
-                "--stock-interfaces=%d" % options["stock_interfaces"],
+                "--configuration=%d" % (1 if sole else options["configuration"]),
+                "--stock-interfaces=%d" % (len(options["interfaces"].split(",")) - 1 if sole
+                                           else options["stock_interfaces"]),
                 # The witness, without which the capture emits no verdict at
                 # all: what the broker said, when, and the lease it is good for.
                 "--publication-state=%s" % live["state"],
@@ -877,8 +912,14 @@ def await_line(handle, marker, seconds, required=None):
 
 
 def collect_canary(handle):
-    """The canary's exit code and its complete output, streamed part included."""
+    """The canary's exit code and its complete output, streamed part included.
+
+    Closing its input first is the release signal: the canary stops holding
+    the keyboard and exits, which hands the lease back.
+    """
     process = handle["process"]
+    # communicate() closes stdin itself; closing it first raises "I/O operation
+    # on closed file" on Pythons whose communicate() flushes stdin.
     try:
         rest = process.communicate(timeout=CANARY_SECONDS)[0]
     except subprocess.TimeoutExpired:
@@ -888,7 +929,8 @@ def collect_canary(handle):
 
 
 def parse(argv):
-    options = {"reports": None, "mode": FULL_MODE, "interfaces": None}
+    options = {"reports": None, "mode": FULL_MODE, "interfaces": None,
+               "sole_configuration": "no", "window_seconds": None, "shared_reader": "no"}
     for item in argv:
         name, _, value = item.partition("=")
         if not name.startswith("--") or not value:
@@ -919,6 +961,26 @@ def parse(argv):
                 any(not NAME.fullmatch(name) for name in names) or
                 options["function"] not in names):
             raise ValueError("invalid --interfaces list")
+    if options["sole_configuration"] not in ("yes", "no"):
+        raise ValueError("--sole-configuration takes yes or no")
+    options["sole_configuration"] = options["sole_configuration"] == "yes"
+    if options["sole_configuration"] and options["interfaces"] is None:
+        raise ValueError("--sole-configuration needs --interfaces")
+    # Optional --shared-reader=yes: the Mac report reader listens instead of
+    # seizing (Input Monitoring is enough), so the typed string also reaches
+    # the focused window. Default no.
+    if options["shared_reader"] not in ("yes", "no"):
+        raise ValueError("--shared-reader takes yes or no")
+    options["shared_reader"] = options["shared_reader"] == "yes"
+    # Optional --window-seconds=N (10-600): the passive lifecycle monitor's
+    # window. The runner ends at the later of the trial body and this window,
+    # and the body already waits for USB to return, so the window only has to
+    # cover publish -> restore -> reattach (about 10 s for the sole-configuration
+    # shape on 2026-11-17). Default 600.
+    if options["window_seconds"] is not None:
+        if not options["window_seconds"].isdigit() or not 10 <= int(options["window_seconds"]) <= 600:
+            raise ValueError("--window-seconds takes 10-600")
+        options["window_seconds"] = int(options["window_seconds"])
     return options
 
 

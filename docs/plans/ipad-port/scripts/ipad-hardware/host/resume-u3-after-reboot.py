@@ -44,7 +44,7 @@ DEVICE = ROOT / "docs/plans/ipad-port/scripts/ipad-hardware/device"
 BUILD = ROOT / "build/ipad-hardware"
 JOURNAL_PATH = "/var/jb/var/lib/mac2jb-u2-native/restore-journal.json"
 TAG = "U3_RESUME "
-BROKER_LABEL = re.compile(r"dev\.mac2jb\.u2\.[a-z0-9]{1,24}\Z")
+BROKER_LABEL = re.compile(r"dev\.(ipad2jb\.usbbroker|mac2jb\.u2\.[a-z0-9]{1,24})\Z")
 
 
 def step(name, command, accept=0):
