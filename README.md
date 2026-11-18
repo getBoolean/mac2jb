@@ -1,5 +1,9 @@
 # mac2jb
 
+> **Archived.** This fork existed to carry ipad2jb, which now lives at
+> [getBoolean/ipad2jb](https://github.com/getBoolean/ipad2jb). For mac2jb itself,
+> use [cpypwn/mac2jb](https://github.com/cpypwn/mac2jb).
+
 an all-in-one ns2 jailbreaking tool for Mac.
 
 ## what you need
@@ -415,35 +419,9 @@ when needed. the self-test checks the packaged runtime without sending console
 commands. the full macOS fixture and node check list is in
 [the build workflow](.github/workflows/build.yml).
 
-## ipad2jb (iPad as a USB keyboard)
+## ipad2jb
 
-`ios/ipad2jb` makes a jailbroken iPad (tested: M2 iPad Pro, iPadOS 17.0, Dopamine) type text as a USB keyboard on whatever it is plugged into over USB-C, then restore normal USB. Tested on a Switch 2 and on macOS.
-
-build and install over ssh from a mac with xcode:
-
-```sh
-ios/ipad2jb/install.sh root@<ipad-address>
-```
-
-then on the ipad, with a text field focused on the host:
-
-```sh
-sudo ipad2jb            # types ipad2jb
-sudo ipad2jb some text
-sudo ipad2jb --file /var/mobile/bootstrap.bas
-```
-
-File input accepts up to 1 MiB of printable ASCII and line breaks using a US keyboard layout. CRLF and CR line endings become Enter keys. File mode clears inherited editor indentation after each Enter, then types the next line with its original spaces.
-
-Keep BASIC source in a separate file on the iPad; focus an empty SmileBASIC program editor before sending it.
-
-Add `--fast` to use USB bInterval 6, a 10 ms key hold, a 5 ms character gap and a 100 ms Enter delay; verify the editor keeps up. Experimental `--turbo` uses bInterval 4, a 5 ms key hold and no added character gap while retaining the 100 ms Enter delay. Check for dropped characters before saving or running.
-
-The `--caps-lock` option reverses letter case before sending it; it does not read or change the host’s Caps Lock state. Use it when the editor produces reversed case, and check mixed-case comments and quoted strings rather than relying on the physical Caps Lock toggle. The tested SmileBASIC setup used `ipad2jb --turbo --caps-lock --file /var/mobile/bootstrap.bas`. This types the source only; save and run it in SmileBASIC afterward.
-
-it publishes a single "Standard Keyboard" usb configuration, answers the host's hid class requests, waits for the host to poll, types, and restores the saved stock usb description. an interrupted run is restored by the next one. on macos, approve the ipad as a keyboard (privacy & security) or the keystrokes are held back.
-
-`ios/ipad2jb/test.sh` runs the host tests on a mac: the whole run (`core.c`) against fake usb and keyboard devices, with sanitizers. `iokit.c` is the only part that talks to the iPad.
+ipad2jb moved to [getBoolean/ipad2jb](https://github.com/getBoolean/ipad2jb).
 
 ## help and source
 
