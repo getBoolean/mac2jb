@@ -41,7 +41,20 @@ bool ipad2jb_keycode(char c, uint8_t *modifier, uint8_t *usage) {
     else if (c >= '1' && c <= '9') *usage = (uint8_t)(0x1E + (c - '1'));
     else if (c == '0') *usage = 0x27;
     else if (c == ' ') *usage = 0x2C;
-    else return false;
+    else if (c == '\n') *usage = 0x28;
+    else {
+        static const char plain[] = "-=[]\\;'\x60,./";
+        static const char shifted_digits[] = "!@#$%^&*()";
+        static const char shifted[] = "_+{}|:\"~<>?";
+        static const uint8_t codes[] = {0x2D,0x2E,0x2F,0x30,0x31,0x33,0x34,0x35,0x36,0x37,0x38};
+        const char *found = strchr(plain, c);
+        if (c && found) *usage = codes[found - plain];
+        else if (c && (found = strchr(shifted, c))) {
+            *usage = codes[found - shifted]; *modifier = LEFT_SHIFT;
+        } else if (c && (found = strchr(shifted_digits, c))) {
+            *usage = (uint8_t)(0x1E + (found - shifted_digits)); *modifier = LEFT_SHIFT;
+        } else return false;
+    }
     return true;
 }
 
@@ -235,11 +248,18 @@ static bool hold_neutral(const ipad2jb_env *env, unsigned milliseconds) {
     return true;
 }
 
-static bool press_and_release(const ipad2jb_env *env, char c) {
+static bool send_key(const ipad2jb_env *env, uint8_t modifier, uint8_t usage) {
     uint8_t report[IPAD2JB_REPORT_LENGTH] = { 0 };
-    if (!ipad2jb_keycode(c, &report[0], &report[2])) return false;
-    return env->keyboard.send(env->keyboard.context, report) == IPAD2JB_SEND_OK &&
-           env->keyboard.send(env->keyboard.context, neutral_report) == IPAD2JB_SEND_OK;
+    report[0] = modifier;
+    report[2] = usage;
+    if (env->keyboard.send(env->keyboard.context, report) != IPAD2JB_SEND_OK) return false;
+    if (env->turbo_typing || env->fast_typing) env->sleep_ms(env->turbo_typing ? 5 : 10);
+    return env->keyboard.send(env->keyboard.context, neutral_report) == IPAD2JB_SEND_OK;
+}
+
+static bool press_and_release(const ipad2jb_env *env, char c) {
+    uint8_t modifier, usage;
+    return ipad2jb_keycode(c, &modifier, &usage) && send_key(env, modifier, usage);
 }
 
 static ipad2jb_typing type_text(const ipad2jb_env *env, const char *text) {
@@ -247,10 +267,25 @@ static ipad2jb_typing type_text(const ipad2jb_env *env, const char *text) {
         return *env->interrupted ? IPAD2JB_INTERRUPTED : IPAD2JB_NEVER_POLLED;
     env->say("host is reading the keyboard; typing");
     if (!hold_neutral(env, SETTLE_MS)) return IPAD2JB_HOST_LOST;
+    unsigned key_gap = env->turbo_typing ? 0 : env->fast_typing ? 5 : KEY_GAP_MS;
+    unsigned line_gap = (env->turbo_typing || env->fast_typing) ? 100 : 300;
     for (const char *c = text; *c; c++) {
         if (*env->interrupted) return IPAD2JB_INTERRUPTED;
         if (!press_and_release(env, *c)) return IPAD2JB_HOST_LOST;
-        env->sleep_ms(KEY_GAP_MS);
+        env->sleep_ms(*c == '\n' ? line_gap : key_gap);
+        if (*c == '\n' && env->clear_autoindent) {
+            // The new line contains only the editor's inherited indentation.
+            // Home, Shift+End, Delete clears it without joining empty lines.
+            if (!send_key(env, 0, 0x4A) || !send_key(env, LEFT_SHIFT, 0x4D) ||
+                !send_key(env, 0, 0x4C)) return IPAD2JB_HOST_LOST;
+            env->sleep_ms(key_gap);
+        }
+        size_t typed = (size_t)(c - text) + 1;
+        if (typed % 1000 == 0) {
+            char message[80];
+            snprintf(message, sizeof(message), "sent %zu of %zu bytes", typed, strlen(text));
+            env->say(message);
+        }
     }
     if (*env->interrupted) return IPAD2JB_INTERRUPTED;
     return hold_neutral(env, HOLD_MS) ? IPAD2JB_TYPED : IPAD2JB_HOST_LOST;

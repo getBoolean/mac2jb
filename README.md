@@ -429,8 +429,17 @@ then on the ipad, with a text field focused on the host:
 
 ```sh
 sudo ipad2jb            # types ipad2jb
-sudo ipad2jb some text  # letters, digits and spaces
+sudo ipad2jb some text
+sudo ipad2jb --file /var/mobile/bootstrap.bas
 ```
+
+File input accepts up to 1 MiB of printable ASCII and line breaks using a US keyboard layout. CRLF and CR line endings become Enter keys. File mode clears inherited editor indentation after each Enter, then types the next line with its original spaces.
+
+Keep BASIC source in a separate file on the iPad; focus an empty SmileBASIC program editor before sending it.
+
+Add `--fast` to use USB bInterval 6, a 10 ms key hold, a 5 ms character gap and a 100 ms Enter delay; verify the editor keeps up. Experimental `--turbo` uses bInterval 4, a 5 ms key hold and no added character gap while retaining the 100 ms Enter delay. Check for dropped characters before saving or running.
+
+The `--caps-lock` option reverses letter case before sending it; it does not read or change the host’s Caps Lock state. Use it when the editor produces reversed case, and check mixed-case comments and quoted strings rather than relying on the physical Caps Lock toggle. The tested SmileBASIC setup used `ipad2jb --turbo --caps-lock --file /var/mobile/bootstrap.bas`. This types the source only; save and run it in SmileBASIC afterward.
 
 it publishes a single "Standard Keyboard" usb configuration, answers the host's hid class requests, waits for the host to poll, types, and restores the saved stock usb description. an interrupted run is restored by the next one. on macos, approve the ipad as a keyboard (privacy & security) or the keystrokes are held back.
 

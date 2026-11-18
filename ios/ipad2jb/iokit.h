@@ -6,6 +6,6 @@
 
 // Load the private controller API and fill `out`; false if unavailable.
 bool ipad2jb_iokit_usb(ipad2jb_usb *out);
-void ipad2jb_iokit_keyboard(ipad2jb_keyboard *out);
+void ipad2jb_iokit_keyboard(ipad2jb_keyboard *out, unsigned poll_interval);
 
 #endif

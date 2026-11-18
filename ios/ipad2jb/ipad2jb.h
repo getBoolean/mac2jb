@@ -14,11 +14,11 @@
 #include <stdint.h>
 
 #define IPAD2JB_REPORT_LENGTH 8
-#define IPAD2JB_MAX_TEXT 256
+#define IPAD2JB_MAX_TEXT (1024 * 1024)
 
 // --- pure helpers -----------------------------------------------------------
 
-// US-layout boot-keyboard usage for a letter, digit or space; Shift for capitals.
+// US-layout boot-keyboard usage for printable ASCII and newline.
 bool ipad2jb_keycode(char c, uint8_t *modifier, uint8_t *usage);
 bool ipad2jb_text_is_typable(const char *text);
 
@@ -73,6 +73,9 @@ typedef struct {
 } ipad2jb_keyboard;
 
 typedef struct {
+    bool turbo_typing;                         // experimental shorter key hold
+    bool fast_typing;                          // shorter inter-key and Enter delays
+    bool clear_autoindent;                     // clear inherited spaces after Enter
     ipad2jb_usb usb;
     ipad2jb_keyboard keyboard;
     const char *stock_path;                      // saved stock description

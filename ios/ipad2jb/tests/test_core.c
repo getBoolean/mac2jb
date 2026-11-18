@@ -197,9 +197,13 @@ static void test_keycodes(void) {
     CHECK(ipad2jb_keycode('1', &modifier, &usage) && usage == 0x1E, "1");
     CHECK(ipad2jb_keycode('0', &modifier, &usage) && usage == 0x27, "0");
     CHECK(ipad2jb_keycode(' ', &modifier, &usage) && usage == 0x2C, "space");
-    CHECK(!ipad2jb_keycode('-', &modifier, &usage), "punctuation refused");
+    CHECK(ipad2jb_keycode('-', &modifier, &usage) && usage == 0x2D && modifier == 0, "minus");
+    CHECK(ipad2jb_keycode('"', &modifier, &usage) && usage == 0x34 && modifier == 2, "quote");
+    CHECK(ipad2jb_keycode('\n', &modifier, &usage) && usage == 0x28, "newline");
+    for (int c = 32; c <= 126; c++)
+        CHECK(ipad2jb_keycode((char)c, &modifier, &usage), "printable ASCII %d", c);
     CHECK(ipad2jb_text_is_typable("ipad2jb") && ipad2jb_text_is_typable("Hello World 42"), "typable");
-    CHECK(!ipad2jb_text_is_typable("") && !ipad2jb_text_is_typable("a-b"), "untypable");
+    CHECK(!ipad2jb_text_is_typable("") && !ipad2jb_text_is_typable("a\b"), "untypable");
 }
 
 static void test_class_replies(void) {
@@ -257,6 +261,59 @@ static void test_types_and_restores(void) {
     CHECK(!file_exists(h.stock_path), "saved stock removed after restoring");
     CHECK(h.keyboard.closed, "keyboard closed");
     harness_free(&h);
+}
+
+static void test_clears_autoindent(void) {
+    harness h; harness_init(&h);
+    h.env.clear_autoindent = true;
+    ipad2jb_outcome outcome = ipad2jb_run(&h.env, "A\n B");
+    CHECK(outcome.typing == IPAD2JB_TYPED && outcome.restore == IPAD2JB_RESTORED,
+          "multiline file types and restores");
+    uint8_t keys[16], mods[16];
+    int count = 0;
+    for (int i = 0; i < h.keyboard.sent_count && count < 16; i++) {
+        if (h.keyboard.sent[i][2]) {
+            keys[count] = h.keyboard.sent[i][2];
+            mods[count++] = h.keyboard.sent[i][0];
+        }
+    }
+    const uint8_t expected[] = {0x04, 0x28, 0x4A, 0x4D, 0x4C, 0x2C, 0x05};
+    CHECK(count == 7 && memcmp(keys, expected, sizeof(expected)) == 0,
+          "Enter clears inherited indentation before original leading space");
+    CHECK(count == 7 && mods[3] == 2, "End selects indentation with Shift");
+    harness_free(&h);
+}
+
+static void test_fast_timing(void) {
+    harness slow, fast;
+    harness_init(&slow);
+    slow.env.clear_autoindent = true;
+    ipad2jb_outcome a = ipad2jb_run(&slow.env, "A\n B");
+    unsigned long slow_ms = slept_ms;
+    harness_init(&fast);
+    fast.env.clear_autoindent = true;
+    fast.env.fast_typing = true;
+    ipad2jb_outcome b = ipad2jb_run(&fast.env, "A\n B");
+    CHECK(a.typing == IPAD2JB_TYPED && b.typing == IPAD2JB_TYPED &&
+          b.restore == IPAD2JB_RESTORED, "fast run types and restores");
+    CHECK(slow_ms == slept_ms + 230, "fast mode reduces character, Enter and cleanup gaps");
+    CHECK(slow.keyboard.sent_count == fast.keyboard.sent_count &&
+          memcmp(slow.keyboard.sent, fast.keyboard.sent,
+                 slow.keyboard.sent_count * IPAD2JB_REPORT_LENGTH) == 0,
+          "fast mode sends identical keyboard reports");
+    unsigned long fast_ms = slept_ms;
+    harness turbo; harness_init(&turbo);
+    turbo.env.clear_autoindent = true;
+    turbo.env.turbo_typing = true;
+    ipad2jb_outcome t = ipad2jb_run(&turbo.env, "A\n B");
+    CHECK(t.typing == IPAD2JB_TYPED && t.restore == IPAD2JB_RESTORED,
+          "turbo run types and restores");
+    CHECK(fast_ms == slept_ms + 55, "turbo reduces key hold and gaps but retains Enter delay");
+    CHECK(fast.keyboard.sent_count == turbo.keyboard.sent_count &&
+          memcmp(fast.keyboard.sent, turbo.keyboard.sent,
+                 fast.keyboard.sent_count * IPAD2JB_REPORT_LENGTH) == 0,
+          "turbo sends identical keyboard reports");
+    harness_free(&slow); harness_free(&fast); harness_free(&turbo);
 }
 
 static void test_interrupt_during_typing(void) {
@@ -352,6 +409,8 @@ static void test_leftover_is_restored_first(void) {
 
 int main(void) {
     test_keycodes();
+    test_clears_autoindent();
+    test_fast_timing();
     test_class_replies();
     test_keyboard_description();
     test_types_and_restores();

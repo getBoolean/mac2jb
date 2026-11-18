@@ -127,7 +127,7 @@ enum {
     // Second argument of the descriptor appends; libusbd passes 0x0F unexplained.
     DESCRIPTOR_APPEND_FLAGS = 0x0F,
     // Boot keyboard (HID class 3, subclass 1, protocol 1) with one interrupt-IN
-    // endpoint of 8 bytes polled every 10 ms.
+    // endpoint of 8 bytes. bInterval is a USB descriptor value, not milliseconds.
     HID_CLASS = 3, HID_BOOT_SUBCLASS = 1, HID_KEYBOARD_PROTOCOL = 1,
     TRANSFER_INTERRUPT = 3, DIRECTION_IN = 1, MAX_PACKET = 8, POLL_INTERVAL = 10,
     BUFFER_SIZE = 0x1000,
@@ -153,6 +153,7 @@ typedef struct {
 static struct {
     io_connect_t connection;
     uint64_t pipe;
+    unsigned poll_interval;
     user_buffer reports;          // staged keyboard reports (main thread)
     user_buffer class_replies;    // class-request reply data (dispatch queue)
     IONotificationPortRef port;
@@ -257,7 +258,7 @@ static bool keyboard_open(void *context, const char **failed_step) {
             : call(step->selector, step->arguments, step->argument_count, NULL, 0);
         if (status) return false;
     }
-    uint64_t endpoint[6] = { TRANSFER_INTERRUPT, DIRECTION_IN, MAX_PACKET, POLL_INTERVAL, 0, 0 };
+    uint64_t endpoint[6] = { TRANSFER_INTERRUPT, DIRECTION_IN, MAX_PACKET, keyboard.poll_interval, 0, 0 };
     *failed_step = "create the interrupt-IN pipe";
     if (call(SEL_CREATE_PIPE, endpoint, 6, &keyboard.pipe, 1)) return false;
     *failed_step = "create buffers";
@@ -290,6 +291,7 @@ static void keyboard_close(void *context) {
     keyboard.connection = IO_OBJECT_NULL;
 }
 
-void ipad2jb_iokit_keyboard(ipad2jb_keyboard *out) {
+void ipad2jb_iokit_keyboard(ipad2jb_keyboard *out, unsigned poll_interval) {
+    keyboard.poll_interval = poll_interval;
     *out = (ipad2jb_keyboard){ NULL, keyboard_open, keyboard_host_selected, keyboard_send, keyboard_close };
 }
