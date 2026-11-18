@@ -1,16 +1,26 @@
 # mac2jb
 
-> **Failed experiment — iPad/iPhone port closed, 2026-11-02.** This repository
-> retains the experiment and its findings for reference. Direct USB HID did not
-> enumerate on the reference M2 iPad Pro running iPadOS 17.0 across five userspace
-> trials. Source review found no kernel gadget candidate meeting the project's
-> reversibility requirements, so the later kernel and Switch validation gates
-> were not run. There is no working iPad/iPhone port. See the
-> [gate findings](docs/ipad/hardware-matrix.md) and
-> [kernel candidate assessment](docs/plans/ipad-port/research/kernel-gadget-candidate-matrix.md).
-> This result is limited to the investigated approaches and target; it does not
-> establish impossibility on every device. The original macOS instructions are
-> retained below.
+> **iPad/iPhone port: the iPad now enumerates as a USB keyboard (2026-11-17).**
+> On the reference M2 iPad Pro (iPadOS 17.0, Dopamine and TrollStore), a
+> userspace-only USB HID keyboard function was enumerated by a Mac over USB-C.
+> macOS registered it as a USB keyboard (`AppleUSBMux` plus `Keyboard`, Apple
+> vendor and product IDs) and received a typed test string. No kernel code is
+> involved.
+>
+> The earlier failure was not a missing kernel driver. The iPad's USB controller
+> goes on bus only after every function named in any published configuration has
+> registered. The five 2026-11-02 trials kept all nine stock configurations, and
+> stock audio or accessory functions never registered, so the keyboard was never
+> offered to the host. Publishing one configuration in the shape of Apple's own
+> `standardKeyboard` profile avoids that. The keyboard worker also has to wait
+> until the host starts polling before it types.
+>
+> Not yet done: the Switch 2 and other hosts are untested, and the keyboard lasts
+> only for one bounded trial. On the Mac, text appeared only after the Mac's
+> privacy approvals were added; before that, macOS received the keystrokes but
+> held them back from an unapproved external keyboard. See the
+> [current findings](docs/ipad/target-device-findings.md) for the evidence, the
+> recipe and the open items. The macOS instructions below are unchanged.
 
 an all-in-one ns2 jailbreaking tool for mac.
 

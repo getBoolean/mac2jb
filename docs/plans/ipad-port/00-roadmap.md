@@ -12,11 +12,14 @@ plan_role: roadmap
 
 # M2 iPad Full Port Roadmap - Plan
 
-> **Closed as a failed experiment, 2026-11-02.** Direct USB HID failed on the
-> reference device through the tested userspace approach. No kernel candidate
-> met the source eligibility requirements, so the remaining port work was not
-> executed. This roadmap is retained for reference. See the
-> [hardware verdict](../../ipad/hardware-matrix.md).
+> **Reopened 2026-11-17: direct USB HID enumerates on the reference device.**
+> A userspace keyboard function, published as a single configuration in the
+> shape of Apple's `standardKeyboard` profile, was enumerated by a Mac as a USB
+> keyboard and delivered a typed test string. The 2026-11-02 stop came from the
+> controller waiting on stock functions in the other configurations, not from a
+> missing kernel driver. The direct-HID gate is demonstrated against a Mac only;
+> the Switch 2 host and the later gates have not been run. See the
+> [current findings](../../ipad/target-device-findings.md).
 
 ## Goal Capsule
 
