@@ -15,11 +15,14 @@ async function until(check,message='Timed out waiting for the fake keyboard') {
   const deadline=Date.now()+3000;
   while(!check()){assert.ok(Date.now()<deadline,message);await new Promise(resolve=>setTimeout(resolve,5));}
 }
-function fixture(t,script) {
+function fixture(t,script,discoveredControllers) {
   const directory=fs.mkdtempSync(path.join(os.tmpdir(),'mac2jb keyboard test '));
   t.after(()=>fs.rmSync(directory,{recursive:true,force:true}));
   fs.mkdirSync(path.join(directory,'scripts'));
   fs.copyFileSync(path.join(__dirname,'gui-keyboard.cjs'),path.join(directory,'scripts/gui-keyboard.cjs'));
+  fs.writeFileSync(path.join(directory,'scripts/usb-controllers.cjs'),discoveredControllers
+    ? `module.exports.autoControllers = () => ${JSON.stringify(discoveredControllers)};\n`
+    : "module.exports.autoControllers = preferred => [...new Set([...(preferred ? [preferred] : []), 'usb-drd0', 'usb-drd1', 'usb-drd2', 'usb-drd3'])];\n");
   if(script!==undefined)fs.writeFileSync(path.join(directory,'mac2jb-keyboard'),'#!'+process.execPath+'\n'+`
     const fs=require('node:fs');
     fs.appendFileSync('attempts.txt',process.env.MAC2JB_CONTROLLER+'\\n');
@@ -90,7 +93,8 @@ test('text preflight normalizes CRLF, enforces complete ASCII input and bounds w
   for(const value of [{text:'',delayMs:10},{text:'A'.repeat(MAX_TEXT_BYTES+1),delayMs:10},
     {text:'valid prefix\u00e9',delayMs:10},{text:'A\rB',delayMs:10},{text:'A\0',delayMs:10},{text:'A\x7f',delayMs:10},
     {text:'A',delayMs:0},{text:'A',delayMs:2001},{text:'A',delayMs:1.5},{text:'A',delayMs:'10'},
-    {text:'A'},{text:1,delayMs:10},{text:'A',delayMs:10,report:pressed}])assert.throws(()=>prepareText(value));
+    {text:'A'},{text:1,delayMs:10},{text:'A',delayMs:10,report:pressed},
+    {text:'A',delayMs:10,editorAutoIndent:'yes'}])assert.throws(()=>prepareText(value));
   const events=[];
   assert.equal(await main(['--self-test'],{emit:(type,fields)=>events.push({type,...fields}),spawn:()=>{throw Error('Unexpected USB');}}),0);
   assert.equal(events[0].type,'self-test');
@@ -129,6 +133,20 @@ test('literal pasted text preserves symbols, case, tab and line endings without 
   session.input.write(JSON.stringify({report:pressed})+'\n');
   await until(()=>session.writes.at(-1).report[2]===4);
   session.input.end();assert.equal(await session.result,130);
+});
+test('pasted BASIC lines adjust only inherited leading spaces after Enter',()=>{
+  const text='A\n  B\n    C\n D\nE',prepared=prepareText({text,delayMs:10,editorAutoIndent:true});
+  assert.equal(prepared.total,text.length);
+  assert.deepEqual(prepared.reports.map(report=>report[2]),
+    [4,40,44,44,5,40,44,44,6,40,42,42,42,7,40,42,8]);
+  assert.equal(prepared.progress.at(-1),text.length);
+  const trailing=prepareText({text:'  A\n  ',delayMs:10,editorAutoIndent:true});
+  assert.equal(trailing.total,6);
+  assert.equal(trailing.reports.at(-1)[2],40);
+  assert.deepEqual(prepareText({text:'  ',delayMs:10,editorAutoIndent:true}).progress,[1,2]);
+  const literal=prepareText({text:'A\n  B',delayMs:10,editorAutoIndent:false});
+  assert.deepEqual(literal.reports.map(report=>report[2]),[4,40,44,44,5]);
+  assert.deepEqual(prepareText({text:'A\n  B',delayMs:10}).reports,literal.reports);
 });
 test('slow native delivery gates progress and the per-character delay with at most two reports outstanding',async t=>{
   const session=textSession(t,{sinkDelayMs:35});
@@ -231,7 +249,7 @@ test('preferred keyboard controller settings are auto-only, canonical and unique
     ['live','usb-drd3','--preferred-controller','usb-drd1']])
     await assert.rejects(main(args,{spawn:()=>{throw Error('Unexpected spawn');}}),/Invalid keyboard settings/);
 });
-for(const [preferred,expected] of [['usb-drd1','usb-drd1\nusb-drd0\nusb-drd3\n'],['usb-drd15','usb-drd15\nusb-drd0\nusb-drd1\nusb-drd3\n']])
+for(const [preferred,expected] of [['usb-drd1','usb-drd1\nusb-drd0\nusb-drd2\nusb-drd3\n'],['usb-drd15','usb-drd15\nusb-drd0\nusb-drd1\nusb-drd2\nusb-drd3\n']])
 test('unresponsive preferred keyboard candidates are deduplicated and safe only after exhaustion: '+preferred,async t=>{
   const directory=fixture(t,`console.error('USB host did not enumerate a keyboard.');process.exitCode=1;`);
   const result=await run(t,directory,['live','auto','4','--preferred-controller',preferred]).done;
@@ -251,6 +269,27 @@ test('keyboard initialization failure cannot enable another probe or safe Skip: 
   const result=await run(t,directory,['live','auto','--preferred-controller','usb-drd15']).done;
   assert.equal(result.code,1);assert.equal(fs.readFileSync(path.join(directory,'attempts.txt'),'utf8'),'usb-drd15\n');
   assert.equal(result.events.some(event=>event.type==='keyboard-ready'||event.retrySafe===true),false);
+});
+test('automatic live keyboard skips an absent usb-drd2 before usb-drd3',async t=>{
+  const directory=fixture(t,`
+    if(process.env.MAC2JB_CONTROLLER==='usb-drd2')console.error('libusbd_init failed; check usbgadget.kext.');
+    else if(process.env.MAC2JB_CONTROLLER==='usb-drd3'){
+      console.log('MAC2JB_KEYBOARD_READY');console.log('MAC2JB_KEYBOARD_RELEASED');process.exit(0);
+    }else console.error('USB host did not enumerate a keyboard.');
+    process.exitCode=1;
+  `);
+  const result=await run(t,directory,['live','auto']).done;
+  assert.equal(result.code,0,result.error);
+  assert.equal(fs.readFileSync(path.join(directory,'attempts.txt'),'utf8'),
+    'usb-drd0\nusb-drd1\nusb-drd2\nusb-drd3\n');
+  assert.deepEqual(result.events.filter(event=>event.type==='keyboard-ready').map(event=>event.controller),['usb-drd3']);
+});
+test('manual live keyboard does not retry after USB initialization failure',async t=>{
+  const directory=fixture(t,`console.error('libusbd_init failed; check usbgadget.kext.');process.exitCode=1;`);
+  const result=await run(t,directory,['live','usb-drd2']).done;
+  assert.equal(result.code,1);
+  assert.equal(fs.readFileSync(path.join(directory,'attempts.txt'),'utf8'),'usb-drd2\n');
+  assert.equal(result.events.some(event=>event.retrySafe===true),false);
 });
 test('a late positive release without readiness cannot enable another controller probe',async t=>{
   const directory=fixture(t,`console.error('USB host did not enumerate a keyboard.');console.log('MAC2JB_KEYBOARD_RELEASED');process.exitCode=1;`);
@@ -277,6 +316,13 @@ test('only orderly pre-readiness enumeration failures advance to another control
   assert.equal(result.code,0,result.error);
   assert.equal(fs.readFileSync(path.join(directory,'attempts.txt'),'utf8'),'usb-drd0\nusb-drd1\n');
   assert.equal(result.events.filter(row=>row.type==='keyboard-stopped').length,1);
+});
+test('automatic live keyboard reaches an attached usb-drd2 controller',async t=>{
+  const directory=fixture(t,`if(process.env.MAC2JB_CONTROLLER==='usb-drd0'){console.error('USB host did not enumerate a keyboard.');process.exitCode=1;}
+    else{console.log('MAC2JB_KEYBOARD_READY');console.log('MAC2JB_KEYBOARD_RELEASED');}`,['usb-drd0','usb-drd2']);
+  const result=await run(t,directory,['live','auto']).done;
+  assert.equal(result.code,0,result.error);
+  assert.equal(fs.readFileSync(path.join(directory,'attempts.txt'),'utf8'),'usb-drd0\nusb-drd2\n');
 });
 for(const [label,script] of [
   ['abnormal termination',`console.error('USB host did not enumerate a keyboard.');process.kill(process.pid,'SIGTERM');`],

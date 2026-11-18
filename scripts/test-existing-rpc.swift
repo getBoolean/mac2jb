@@ -11,20 +11,30 @@ enum EmbeddedPayloadMetadata { static let sha256 = "unused-fixture" }
     let base: URL
     let root: URL
     let source: URL
+    let timingSuiteName = "mac2jb-test-timing-" + UUID().uuidString
     let model: SessionModel
-    init(host: HostProfile = .bermTheSequel, edition: SmileBASICEdition = .full, addressProvider: @escaping () -> [NetworkAddress] = { [] }) throws {
+    init(host: HostProfile = .bermTheSequel, edition: SmileBASICEdition = .full,
+         civSwitchFS: Bool = false, addressProvider: @escaping () -> [NetworkAddress] = { [] }) throws {
         let temporary = FileManager.default.temporaryDirectory.appendingPathComponent("mac2jb-attachment-fixture-" + UUID().uuidString)
         try FileManager.default.createDirectory(at: temporary, withIntermediateDirectories: false, attributes: [.posixPermissions: 0o700])
         guard let canonical = realpath(temporary.path, nil) else {throw POSIXError(.EIO)}
         base = URL(fileURLWithPath: String(cString: canonical), isDirectory: true)
         free(canonical)
         root = base.appendingPathComponent("runtime")
-        source = base.appendingPathComponent("original-host/runs/switch2-fixture")
+        source = base.appendingPathComponent("Sessions/" + UUID().uuidString +
+            (civSwitchFS ? "/runs/civswitch-fs-0123456789abcdef/port/engine/runs/switch2-Fixtur" :
+             "/vendor/ns2jb/runs/switch2-Fixtur"))
         for url in [root, source] { try FileManager.default.createDirectory(at: url, withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700]) }
         try Data("{\"id\":\"\(host.rawValue)\"}".utf8).write(to: root.appendingPathComponent("selected-host.json"))
         let worker = #"""
         #!/bin/sh
-        case "$1" in */scripts/gui-attach.cjs) ;; *) exit 88 ;; esac
+        case "$1" in
+          */scripts/gui-discover-rpc.cjs)
+            if [ -f discovery-result ]; then cat discovery-result; else printf '%s\n' '{"candidates":[]}'; fi
+            exit 0 ;;
+          */scripts/gui-attach.cjs) ;;
+          *) exit 88 ;;
+        esac
         printf '%s\n' "$*" >> invocations
         printf '%s\n' "$$" > fixture-pid
         emit_events() { if [ -f "$1" ]; then while IFS= read -r line; do printf '%s\n' "$line"; done < "$1"; fi; }
@@ -45,7 +55,12 @@ enum EmbeddedPayloadMetadata { static let sha256 = "unused-fixture" }
           printf '%s\n' "$control" >> controls
           case "$control" in
             *'"action":"rpc-status"'*) printf '%s\n' '{"type":"rpc-status","ready":true,"message":"Fixture RPC connected."}' ;;
-            *'"action":"launch-gpubrewlauncher"'*|*'"action":"launch-hblauncher"'*|*'"action":"launch-izlauncher"'*)
+            *'"action":"launch-custom-homebrew"'*)
+              case "$control" in
+                *missing*) printf '%s\n' '{"type":"action-rejected","action":"launch-custom-homebrew","message":"Invalid app.json package."}' ;;
+                *) printf '%s\n' '{"type":"homebrew-accepted","action":"launch-custom-homebrew","message":"Validated custom app."}' '{"type":"homebrew-started"}' '{"type":"homebrew-running","message":"Inert app running."}' ;;
+              esac ;;
+            *'"action":"launch-mintbrew"'*)
               printf '%s\n' '{"type":"homebrew-started"}' '{"type":"homebrew-running","message":"Inert app running."}' ;;
             *'"action":"finish"'*)
               printf '%s\n' '{"type":"homebrew-stopped"}' '{"type":"verified"}' '{"type":"rpc-finishing"}'
@@ -66,15 +81,16 @@ enum EmbeddedPayloadMetadata { static let sha256 = "unused-fixture" }
         let executable = root.appendingPathComponent("node")
         try Data(worker.utf8).write(to: executable)
         try FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: executable.path)
-        model = SessionModel(addressProvider: addressProvider, runtime: BundledRuntime(root: root), edition: edition)
+        model = SessionModel(addressProvider: addressProvider, runtime: BundledRuntime(root: root), edition: edition, timingDefaults: UserDefaults(suiteName: timingSuiteName)!, networkDefaults: UserDefaults(suiteName: timingSuiteName)!)
         model.phase = .ready; model.driverLoaded = false
         model.existingRPCRunPath = source.path
         try eventFile("attached-event", type: "rpc-attached")
         try eventFile("detached-event", type: "rpc-detached")
     }
     func put(_ file: String, _ value: String = "") throws {try Data(value.utf8).write(to: root.appendingPathComponent(file))}
-    func eventFile(_ file: String, type: String, path: String? = nil, session: String? = nil) throws {
-        let event: [String: Any] = ["type": type, "path": path ?? source.path, "sourceSession": session ?? source.lastPathComponent]
+    func eventFile(_ file: String, type: String, path: String? = nil, session: String? = nil, profileId: String? = nil) throws {
+        var event: [String: Any] = ["type": type, "path": path ?? source.path, "sourceSession": session ?? source.lastPathComponent]
+        if type == "rpc-attached" { event["profileId"] = profileId ?? model.selectedHost.rawValue }
         let data = try JSONSerialization.data(withJSONObject: event)
         try put(file, String(decoding: data, as: UTF8.self) + "\n")
     }
@@ -87,6 +103,7 @@ enum EmbeddedPayloadMetadata { static let sha256 = "unused-fixture" }
         ((try? String(contentsOf: root.appendingPathComponent("invocations"), encoding: .utf8)) ?? "").split(separator: "\n").map(String.init)
     }
     func dispose() {
+        UserDefaults(suiteName: timingSuiteName)?.removePersistentDomain(forName: timingSuiteName)
         if model.hasLiveWorkers, let text = try? String(contentsOf: root.appendingPathComponent("fixture-pid"), encoding: .utf8),
            let pid = Int32(text.trimmingCharacters(in: .whitespacesAndNewlines)), pid > 1 { _ = kill(pid, SIGKILL) }
         if let log = model.diagnosticLogURL, log.deletingLastPathComponent().lastPathComponent.hasPrefix("mac2jb-gui-error-") {
@@ -107,14 +124,16 @@ enum EmbeddedPayloadMetadata { static let sha256 = "unused-fixture" }
     static func main() async throws {
         check(!HostProfile.pepsipu.supportsHeldRPC && !HostProfile.pepsipu.supportsDemo && HostProfile.pepsipu.startArgumentCount == 9,
               "pepsipu capabilities preserve its nine-argument bootstrap and no held endpoint")
-        check(HostProfile.kurumuz.supportsHeldRPC && !HostProfile.kurumuz.supportsDemo && HostProfile.kurumuz.startArgumentCount == 5,
-              "kurumuz exposes held RPC but not unsupported demo mode")
+        check(HostProfile.kurumuz.supportsHeldRPC && HostProfile.kurumuz.supportsDemo && HostProfile.kurumuz.startArgumentCount == 5,
+              "kurumuz exposes held RPC and demo mode")
+        check(HostProfile.cellenseres.supportsHeldRPC && HostProfile.cellenseres.supportsDemo && HostProfile.cellenseres.startArgumentCount == 5,
+              "Cellenseres exposes held RPC and the inherited five-argument bootstrap")
         check(HostProfile.bermTheSequel.supportsHeldRPC && HostProfile.bermTheSequel.supportsDemo && HostProfile.bermTheSequel.startArgumentCount == 5,
               "BermTheSequel retains held RPC and demo support")
         let five = "V=START(39380,192,0,2,42)", nine = "V=START(39380,192,0,2,42,1,2,3,281474976710655)"
         check(PostBootstrapCommandSelection.validStartCommand(nine, host: .pepsipu) && !PostBootstrapCommandSelection.validStartCommand(five, host: .pepsipu),
               "pepsipu validates the exact nine-value START including token values")
-        for host in [HostProfile.kurumuz, .bermTheSequel] {
+        for host in [HostProfile.kurumuz, .cellenseres, .bermTheSequel] {
             check(PostBootstrapCommandSelection.validStartCommand(five, host: host) && !PostBootstrapCommandSelection.validStartCommand(nine, host: host),
                   "five-value hosts reject a different bootstrap command shape")
         }
@@ -124,15 +143,84 @@ enum EmbeddedPayloadMetadata { static let sha256 = "unused-fixture" }
         }
         let unsupported = try AttachmentFixture(host: .pepsipu)
         defer {unsupported.dispose()}
-        check(unsupported.model.selectedHost == .pepsipu && unsupported.model.runMode == .exploitOnly && !unsupported.model.canAttachExistingRPC,
-              "runtime profile capability prevents unsupported attachment")
-        unsupported.model.attachExistingRPC(); unsupported.model.startHostOnly(keepRPC: true); unsupported.model.selectRunMode(.existingRPC)
-        check(!unsupported.model.hasLiveWorkers && unsupported.invocations.isEmpty && unsupported.model.runMode == .exploitOnly,
-              "unsupported held workflows never spawn a worker")
+        check(unsupported.model.selectedHost == .pepsipu && unsupported.model.runMode == .exploitOnly && unsupported.model.canAttachExistingRPC,
+              "attachment checks the source run rather than the currently selected host")
+        unsupported.model.startHostOnly(keepRPC: true); unsupported.model.selectRunMode(.existingRPC)
+        check(!unsupported.model.hasLiveWorkers && unsupported.invocations.isEmpty && unsupported.model.runMode == .existingRPC,
+              "unsupported hosts still cannot start held RPC but can select an existing session")
 
-        for (launcher, action, edition) in [("GPUBrewLauncher", "launch-gpubrewlauncher", SmileBASICEdition.full), ("HBLauncher", "launch-hblauncher", .full), ("IZlauncher", "launch-izlauncher", .full), ("IZlauncher", "launch-izlauncher", .demo)] {
+        let discovered = try AttachmentFixture(host: .pepsipu)
+        defer {discovered.dispose()}
+        try discovered.eventFile("attached-event", type: "rpc-attached", profileId: "cellenseres")
+        let discoveredCandidate: [String: String] = ["path": discovered.source.path,
+            "description": "Cellenseres · \(discovered.source.lastPathComponent)",
+            "session": discovered.source.lastPathComponent, "profileId": "cellenseres",
+            "modified": "2026-11-01T00:00:00.000Z"]
+        let discoveredOutput = try JSONSerialization.data(withJSONObject: ["candidates": [discoveredCandidate]])
+        try discovered.put("discovery-result", String(decoding: discoveredOutput, as: UTF8.self))
+        discovered.model.findOpenRPC()
+        try await until("one discovered session starts attachment") {discovered.model.phase == .rpcAttaching}
+        check(discovered.model.existingRPCRunPath == discovered.source.path &&
+              discovered.model.rpcDiscoveredSessions.count == 1 && discovered.model.hasLiveWorkers,
+              "one verified discovery result automatically uses the existing attachment path")
+        try discovered.put("release-attach")
+        try await until("discovered source host verified") {discovered.model.phase == .rpcHeld}
+        check(discovered.model.activeHost == .cellenseres && discovered.model.selectedHost == .pepsipu &&
+              discovered.model.canLaunchHomebrew,
+              "the attached run's verified profile controls capabilities independently of the picker")
+
+        let civ = try AttachmentFixture(host: .pepsipu, civSwitchFS: true)
+        defer {civ.dispose()}
+        try civ.eventFile("attached-event", type: "rpc-attached", profileId: "civswitch-fs")
+        let civCandidate: [String: String] = ["path": civ.source.path,
+            "description": "CivSwitch filesystem · \(civ.source.lastPathComponent)",
+            "session": civ.source.lastPathComponent, "profileId": "civswitch-fs",
+            "modified": "2026-11-10T00:00:00.000Z"]
+        let civOutput = try JSONSerialization.data(withJSONObject: ["candidates": [civCandidate]])
+        try civ.put("discovery-result", String(decoding: civOutput, as: UTF8.self))
+        civ.model.findOpenRPC()
+        try await until("CivSwitch discovery starts attachment") {civ.model.phase == .rpcAttaching}
+        check(civ.model.existingRPCRunPath == civ.source.path && civ.model.hasLiveWorkers,
+              "the discovered CivSwitch FS run uses the local attachment supervisor")
+        try civ.put("release-attach")
+        try await until("CivSwitch attachment verifies held RPC") {civ.model.phase == .rpcHeld}
+        check(civ.model.isAttachedCivSwitchFS && civ.model.canStartSaveKit && civ.model.canLaunchHomebrew &&
+              civ.model.selectedHost == .pepsipu,
+              "the CivSwitch FS profile enables its tools without changing the selected ns2jb host")
+
+        let choices = try AttachmentFixture()
+        defer {choices.dispose()}
+        let otherCandidate: [String: String] = ["path": choices.base.appendingPathComponent("other/switch2-test").path,
+            "description": "Kurumuz · switch2-test", "session": "switch2-test", "profileId": "kurumuz",
+            "modified": "2026-11-01T00:00:00.000Z"]
+        var firstCandidate = discoveredCandidate
+        firstCandidate["path"] = choices.source.path
+        firstCandidate["session"] = choices.source.lastPathComponent
+        let choicesOutput = try JSONSerialization.data(withJSONObject: ["candidates": [firstCandidate, otherCandidate]])
+        try choices.put("discovery-result", String(decoding: choicesOutput, as: UTF8.self))
+        choices.model.findOpenRPC()
+        try await until("multiple discovered sessions offered") {
+            !choices.model.rpcDiscoveryRunning && choices.model.rpcDiscoveredSessions.count == 2
+        }
+        check(choices.model.phase == .ready && !choices.model.hasLiveWorkers &&
+              choices.model.selectedDiscoveredRPCPath == choices.source.path,
+              "multiple verified sessions wait for an explicit selection")
+
+        let sessionFolder = try AttachmentFixture(host: .kurumuz)
+        defer {sessionFolder.dispose()}
+        let selectedSession = sessionFolder.source.deletingLastPathComponent().deletingLastPathComponent()
+            .deletingLastPathComponent().deletingLastPathComponent()
+        sessionFolder.model.existingRPCRunPath = selectedSession.path
+        sessionFolder.model.attachExistingRPC()
+        try sessionFolder.put("release-attach")
+        try await until("session folder resolves to its verified run") {sessionFolder.model.phase == .rpcHeld}
+        check(sessionFolder.model.activeHost == .kurumuz && sessionFolder.model.canLaunchHomebrew &&
+              sessionFolder.model.existingRPCRunPath == selectedSession.path,
+              "a selected session folder accepts only its verified nested run")
+
+        for (launcher, action, edition, host) in [("MintBrew", "launch-mintbrew", SmileBASICEdition.full, HostProfile.kurumuz)] {
         var addressReads = 0
-        let fixture = try AttachmentFixture(edition: edition, addressProvider: {addressReads += 1; return []})
+        let fixture = try AttachmentFixture(host: host, edition: edition, addressProvider: {addressReads += 1; return []})
         defer {fixture.dispose()}
         let model = fixture.model
         for bad in ["", "relative/run", "/run\nother", "/run\0other"] {
@@ -165,17 +253,20 @@ enum EmbeddedPayloadMetadata { static let sha256 = "unused-fixture" }
         try await until("verified attachment enables homebrew") {model.phase == .rpcHeld && model.canLaunchHomebrew}
         check(model.postRun.heldConfirmed && model.activeSessionSupportsHomebrew && !model.canStartKeyboard,
               "a live verified attachment enters held homebrew state without keyboard ownership")
+        let exploitLogs = fixture.source.appendingPathComponent("switch2", isDirectory: true)
+        try FileManager.default.createDirectory(at: exploitLogs, withIntermediateDirectories: false)
+        try Data("{\"stage\":\"pipeline-fixture\"}\n".utf8).write(to: exploitLogs.appendingPathComponent("pipeline.json"))
+        try Data("acquisition-fixture\n".utf8).write(to: exploitLogs.appendingPathComponent("acquisition.log"))
+        model.refreshExploitLogs()
+        check(model.pipelineLog.contains("pipeline-fixture") && model.acquisitionLog.contains("acquisition-fixture"),
+              "exploit logs come from the held run's switch2 directory")
         model.checkRPCStatus()
         try await until("local status response") {!model.postRun.statusInFlight && model.rpcStatus.contains("connected")}
-        if action == "launch-hblauncher" { model.launchHBLauncher() } else if action == "launch-izlauncher" { model.launchIZlauncher() } else { model.launchGPUBrewLauncher() }
+        model.launchMintBrew()
         try await until("attached GPU launcher runs") {model.phase == .homebrewRunning}
         check(model.homebrewTitle == launcher,
               "attached RPC forwards the selected launcher identity")
-        if action == "launch-izlauncher" {
-            check(fixture.controls.first { $0["action"] as? String == action }?.count == 1 && model.activeEdition == edition && model.activeHost == .bermTheSequel,
-                  "attached IZlauncher preserves the current Berm host and full or demo edition")
-        }
-        model.launchGPUBrewLauncher(); model.launchHBLauncher(); model.launchIZlauncher(); model.attachExistingRPC()
+        model.launchMintBrew(); model.attachExistingRPC()
         check(!model.canLaunchHomebrew && fixture.invocations.count == 1, "one live supervisor owns the sole app attempt")
         try fixture.eventFile("premature-detach", type: "rpc-detached", session: "wrong-session")
         model.finishPostRun()
@@ -196,6 +287,29 @@ enum EmbeddedPayloadMetadata { static let sha256 = "unused-fixture" }
               fixture.controls.filter {$0["action"] as? String == "finish"}.count == 1,
               "duplicate app and finish operations are never replayed")
         model.returnToStart(); check(model.phase == .ready && !model.hasLiveWorkers, "detachment returns to the start screen after drain")
+        }
+
+        for _ in [0] {
+            let fixture = try AttachmentFixture()
+            defer {fixture.dispose()}
+            let model = fixture.model
+            model.attachExistingRPC(); try fixture.put("release-attach")
+            try await until("held RPC for package validation") {model.canLaunchHomebrew}
+            model.launchCustomHomebrew(folder: URL(fileURLWithPath: "/tmp/missing-app"))
+            check(!model.canLaunchHomebrew && !model.postRun.homebrewAttempted && model.pendingHomebrewAction != nil,
+                  "package validation waits before claiming the only app attempt")
+            try await until("invalid package rejection") {model.pendingHomebrewAction == nil && model.canLaunchHomebrew}
+            check(!model.postRun.homebrewAttempted && model.phase == .rpcHeld,
+                  "invalid package can be corrected in the same held session")
+            model.launchCustomHomebrew(folder: URL(fileURLWithPath: "/tmp/compatible-app"))
+            try await until("validated package running") {model.phase == .homebrewRunning}
+            check(model.postRun.homebrewAttempted && model.pendingHomebrewAction == nil,
+                  "the accepted package claims exactly one launch")
+            model.finishPostRun()
+            try await until("validated package finish request") {fixture.exists("finish-received")}
+            try fixture.put("release-detach"); try fixture.put("release-exit")
+            try await until("validated package detach") {!model.hasLiveWorkers}
+            check(model.phase == .rpcDetached,"the validated package drains before detaching")
         }
 
         for badExit in [false, true] {

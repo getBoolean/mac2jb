@@ -6,6 +6,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const {spawnSync} = require('node:child_process');
 const {createController, renderMenu} = require('./controller.cjs');
+const {SourcePreferences} = require('./source-preferences.cjs');
 
 async function selectDetailsAction(controller, action) {
   const index = controller.getMenuModel().actions.findIndex(entry => entry.action === action);
@@ -34,7 +35,7 @@ async function fixture(t, callbacks = {}) {
   });
   await new Promise(resolve => instance.listen(0, '127.0.0.1', resolve));
   t.after(() => new Promise(resolve => { instance.closeAllConnections(); instance.close(resolve); }));
-  const defaults = Object.fromEntries(['play', 'pause', 'seek', 'seekTo', 'stop', 'volume'].map(name => [name, async value => {calls.push({name, value});}]));
+  const defaults = Object.fromEntries(['play', 'pause', 'seek', 'seekTo', 'stop'].map(name => [name, async value => {calls.push({name, value});}]));
   const controller = createController({addonUrls: [`http://127.0.0.1:${instance.address().port}/manifest.json?apiKey=ADDONSECRET`],
     callbacks: {...defaults, ...callbacks}, onLog: value => logs.push(value)});
   assert.equal(await controller.init(), true);
@@ -66,12 +67,14 @@ test('catalog, series episodes and sources lead to actual playback callbacks and
   await controller.handleButton('a'); assert.equal(controller.playback.paused, true);
   await controller.handleButton('right'); await controller.handleButton('left');
   await controller.handleButton('zr'); await controller.handleButton('zl');
-  await controller.handleButton('down'); await controller.handleButton('up');
-  controller.setPlaybackInfo({position: 65, duration: 600, paused: false, volume: 0.5});
-  assert.match(controller.getMenuModel().subtitle, /1:05 \/ 10:00.*50%/);
+  assert.equal(await controller.handleButton('down'), false);
+  assert.equal(await controller.handleButton('up'), false);
+  controller.setPlaybackInfo({position: 65, duration: 600, paused: false});
+  assert.equal(controller.getMenuModel().subtitle, 'Playing · 1:05 / 10:00');
+  assert.doesNotMatch(controller.getMenuModel().footer, /Vol/);
   await controller.handleButton('b'); assert.equal(controller.getMenuModel().view, 'playing');
   await controller.handleButton('b'); assert.equal(controller.getMenuModel().view, 'sources');
-  assert.deepEqual(calls.slice(1).map(call => [call.name, call.value]), [['pause', undefined], ['seek', 10], ['seek', -10], ['volume', -0.05], ['volume', 0.05], ['stop', undefined]]);
+  assert.deepEqual(calls.slice(1).map(call => [call.name, call.value]), [['pause', undefined], ['seek', 10], ['seek', -10], ['stop', undefined]]);
   await controller.handleButton('b'); assert.equal(controller.getMenuModel().view, 'episodes');
   await controller.handleButton('b'); await controller.handleButton('b'); await controller.handleButton('b'); await controller.handleButton('b');
   assert.equal(controller.getMenuModel().navigation.focus.area, 'sidebar');
@@ -79,6 +82,71 @@ test('catalog, series episodes and sources lead to actual playback callbacks and
   assert.equal(controller.getMenuModel().view, 'catalogs');
   assert.ok(requests.some(route => /stream\/series\/show%3A0%3A1%3A1\.json/.test(route)));
   assert.ok(logs.every(message => !/ADDONSECRET|STREAMSECRET|HEADERSECRET/.test(message)));
+});
+
+test('duplicate catalog tabs name their providers and required filters open usable choice and text views', async () => {
+  const requests = [];
+  const controller = createController();
+  const client = {catalog: async (catalog, extras) => {
+    requests.push({id: catalog.id, extras}); return [{id: `${catalog.id}:1`, type: 'movie', name: 'Result'}];
+  }};
+  const catalogs = [
+    {id: 'new-a', name: 'New', type: 'movie', addonName: 'Cinema', client,
+      extra: [{name: 'search', isRequired: true}, {name: 'genre', isRequired: true, options: ['Action', 'Drama']}, {name: 'skip'}]},
+    {id: 'new-b', name: 'New', type: 'movie', addonName: 'Discover', client, extra: []},
+    {id: 'popular', name: 'Popular', type: 'movie', addonName: 'Cinema', client, extra: []}
+  ];
+  controller.addons = {init: async () => {}, catalogs: () => catalogs, errors: []};
+  assert.equal(await controller.init(), true);
+  let model = controller.getMenuModel();
+  assert.equal(model.view, 'catalogFilters');
+  assert.equal(requests.length, 0);
+  assert.deepEqual(model.tabs.map(tab => tab.label), ['Cinema · New', 'Discover · New', 'Popular']);
+  assert.equal(model.rows[0].requiresText, true);
+  assert.equal(await controller.handleButton('a'), true);
+  model = controller.getMenuModel();
+  assert.deepEqual(model.filterInput, {name: 'search', label: 'Search', value: '', required: true});
+  assert.equal(controller.setCatalogFilter('search', null), true);
+  assert.equal(controller.getMenuModel().filterInput, null);
+  await controller.handleButton('a');
+  assert.equal(controller.setCatalogFilter('search', 'Alien'), true);
+  assert.equal(controller.getMenuModel().filterInput, null);
+  assert.equal(await controller.handleButton('down'), true);
+  assert.equal(await controller.handleButton('a'), true);
+  model = controller.getMenuModel();
+  assert.equal(model.view, 'filterChoices');
+  assert.deepEqual(model.rows.map(row => row.label), ['Action', 'Drama']);
+  assert.equal(await controller.handleButton('down'), true);
+  assert.equal(await controller.handleButton('a'), true);
+  assert.equal(controller.getMenuModel().rows[1].detail, 'Drama');
+  await controller.handleButton('down'); await controller.handleButton('a');
+  assert.equal(controller.getMenuModel().view, 'filterChoices');
+  assert.equal(controller.getMenuModel().rows[2].label, 'Page 2');
+  await controller.handleButton('down'); await controller.handleButton('down'); await controller.handleButton('a');
+  assert.equal(controller.getMenuModel().rows[2].detail, '2');
+  await controller.handleButton('down'); await controller.handleButton('a');
+  model = controller.getMenuModel();
+  assert.equal(model.view, 'catalog'); assert.equal(model.cards[0].title, 'Result');
+  assert.deepEqual(requests, [{id: 'new-a', extras: {search: 'Alien', genre: 'Drama', skip: '100'}}]);
+  await controller.handleButton('x');
+  assert.equal(controller.getMenuModel().view, 'catalogFilters');
+  await controller.handleButton('r');
+  assert.equal(controller.getMenuModel().catalog.name, 'Discover · New');
+  assert.equal(requests.length, 2);
+  controller.close();
+});
+
+test('same-provider catalog names remain distinct when their types match', async () => {
+  const controller = createController();
+  const client = {catalog: async () => []};
+  controller.addons = {init: async () => {}, catalogs: () => [
+    {id: 'new-a', name: 'New', type: 'movie', addonName: 'Cinema', client, extra: []},
+    {id: 'new-b', name: 'New', type: 'movie', addonName: 'Cinema', client, extra: []}
+  ], errors: []};
+  assert.equal(await controller.init(), true);
+  assert.deepEqual(controller.getMenuModel().tabs.map(tab => tab.label),
+    ['Cinema · New (new-a)', 'Cinema · New (new-b)']);
+  controller.close();
 });
 
 test('network failure stays visible and stale playback start cannot override an asynchronous failure', async t => {
@@ -161,7 +229,7 @@ function visualMeta(index) {
       {id: `show:${index}:1:2`, title: 'Second episode', season: 1, episode: 2, released: '2026-10-08'}]};
 }
 
-async function visualFixture({libraryItems = [], callbacks = {}} = {}) {
+async function visualFixture({libraryItems = [], callbacks = {}, catalogBackdrops = true} = {}) {
   const requests = [], calls = [];
   const controller = createController({addonUrls: ['https://addon.example.invalid/manifest.json'], libraryItems,
     callbacks: {play: async source => {calls.push(source);}, stop: async () => {}, ...callbacks}, fetchImpl: async url => {
@@ -170,7 +238,11 @@ async function visualFixture({libraryItems = [], callbacks = {}} = {}) {
       if (pathname === '/manifest.json') payload = {id: 'fixture', name: 'Fixture addon', types: ['series'],
         resources: ['catalog', 'meta', 'stream'], catalogs: Array.from({length: 13}, (_, index) =>
           ({id: `top-${index}`, name: `Catalog ${index}`, type: 'series'}))};
-      else if (pathname.startsWith('/catalog/')) payload = {metas: Array.from({length: 11}, (_, index) => visualMeta(index))};
+      else if (pathname.startsWith('/catalog/')) payload = {metas: Array.from({length: 11}, (_, index) => {
+        const meta = visualMeta(index);
+        if (!catalogBackdrops) delete meta.background;
+        return meta;
+      })};
       else if (pathname.startsWith('/meta/')) payload = {meta: visualMeta(Number(decodeURIComponent(pathname.split('/')[3]).match(/^show:(\d+)/)[1]))};
       else if (pathname.startsWith('/stream/')) payload = {streams: [{name: 'Torrent fixture', infoHash: 'unsupported'},
         {name: 'Direct fixture', url: 'https://media.example.invalid/video.m3u8?token=STREAMSECRET',
@@ -182,11 +254,28 @@ async function visualFixture({libraryItems = [], callbacks = {}} = {}) {
   return {controller, requests, calls};
 }
 
+test('catalog fetches the selected title backdrop from full metadata without using its poster', async t => {
+  const {controller, requests} = await visualFixture({catalogBackdrops: false});
+  t.after(() => controller.close());
+  assert.equal(controller.getMenuModel().hero.background, undefined);
+  await controller.handleButton('right');
+  await controller.handleButton('right');
+  await new Promise(resolve => setTimeout(resolve, 260));
+  assert.deepEqual(requests.filter(pathname => pathname.startsWith('/meta/')),
+    ['/meta/series/show%3A2.json']);
+  const hero = controller.getMenuModel().hero;
+  assert.equal(hero.id, 'show:2');
+  assert.equal(hero.poster, 'https://images.example.invalid/poster-2.jpg');
+  assert.equal(hero.background, 'https://images.example.invalid/background.jpg');
+});
+
 test('visual presentation keeps poster selection, bounded catalog tabs and existing navigation aligned', async t => {
   const {controller, requests} = await visualFixture(); t.after(() => controller.close());
   let model = controller.getMenuModel();
   assert.equal(model.brand, 'Stremio'); assert.equal(model.view, 'catalog');
   assert.equal(model.cards.length, 4); assert.equal(model.cards[0].poster, 'https://images.example.invalid/poster-0.jpg');
+  assert.equal(model.cards[0].background, 'https://images.example.invalid/background.jpg');
+  assert.equal(model.cards[0].logo, 'https://images.example.invalid/logo.png');
   assert.deepEqual(model.breadcrumb, ['Discover', 'Catalog 0']);
   assert.equal(model.hero.title, 'Show 0'); assert.equal(model.hero.rating, '8.2');
   assert.deepEqual(model.hero.genres, ['Drama', 'Mystery']); assert.equal(model.hero.runtime, '45 min');
@@ -216,6 +305,27 @@ test('visual presentation keeps poster selection, bounded catalog tabs and exist
   assert.ok(requests.every(route => !/images/.test(route)));
 });
 
+test('L/R switches top catalog tabs while browsing and wraps around library tabs', async t => {
+  const saved = {_id: 'show:0', type: 'series', name: 'Show 0', removed: false, temp: false,
+    state: {video_id: 'show:0:1:1', timeOffset: 52000, duration: 120000}};
+  const {controller} = await visualFixture({libraryItems: [saved]}); t.after(() => controller.close());
+  assert.equal(controller.getMenuModel().catalog.name, 'Continue watching');
+  assert.equal(await controller.handleButton('l'), true);
+  assert.equal(controller.getMenuModel().catalog.name, 'Catalog 12');
+  assert.equal(await controller.handleButton('r'), true);
+  assert.equal(controller.getMenuModel().catalog.name, 'Continue watching');
+  await controller.handleButton('r');
+  assert.equal(controller.getMenuModel().catalog.name, 'My Library');
+  await controller.handleButton('r');
+  assert.equal(controller.getMenuModel().catalog.name, 'Catalog 0');
+  await controller.handleButton('a');
+  assert.equal(controller.getMenuModel().view, 'details');
+  await controller.handleButton('r');
+  assert.equal(controller.getMenuModel().view, 'catalog');
+  assert.equal(controller.getMenuModel().catalog.name, 'Catalog 1');
+  assert.equal(controller.getMenuModel().tabs.find(tab => tab.active).label, 'Catalog 1');
+});
+
 test('visual presentation exposes resume progress while source selection preserves exact playback identity', async t => {
   const saved = {_id: 'show:0', type: 'series', name: 'Show 0', removed: false, temp: false,
     poster: 'https://images.example.invalid/saved.jpg', state: {video_id: 'show:0:1:2', timeOffset: 52000,
@@ -240,6 +350,45 @@ test('visual presentation exposes resume progress while source selection preserv
   await controller.handleButton('b'); await controller.handleButton('b'); await controller.handleButton('b'); model = controller.getMenuModel();
   assert.equal(model.view, 'episodes'); assert.equal(model.rows[0].progress, null);
   assert.equal(model.rows[1].progress.position, 72);
+});
+
+test('resume reuses the last selected source while a different episode still opens source selection', async t => {
+  const saved = {_id: 'show:0', type: 'series', name: 'Show 0', removed: false, temp: false,
+    state: {video_id: 'show:0:1:2', timeOffset: 52000, duration: 120000}};
+  const preferences = new SourcePreferences();
+  const first = await visualFixture({libraryItems: [saved]}); t.after(() => first.controller.close());
+  first.controller.sourcePreferences = preferences;
+  await first.controller.handleButton('a');
+  await first.controller.handleButton('a');
+  assert.equal(first.controller.view, 'sources');
+  await first.controller.handleButton('down'); await first.controller.handleButton('a');
+  assert.equal(first.controller.view, 'playing');
+
+  const resumed = await visualFixture({libraryItems: [saved]}); t.after(() => resumed.controller.close());
+  resumed.controller.sourcePreferences = preferences;
+  await resumed.controller.handleButton('a');
+  await resumed.controller.handleButton('a');
+  assert.equal(resumed.controller.view, 'playing');
+  assert.equal(resumed.calls.length, 1);
+  assert.equal(resumed.calls[0].resumePosition, 52);
+  assert.equal(resumed.calls[0].meta.videoId, 'show:0:1:2');
+  resumed.controller.playbackFailed('Source failed.');
+  const failed = await visualFixture({libraryItems: [saved]}); t.after(() => failed.controller.close());
+  failed.controller.sourcePreferences = preferences;
+  await failed.controller.handleButton('a');
+  await failed.controller.handleButton('a');
+  assert.equal(failed.controller.view, 'sources');
+  assert.equal(failed.calls.length, 0);
+  await preferences.remember('series', 'show:0', 'show:0:1:2', first.controller.streams, 1);
+
+  const next = await visualFixture({libraryItems: [saved]}); t.after(() => next.controller.close());
+  next.controller.sourcePreferences = preferences;
+  await next.controller.handleButton('a');
+  await selectDetailsAction(next.controller, 'watch');
+  await next.controller.handleButton('a');
+  await next.controller.handleButton('a');
+  assert.equal(next.controller.view, 'sources');
+  assert.equal(next.calls.length, 0);
 });
 
 test('visual presentation remains within the renderer budget with maximum metadata and missing artwork', () => {
@@ -497,12 +646,12 @@ test('unknown-only season lists remain usable and missing episode lists keep the
 
 function playingFixture(options = {}) {
   const calls = [], updates = [];
-  const callbacks = Object.fromEntries(['play', 'pause', 'seek', 'seekTo', 'stop', 'volume'].map(name =>
+  const callbacks = Object.fromEntries(['play', 'pause', 'seek', 'seekTo', 'stop'].map(name =>
     [name, async value => { calls.push({name, value}); }]));
   const controller = createController({...options, callbacks: {...callbacks, ...options.callbacks},
     onChange: model => updates.push(model)});
   controller.view = 'playing'; controller.playTitle = 'A playing fixture';
-  controller.playback = {paused: false, position: 100, duration: 600, volume: 0.5};
+  controller.playback = {paused: false, position: 100, duration: 600};
   return {controller, calls, updates};
 }
 
@@ -538,28 +687,27 @@ test('playback overlay supports Joy-Con focus, shortcuts and two-stage back navi
   controller.updatePlayback({position: 70, duration: 600});
   await controller.handleButton('zl'); await controller.handleButton('zr');
   assert.equal(controller.playback.position, 70);
-  await controller.handleButton('down'); await controller.handleButton('up');
-  assert.equal(controller.playback.volume, 0.5);
+  assert.equal(await controller.handleButton('down'), false);
+  assert.equal(await controller.handleButton('up'), false);
   assert.equal(await controller.handleButton('y'), false);
   await controller.handleButton('b'); assert.equal(controller.view, 'playing');
   assert.equal(controller.getMenuModel().playbackOverlay.visible, false);
   await controller.handleButton('b'); assert.equal(controller.view, 'sources');
   assert.equal(controller.getMenuModel().playbackOverlay, null);
-  assert.deepEqual(calls.map(call => call.name), ['play', 'pause', 'play', 'play', 'play', 'seek', 'seek', 'volume', 'volume', 'stop']);
+  assert.deepEqual(calls.map(call => call.name), ['play', 'pause', 'play', 'play', 'play', 'seek', 'seek', 'stop']);
   assert.deepEqual(calls.filter(call => call.name === 'seek').map(call => call.value), [-10, 10]);
 });
 
 test('hidden-overlay A toggles playback and reveals controls; decoder status cannot double-toggle', async t => {
   let controller;
   ({controller} = playingFixture({callbacks: {pause: async () => controller.updatePlayback({paused: !controller.playback.paused}),
-    seek: async delta => controller.updatePlayback({position: controller.playback.position + delta}),
-    volume: async delta => controller.updatePlayback({volume: controller.playback.volume + delta})}}));
+    seek: async delta => controller.updatePlayback({position: controller.playback.position + delta})}}));
   t.after(() => controller.close());
   await controller.handleButton('a'); assert.equal(controller.playback.paused, true);
   assert.equal(controller.getMenuModel().playbackOverlay.visible, true);
   await controller.handleButton('a'); assert.equal(controller.playback.paused, false);
   await controller.handleButton('zr'); assert.equal(controller.playback.position, 110);
-  await controller.handleButton('up'); assert.equal(controller.playback.volume, 0.55);
+  assert.equal(await controller.handleButton('up'), false);
   await controller.handleButton('x'); assert.equal(controller.getMenuModel().playbackOverlay.visible, false);
   await controller.handleButton('right'); assert.equal(controller.playback.position, 110);
   assert.equal(controller.getMenuModel().playbackOverlay.visible, true);

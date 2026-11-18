@@ -6,19 +6,23 @@ const path = require('node:path');
 const http = require('node:http');
 const net = require('node:net');
 const crypto = require('node:crypto');
-const {prepare, validateManifest, OWNER, ATTEMPT} = require('./rpc-attachment.cjs');
+const {prepare, selectedRun, validateManifest, OWNER, ATTEMPT} = require('./rpc-attachment.cjs');
+const {discover} = require('./gui-discover-rpc.cjs');
 const {validateRun} = require('./gui-homebrew.cjs');
 const {verifiedSession} = require('./gui-dump.cjs');
 const {profileById} = require('./host-profiles.cjs');
+const {expectedPatchedSource, overlayPath} = require('./prepare-seedsow-host.cjs');
 const repository = path.resolve(__dirname, '..');
 const write = async (file, value) => {
   await fs.mkdir(path.dirname(file), {recursive:true, mode:0o700});
   await fs.writeFile(file, JSON.stringify(value), {mode:0o600});
 };
 const update = async (file, mutate) => {const value = JSON.parse(await fs.readFile(file)); mutate(value); await write(file, value);};
-async function fixture(t, hostId = 'BermTheSequel') {
+async function fixture(t, hostId = 'BermTheSequel', patched = false, sessionLayout = false) {
   const base = await fs.mkdtemp('/private/tmp/m2a-');
-  const root = path.join(base, 'app'), directory = path.join(base, 'original/switch2-test');
+  const sessionFolder = path.join(base, 'Sessions/01234567-89AB-CDEF-0123-456789ABCDEF');
+  const root = path.join(base, 'app'), directory = sessionLayout ?
+    path.join(sessionFolder, 'vendor/ns2jb/runs/switch2-aBc123') : path.join(base, 'original/switch2-test');
   await fs.mkdir(root, {mode:0o700});
   await fs.mkdir(directory, {recursive:true, mode:0o700});
   await fs.cp(path.join(repository, 'vendor/ns2jb'), path.join(root, 'vendor/ns2jb'), {recursive:true});
@@ -26,6 +30,12 @@ async function fixture(t, hostId = 'BermTheSequel') {
   if (hostId !== 'BermTheSequel') await fs.cp(source, path.join(root, host.sourceDirectory), {recursive:true});
   for (const name of ['shared','switch2'])
     await fs.cp(path.join(source, 'engine', name), path.join(directory, name), {recursive:true});
+  if (patched) {
+    await fs.cp(path.join(repository, 'vendor/ns2-savekit'), path.join(root, 'vendor/ns2-savekit'), {recursive:true});
+    for (const name of ['shared/ipc.cjs','switch2/ro/ncm.cjs',
+      'switch2/app/filesystem.cjs','switch2/app/mounted-save.cjs'])
+      await fs.copyFile(overlayPath(root, hostId, path.join('engine', name)), path.join(directory, name));
+  }
   const session = path.basename(directory), engine = path.join(directory, 'switch2');
   const proofFile = path.join(engine, 'process', session+'-fs-proof.json');
   const reportFile = path.join(engine, 'memory/report.json');
@@ -63,7 +73,8 @@ async function fixture(t, hostId = 'BermTheSequel') {
   const summary = {session, file:proofFile, trials:2, verified:true, restored:true,
     cleanup:{deferred:true, donor:{cleanedUp:true}}, retainedEndpoint:{ready:true, session, socketPath}};
   const resultFile = path.join(directory, 'result.json');
-  await write(resultFile, {platform:2, sourceSha256:host.sourceSha256, verified:true,
+  await write(resultFile, {platform:2,
+    sourceSha256:patched ? expectedPatchedSource(root, hostId).sourceSha256 : host.sourceSha256, verified:true,
     rpc:{mode:'held', state:'listening'}, fs:summary});
   await write(path.join(engine, 'fs-execution-current.json'), summary);
   await write(proofFile, {session, report:reportFile, verified:true,
@@ -78,7 +89,7 @@ async function fixture(t, hostId = 'BermTheSequel') {
   const attach = async (config = {kind:'local', runDirectory:directory}, options) => {
     const context = await prepare(root, config, options); contexts.push(context); return context;
   };
-  return {base, root, directory, resultFile, reportFile, proofFile, socketPath, state, requests, retainedRequests, attach};
+  return {base, root, directory, sessionFolder, resultFile, reportFile, proofFile, socketPath, state, requests, retainedRequests, attach};
 }
 
 test('local attachment validates real held proof and both live endpoints without starting a host', async t => {
@@ -98,7 +109,31 @@ test('local attachment validates real held proof and both live endpoints without
   assert.deepEqual(await fs.readFile(f.resultFile), before);
 });
 
-for (const application of ['hblauncher','izlauncher']) test(application+' external run needs exact claimed authorization; normal current-run validation stays strict', async t => {
+test('a selected mac2jb session folder resolves to its only verified live RPC run', async t => {
+  const f = await fixture(t, 'kurumuz', true, true);
+  const archived = path.join(f.directory, 'switch2/memory/reserved-gap-1794273122713-wave-overlap.cjs');
+  await fs.copyFile(path.join(f.directory, 'switch2/memory/wave-overlap.cjs'), archived);
+  const found = await discover(f.root, path.join(f.base, 'Sessions'));
+  assert.deepEqual(found.candidates.map(candidate => candidate.path), [f.directory]);
+  const selected = await selectedRun(f.root, f.sessionFolder);
+  assert.equal(selected.directory, f.directory);
+  const context = await f.attach({kind:'local', runDirectory:f.sessionFolder});
+  assert.equal(context.directory, f.directory);
+  assert.equal(context.sourceSession, 'switch2-aBc123');
+  assert.equal((await context.verify()).ready, true);
+});
+
+test('generated Kurumuz wave-overlap archive accepts only its pinned source bytes', async t => {
+  const f = await fixture(t, 'kurumuz', true);
+  const archived = path.join(f.directory, 'switch2/memory/reserved-gap-1794273122713-wave-overlap.cjs');
+  await fs.copyFile(path.join(f.directory, 'switch2/memory/wave-overlap.cjs'), archived);
+  const context = await f.attach();
+  assert.equal((await context.verify()).ready, true);
+  await fs.appendFile(archived, '\nthrow Error("altered archive")\n');
+  await assert.rejects(context.verify(), /unrecognized executable/);
+});
+
+for (const application of ['hblauncher','mintbrew','native-hblauncher','modloader']) test(application+' external run needs exact claimed authorization; normal current-run validation stays strict', async t => {
   const f = await fixture(t), context = await f.attach();
   await assert.rejects(validateRun(f.root, f.directory, verifiedSession), /current held run|authorized/);
   await assert.rejects(validateManifest(f.root, f.directory, context.manifestPath), /authorization/);
@@ -115,6 +150,22 @@ for (const application of ['hblauncher','izlauncher']) test(application+' extern
   await context.close();
   assert.equal(JSON.parse(await fs.readFile(path.join(f.directory, OWNER))).token, owner.token);
   await assert.rejects(f.attach(), /already has a homebrew attempt/);
+});
+
+test('a proven pre-transfer failure releases only its own claim and permits another app', async t => {
+  const f = await fixture(t), context = await f.attach();
+  await context.claimApplication('custom-homebrew');
+  const attemptFile = path.join(f.directory, ATTEMPT);
+  await write(attemptFile, {application:'custom-homebrew'});
+  await assert.rejects(context.releaseApplication(), /did not prove a pre-transfer failure/);
+  await fs.unlink(attemptFile);
+  assert.equal((await context.releaseApplication()).ready, true);
+  await assert.rejects(fs.access(path.join(f.directory, OWNER)), {code:'ENOENT'});
+  await assert.rejects(validateManifest(f.root, f.directory, context.manifestPath), /authorization/);
+  await context.claimApplication('ouncecake');
+  assert.equal(JSON.parse(await fs.readFile(path.join(f.directory, OWNER))).application, 'ouncecake');
+  assert.equal((await validateManifest(f.root, f.directory, context.manifestPath)).session, 'switch2-test');
+  assert.equal(f.state.ready, true);
 });
 
 test('exclusive source reservation allows only one attachment and never duplicates helper attempt marker', async t => {
@@ -155,11 +206,37 @@ test('wrong source, changed copied code and added executable code are rejected b
   assert.equal(f.requests.length, 0); assert.equal(f.retainedRequests.length, 0);
 });
 
-test('a supported held source attaches across the current host picker using its own pinned code', async t => {
-  const f = await fixture(t, 'kurumuz'), context = await f.attach();
-  assert.match(context.description, /kurumuz/);
+for (const hostId of ['kurumuz', 'cellenseres', 'astral'])
+test(hostId+' held source attaches across the current host picker using its own pinned code', async t => {
+  const f = await fixture(t, hostId), context = await f.attach();
+  assert.match(context.description, new RegExp(hostId, 'i'));
   await context.claimApplication('ouncecake');
-  assert.equal((await validateManifest(f.root, f.directory, context.manifestPath)).profileId, 'kurumuz');
+  assert.equal((await validateManifest(f.root, f.directory, context.manifestPath)).profileId, hostId);
+});
+
+for (const hostId of ['kurumuz', 'cellenseres', 'astral'])
+test(hostId+' SaveKit patched host attaches only with the exact verified overlay', async t => {
+  const f = await fixture(t, hostId, true), expected = expectedPatchedSource(f.root, hostId);
+  const context = await f.attach();
+  assert.equal(JSON.parse(await fs.readFile(context.manifestPath)).sourceSha256, expected.sourceSha256);
+  assert.equal((await context.verify()).ready, true);
+  await context.claimApplication('mintbrew');
+  assert.equal((await validateManifest(f.root, f.directory, context.manifestPath)).sourceSha256,
+    expected.sourceSha256);
+});
+
+test('changed SaveKit overlay and closed RPC reject attachment before live requests', async t => {
+  const altered = await fixture(t, 'cellenseres', true);
+  await fs.appendFile(path.join(altered.directory, 'shared/ipc.cjs'), '\n');
+  await assert.rejects(altered.attach(), /changed host code/);
+  assert.equal(altered.requests.length, 0);
+  assert.equal(altered.retainedRequests.length, 0);
+
+  const stopped = await fixture(t, 'kurumuz', true);
+  await update(stopped.resultFile, value => {value.rpc.state = 'closed';});
+  await assert.rejects(stopped.attach(), /held|stopped|available/i);
+  assert.equal(stopped.requests.length, 0);
+  assert.equal(stopped.retainedRequests.length, 0);
 });
 
 test('real upstream archived source copies are accepted only with pinned bytes and socket aliases retain live identity', async t => {

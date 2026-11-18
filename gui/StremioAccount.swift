@@ -275,6 +275,7 @@ private final class StremioAccountHTTP: NSObject, URLSessionTaskDelegate {
 final class StremioAccount: ObservableObject {
     @Published private(set) var signedIn = false
     @Published private(set) var signingIn = false
+    @Published private(set) var signInQRCodeURL: URL?
     @Published private(set) var status = "Sign in to use your Stremio add-ons, or continue without an account."
     @Published private(set) var addonURLs: [String] = []
     @Published private(set) var displayName: String?
@@ -292,6 +293,8 @@ final class StremioAccount: ObservableObject {
     private var operation: Task<Void, Never>?
     private var deadlineTask: Task<Void, Never>?
     private var progressTask: Task<Void, Never>?
+    private var progressStatusTask: Task<Void, Never>?
+    private var progressStatusGeneration = UUID()
     private var library: [String: [String: Any]] = [:]
     private var pendingProgress: [String: StremioWatchProgress] = [:]
     private var pendingProgressOrder: [String: UInt64] = [:]
@@ -325,11 +328,30 @@ final class StremioAccount: ObservableObject {
             } catch { status = "Your saved Stremio sign-in could not be opened. Unlock your Mac keychain and try again." }
         }
     }
-    deinit { operation?.cancel(); deadlineTask?.cancel(); progressTask?.cancel(); invalidateTransport() }
+    deinit { operation?.cancel(); deadlineTask?.cancel(); progressTask?.cancel(); progressStatusTask?.cancel(); invalidateTransport() }
+
+    private func setProgressStatus(_ message: String, clearAfter delay: Duration? = nil) {
+        progressStatusTask?.cancel()
+        progressStatusTask = nil
+        progressStatusGeneration = UUID()
+        let id = progressStatusGeneration
+        watchProgressStatus = message
+        guard let delay else { return }
+        progressStatusTask = Task { [weak self] in
+            do { try await Task.sleep(for: delay) } catch { return }
+            guard let self, self.progressStatusGeneration == id else { return }
+            self.watchProgressStatus = ""
+            self.progressStatusTask = nil
+        }
+    }
 
     private func cancelCloudWork(clearHistory: Bool = false) {
         progressTask?.cancel()
         progressTask = nil
+        progressStatusTask?.cancel()
+        progressStatusTask = nil
+        progressStatusGeneration = UUID()
+        watchProgressStatus = ""
         progressGeneration = UUID()
         pendingProgress = [:]
         pendingProgressOrder = [:]
@@ -344,6 +366,7 @@ final class StremioAccount: ObservableObject {
         operation?.cancel()
         deadlineTask?.cancel()
         deadlineTask = nil
+        signInQRCodeURL = nil
         if cancelCloud { cancelCloudWork() }
         generation = UUID()
         return generation
@@ -424,11 +447,18 @@ final class StremioAccount: ObservableObject {
         }
         return result
     }
-    func signIn() {
+    func signInWithQRCode() { signIn(openInBrowser: false) }
+    func openSignInPage() {
+        guard signingIn, let signInQRCodeURL else { return }
+        if !openBrowser(signInQRCodeURL) {
+            status = "Could not open the browser. Scan the QR code to continue signing in."
+        }
+    }
+    func signIn(openInBrowser: Bool = true) {
         guard !signingIn else { return }
         let id = begin(cancelCloud: true)
         signingIn = true
-        status = "Opening Stremio sign-in in your browser…"
+        status = "Getting a Stremio sign-in link…"
         operation = Task { [weak self] in
             guard let self else { return }
             defer { if generation == id { deadlineTask?.cancel(); deadlineTask = nil } }
@@ -440,8 +470,9 @@ final class StremioAccount: ObservableObject {
                 else { throw StremioAccountError.response }
                 let browser = try StremioAccountCodec.browserURL(link.link)
                 try ensureCurrent(id)
-                guard openBrowser(browser) else { throw StremioAccountError.browser }
-                status = "Complete sign-in on Stremio’s website. Waiting for approval…"
+                signInQRCodeURL = browser
+                if openInBrowser, !openBrowser(browser) { throw StremioAccountError.browser }
+                status = openInBrowser ? "Complete sign-in on Stremio’s website. Waiting for approval…" : "Scan the QR code with your phone and approve sign-in."
                 let timeout = localTimeout
                 deadlineTask = Task { [weak self] in
                     do { try await Task.sleep(for: timeout) } catch { return }
@@ -449,6 +480,7 @@ final class StremioAccount: ObservableObject {
                     operation?.cancel()
                     generation = UUID()
                     signingIn = false
+                    signInQRCodeURL = nil
                     status = "This Mac stopped waiting after five minutes. Start sign-in again for a new code."
                 }
                 let deadline = ContinuousClock.now.advanced(by: localTimeout)
@@ -468,6 +500,7 @@ final class StremioAccount: ObservableObject {
                 }
                 try ensureCurrent(id)
                 guard let linkToken else { throw StremioAccountError.expired }
+                signInQRCodeURL = nil
                 status = "Finishing Stremio sign-in…"
                 // The link API's authKey field is a link token, not the key to
                 // persist. This exchange is deliberately attempted only once.
@@ -490,6 +523,7 @@ final class StremioAccount: ObservableObject {
             } catch {
                 guard generation == id else { return }
                 signingIn = false
+                signInQRCodeURL = nil
                 if error is CancellationError { return }
                 if (error as? StremioAccountError) == .expired {
                     status = "This Mac stopped waiting after five minutes. Start sign-in again for a new code."
@@ -547,6 +581,7 @@ final class StremioAccount: ObservableObject {
         pendingProgress[identity] = update
         progressReceipt += 1
         pendingProgressOrder[identity] = progressReceipt
+        setProgressStatus("Syncing watch progress…")
         guard progressTask == nil else { return }
         let progressID = UUID()
         progressGeneration = progressID
@@ -599,10 +634,14 @@ final class StremioAccount: ObservableObject {
                     updateLibraryCount()
                     lastProgressWrite[identity] = Date()
                     lastPlayedSeconds[identity] = observed
-                    watchProgressStatus = "Watch progress synced."
+                    if pendingProgress.isEmpty {
+                        setProgressStatus("Watch progress synced.", clearAfter: .seconds(4))
+                    } else {
+                        setProgressStatus("Syncing watch progress…")
+                    }
                 } catch {
                     if Task.isCancelled { break }
-                    watchProgressStatus = "Watch progress could not be synced. This update was not retried."
+                    setProgressStatus("Watch progress could not be synced. This update was not retried.", clearAfter: .seconds(8))
                 }
             }
         }

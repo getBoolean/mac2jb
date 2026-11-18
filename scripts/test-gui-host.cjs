@@ -6,17 +6,22 @@ const fs = require('node:fs');
 const path = require('node:path');
 const os = require('node:os');
 const {spawn} = require('node:child_process');
-const {validStart, verifiedResult, hidSettings,commandsOnlySettings, networkBindFailure} = require('./gui-host.cjs');
+const {validStart, verifiedResult, hidSettings,commandsOnlySettings,heldCommandsSettings,hostSettings,
+  networkBindFailure} = require('./gui-host.cjs');
+const {fallbackControllers, parseGadgetControllers, gadgetControllers, autoControllers} = require('./usb-controllers.cjs');
 function command(address = '192.0.2.1') {
   return 'V=START(' + [39380, ...address.split('.')].join(',') + ')';
 }
-function fixture(t, sender, host) {
+function fixture(t, sender, host, discoveredControllers) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'mac2jb-gui-test-'));
   t.after(() => fs.rmSync(root, {recursive: true, force: true}));
   fs.mkdirSync(path.join(root, 'scripts'));
   fs.mkdirSync(path.join(root, 'assets'));
   fs.mkdirSync(path.join(root, 'vendor/ns2jb'), {recursive: true});
   fs.copyFileSync(path.join(__dirname, 'gui-host.cjs'), path.join(root, 'scripts/gui-host.cjs'));
+  fs.writeFileSync(path.join(root, 'scripts/usb-controllers.cjs'), discoveredControllers
+    ? `module.exports.autoControllers = () => ${JSON.stringify(discoveredControllers)};\n`
+    : "module.exports.autoControllers = preferred => [...new Set([...(preferred ? [preferred] : []), 'usb-drd0', 'usb-drd1', 'usb-drd2', 'usb-drd3'])];\n");
   fs.copyFileSync(path.join(__dirname, 'host-profiles.cjs'), path.join(root, 'scripts/host-profiles.cjs'));
   fs.mkdirSync(path.join(root, 'packaging'));
   fs.copyFileSync(path.join(__dirname, '../packaging/host-profiles.json'), path.join(root, 'packaging/host-profiles.json'));
@@ -45,6 +50,45 @@ async function until(predicate, message) {
     await new Promise(resolve => setTimeout(resolve, 10));
   }
 }
+test('IORegistry discovery selects attached USB gadget controllers in numeric order', () => {
+  const registry = [
+    '+-o usb-drd0@2280000  <class AppleARMIODevice>',
+    '  +-o AppleUSBXHCI  <class AppleUSBXHCI>',
+    '    +-o gay_bowser_usbgadget  <class gay_bowser_usbgadget>',
+    '+-o usb-drd1@A280000  <class AppleARMIODevice>',
+    '  +-o AppleUSBXHCI  <class AppleUSBXHCI>',
+    '+-o usb-drd12@1A280000  <class AppleARMIODevice>',
+    '    +-o gay_bowser_usbgadget  <class gay_bowser_usbgadget>',
+    '+-o usb-drd2@1280000  <class AppleARMIODevice>',
+    '    +-o gay_bowser_usbgadget  <class gay_bowser_usbgadget>',
+    '+-o another-device@1000000  <class AppleARMIODevice>',
+    '    +-o gay_bowser_usbgadget  <class gay_bowser_usbgadget>'
+  ].join('\n');
+  assert.deepEqual(parseGadgetControllers(registry), ['usb-drd0', 'usb-drd2', 'usb-drd12']);
+  assert.deepEqual(gadgetControllers(() => registry), ['usb-drd0', 'usb-drd2', 'usb-drd12']);
+  assert.deepEqual(autoControllers('usb-drd2', () => ['usb-drd0', 'usb-drd2', 'usb-drd12']),
+    ['usb-drd2', 'usb-drd0', 'usb-drd12']);
+  assert.deepEqual(autoControllers('usb-drd3', () => ['usb-drd0', 'usb-drd2']), ['usb-drd0', 'usb-drd2']);
+  assert.deepEqual(autoControllers(undefined, () => ['usb-drd0', 'usb-drd2']), ['usb-drd0', 'usb-drd2']);
+});
+test('IORegistry failure or missing gadget includes usb-drd2 before usb-drd3', () => {
+  assert.deepEqual(fallbackControllers, ['usb-drd0', 'usb-drd1', 'usb-drd2', 'usb-drd3']);
+  assert.deepEqual(gadgetControllers(() => '+-o usb-drd2@1280000\n  +-o AppleUSBXHCI'), fallbackControllers);
+  assert.deepEqual(gadgetControllers(() => { throw Error('ioreg unavailable'); }), fallbackControllers);
+  assert.deepEqual(autoControllers('usb-drd2', () => gadgetControllers(() => '')),
+    ['usb-drd2', 'usb-drd0', 'usb-drd1', 'usb-drd3']);
+});
+test('automatic HID transfer reaches an attached usb-drd2 controller', async t => {
+  const root = fixture(t, `
+    if (process.env.MAC2JB_CONTROLLER === 'usb-drd0') {
+      console.error('USB host did not enumerate a keyboard'); process.exitCode = 1;
+    } else { console.log('Keyboard enumerated. Sending...'); console.log('Sent line 1'); }
+  `, undefined, ['usb-drd0', 'usb-drd2']);
+  const result = await run(root, ['hid', 'bootstrap', 'auto']).done;
+  assert.equal(result.code, 0, result.error);
+  assert.deepEqual(result.events.filter(event => event.type === 'controller').map(event => event.controller),
+    ['usb-drd0', 'usb-drd2']);
+});
 test('pairing validation requires the expected address and complete command', () => {
   const value = command();
   assert.equal(validStart(value, '192.0.2.1'), true);
@@ -54,6 +98,45 @@ test('pairing validation requires the expected address and complete command', ()
     'V=START(39381,192,0,2,1)', 'V=START(39380,256,0,2,1)', 'V=START(39380,-1,0,2,1)',
     'V=START(39380,192,0,2,1.5)', 'V=START(39380,192,0,2,1);PRINT 1'])
     assert.equal(validStart(invalid, '192.0.2.1'), false, invalid);
+});
+test('normal command transfer uses the current host START without a fixed run folder', async t => {
+  const root = fixture(t, `
+    require('fs').writeFileSync('args.json',JSON.stringify(process.argv.slice(2)));
+    console.log('Keyboard enumerated. Sending...');
+  `);
+  const supplied = command('192.0.2.1');
+  assert.equal(heldCommandsSettings(['--start-command', supplied]).startCommand, supplied);
+  assert.throws(() => heldCommandsSettings(['--start-command', supplied + ',0']), /invalid/);
+  const result = await run(root, ['hid', 'commands', 'usb-drd0', '--start-command', supplied]).done;
+  assert.equal(result.code, 0, result.error);
+  const args = JSON.parse(fs.readFileSync(path.join(root, 'args.json')));
+  assert.deepEqual(args.slice(args.indexOf('--commands'), args.indexOf('--commands') + 4),
+    ['--commands', 'load,run,remove,start', '--start-command', supplied]);
+  assert.equal(fs.existsSync(path.join(root, 'vendor/ns2jb/runs/mac2jb-active-connect.txt')), false);
+  assert.equal(result.events.some(event => event.type === 'transfer-complete' && event.kind === 'commands'), true);
+});
+test('kaiHEN command transfer uses Kurumuz even when another host is selected', async t => {
+  const {profileById} = require('./host-profiles.cjs');
+  const root = fixture(t, `
+    require('fs').writeFileSync('args.json',JSON.stringify(process.argv.slice(2)));
+    console.log('Keyboard enumerated. Sending...');
+  `);
+  fs.writeFileSync(path.join(root, 'selected-host.json'), JSON.stringify(profileById('pepsipu')));
+  const start = command('192.0.2.1');
+  const result = await run(root, ['hid', 'kaihen-commands', 'usb-drd0', '10', '--demo',
+    '--start-command', start]).done;
+  assert.equal(result.code, 0, result.error);
+  const args = JSON.parse(fs.readFileSync(path.join(root, 'args.json')));
+  assert.equal(args.includes('--start-arity'), false);
+  assert.ok(args.includes('--demo'));
+  assert.deepEqual(args.slice(args.indexOf('--commands'), args.indexOf('--commands') + 4),
+    ['--commands', 'load,run,remove,start', '--start-command', start]);
+  for (const options of [[], ['--start-command', start + ',0']]) {
+    fs.rmSync(path.join(root, 'args.json'), {force: true});
+    const rejected = await run(root, ['hid', 'kaihen-commands', 'usb-drd0', ...options]).done;
+    assert.equal(rejected.code, 1);
+    assert.equal(fs.existsSync(path.join(root, 'args.json')), false);
+  }
 });
 test('pepsipu selection accepts only its real token-bearing pairing and refuses unsupported operations',async t=>{
   const {profileById}=require('./host-profiles.cjs');
@@ -70,6 +153,23 @@ test('pepsipu selection accepts only its real token-bearing pairing and refuses 
     assert.equal(result.code,1);assert.equal(fs.existsSync(path.join(root,'unexpected-sender.txt')),false);
   }
 });
+test('SaveKit-capable hosts dispatch Seedsow and SaveKit post-run modes', async t => {
+  const {profileById} = require('./host-profiles.cjs');
+  for (const hostId of ['kurumuz', 'cellenseres', 'astral']) {
+    const root = fixture(t);
+    fs.writeFileSync(path.join(root, 'selected-host.json'), JSON.stringify(profileById(hostId)));
+    fs.writeFileSync(path.join(root, 'scripts/gui-session.cjs'),
+      'module.exports.main = async options => { options.emit("dispatched", {seedsowSave: !!options.seedsowSave, savekitTools: !!options.savekitTools}); return 0; };\n');
+    for (const [option, expected] of [
+      ['--seedsow-save', {seedsowSave: true, savekitTools: true}],
+      ['--savekit-tools', {seedsowSave: false, savekitTools: true}]
+    ]) {
+      const result = await run(root, ['host', '192.0.2.1', '--post-run-options', option]).done;
+      assert.equal(result.code, 0, result.error);
+      assert.deepEqual(result.events, [{type: 'dispatched', ...expected}]);
+    }
+  }
+});
 test('success requires independent FS verification, restoration and cleanup', () => {
   assert.equal(verifiedResult({verified: true}), false);
   assert.equal(verifiedResult({verified: true, fs: {verified: true, restored: true, cleanup: {cleanedUp: false}}}), false);
@@ -80,6 +180,18 @@ test('Mac network diagnostics match only unavailable binding of the selected hos
   assert.deepEqual(networkBindFailure(line,'192.0.2.1'),{address:'192.0.2.1',diagnostic:line});
   for(const bad of [line.replace('EADDRNOTAVAIL','EADDRINUSE'),line.replace(':39380',':393800'),line.replace(':39380',':12345'),line.replace('192.0.2.1','192.0.2.11')])
     assert.equal(networkBindFailure(bad,'192.0.2.1'),null,bad);
+});
+test('host stage timeout accepts only one value from 1 to 60 minutes', () => {
+  assert.deepEqual(hostSettings(['host', '192.0.2.1', '--post-run-options',
+    '--host-stage-timeout-minutes', '25']),
+  {args: ['host', '192.0.2.1', '--post-run-options'], stageTimeoutMinutes: 25});
+  assert.deepEqual(hostSettings(['host', '192.0.2.1']),
+    {args: ['host', '192.0.2.1'], stageTimeoutMinutes: 10});
+  for (const value of ['0', '61', '1.5', '-1', '01', 'NaN'])
+    assert.throws(() => hostSettings(['host', '192.0.2.1', '--host-stage-timeout-minutes', value]),
+      /Host stage timeout/);
+  assert.throws(() => hostSettings(['host', '192.0.2.1', '--host-stage-timeout-minutes', '5',
+    '--host-stage-timeout-minutes', '6']), /Host stage timeout/);
 });
 function bindFailureScript(prefix='',latePairing=false) {
   const original='Error: listen EADDRNOTAVAIL: address not available 192.0.2.1:39380';
@@ -109,7 +221,7 @@ test('ordinary host cannot call a bind failure safe after '+prefix.trim(),{timeo
 });
 test('timing defaults and independent range limits are validated', () => {
   assert.deepEqual(hidSettings([]), {delay: 10, enumerationTimeout: 4,
-    loadWaitMs: 1000, runWaitMs: 1000, removeWaitMs: 1000, loadConfirmWaitMs: 1000});
+    loadWaitMs: 1000, runWaitMs: 0, removeWaitMs: 0, loadConfirmWaitMs: 0, keyHoldMs: 0, enterSettleMs: 0, pollInterval: 10});
   assert.equal(hidSettings(['2000', '--enumeration-timeout', '120', '--load-wait-ms', '0']).loadWaitMs, 0);
   for (const args of [['0'], ['2001'], ['50', '--enumeration-timeout', '0'],
     ['50', '--enumeration-timeout', '121'], ['50', '--run-wait-ms', '120001'],
@@ -156,6 +268,9 @@ for (const demo of [false,true]) test(`save-bootstrap submits only the ${demo?'d
     assert.equal(call.helper,'mac2jb-commands');assert.equal(call.args.includes('--save-bootstrap'),true);
     assert.equal(call.args.includes('--demo'),demo);assert.equal(call.args[call.args.indexOf('--delay-ms')+1],demo?'37':'10');
     assert.equal(call.args[call.args.indexOf('--load-wait-ms')+1],'22');
+    assert.equal(call.args[call.args.indexOf('--save-name')+1],'NS2');
+    assert.equal(call.args[call.args.indexOf('--load-name')+1],'NS2');
+    assert.equal(call.args[call.args.indexOf('--start-port')+1],'39380');
     assert.equal(call.args.some(value=>['--commands','--start-command','--start-prefix'].includes(value)),false);
   }
   assert.deepEqual(result.events.filter(row=>row.type==='typing').map(row=>[row.kind,row.total,row.controller]),[['save-bootstrap',1,'usb-drd0']]);
@@ -303,7 +418,7 @@ for(const kind of ['bootstrap'])test('the last responding controller is preferre
   assert.deepEqual(result.events.filter(event=>event.type==='controller').map(event=>event.controller),['usb-drd13']);
   assert.equal(result.events.find(event=>event.type==='typing').controller,'usb-drd13');
 });
-for(const [preferred,expected] of [['usb-drd1',['usb-drd1','usb-drd0','usb-drd3']],['usb-drd15',['usb-drd15','usb-drd0','usb-drd1','usb-drd3']]])
+for(const [preferred,expected] of [['usb-drd1',['usb-drd1','usb-drd0','usb-drd2','usb-drd3']],['usb-drd15',['usb-drd15','usb-drd0','usb-drd1','usb-drd2','usb-drd3']]])
 test('exhausted non-enumerated HID candidates are deduplicated and conclusively safe: '+preferred,async t=>{
   const root=fixture(t,`console.error('USB host did not enumerate a keyboard on selected controller. Check data role, cable, and host USB descriptors.');process.exitCode=1;`);
   const result=await run(root,['hid','bootstrap','auto','--preferred-controller',preferred]).done;
@@ -324,13 +439,34 @@ test('manual HID controller never falls back or accepts a preferred-controller o
   assert.equal(bad.code,1);assert.equal(bad.events.some(event=>event.type==='controller'),false);assert.equal(bad.events.some(event=>event.retrySafe===true),false);
 });
 for(const diagnostic of ['USB configuration failed on selected controller','USB interface setup failed',
-  'libusbd_init failed; check usbgadget.kext.','USB enumeration error: 0xdeadbeef\nUSB host did not enumerate a keyboard',
+  'USB enumeration error: 0xdeadbeef\nUSB host did not enumerate a keyboard',
   'Waiting for USB host enumeration...'])
 test('HID initialization/error text never authorizes probing or safe Skip: '+diagnostic.split('\n')[0],async t=>{
   const root=fixture(t,`console.error(${JSON.stringify(diagnostic)});process.exitCode=1;`);
   const result=await run(root,['hid','bootstrap','auto','--preferred-controller','usb-drd15']).done;
   assert.equal(result.code,1);assert.equal(result.events.filter(event=>event.type==='controller').length,1);
   assert.equal(result.events.some(event=>event.type==='typing'||event.retrySafe===true),false);
+});
+test('automatic HID skips an absent usb-drd2 before usb-drd3 without sending input',async t=>{
+  const root=fixture(t,`
+    if(process.env.MAC2JB_CONTROLLER==='usb-drd2')console.error('libusbd_init failed; check usbgadget.kext.');
+    else if(process.env.MAC2JB_CONTROLLER==='usb-drd3'){
+      console.log('Keyboard enumerated. Sending...');console.log('Sent line 1');process.exit(0);
+    }else console.error('USB host did not enumerate a keyboard');
+    process.exitCode=1;
+  `);
+  const result=await run(root,['hid','bootstrap','auto']).done;
+  assert.equal(result.code,0,result.error);
+  assert.deepEqual(result.events.filter(event=>event.type==='controller').map(event=>event.controller),
+    ['usb-drd0','usb-drd1','usb-drd2','usb-drd3']);
+  assert.deepEqual(result.events.filter(event=>event.type==='typing').map(event=>event.controller),['usb-drd3']);
+});
+test('manual HID initialization failure does not probe another controller',async t=>{
+  const root=fixture(t,`console.error('libusbd_init failed; check usbgadget.kext.');process.exitCode=1;`);
+  const result=await run(root,['hid','bootstrap','usb-drd2']).done;
+  assert.equal(result.code,1);
+  assert.deepEqual(result.events.filter(event=>event.type==='controller').map(event=>event.controller),['usb-drd2']);
+  assert.equal(result.events.some(event=>event.retrySafe===true),false);
 });
 test('a bounded unresponsive HID worker can fail safely after its only attempt',{timeout:5000},async t=>{
   const root=fixture(t,`console.log('Waiting for USB host enumeration...');setInterval(()=>{},1000);`);
@@ -529,13 +665,15 @@ test('GUI host fixes bootstrap arity and disables inherited held RPC mode', asyn
     const fs = require('fs'); const path = require('path');
     fs.writeFileSync(path.join(__dirname, 'host-settings.json'), JSON.stringify({
       arity: process.env.NS2_BASIC_ARITY, rpc: process.env.NS2_RPC_MODE,
+      timeout: process.env.MAC2JB_HOST_STAGE_TIMEOUT_MS,
       args: process.argv.slice(2)
     }));
     console.log(${JSON.stringify(pairing)});
   `);
-  const result = await run(root, ['host', '192.0.2.1'], {NS2_BASIC_ARITY: '9', NS2_RPC_MODE: '1'}).done;
+  const result = await run(root, ['host', '192.0.2.1', '--host-stage-timeout-minutes', '25'],
+    {NS2_BASIC_ARITY: '9', NS2_RPC_MODE: '1', MAC2JB_HOST_STAGE_TIMEOUT_MS: '1'}).done;
   const settings = JSON.parse(fs.readFileSync(path.join(root, 'vendor/ns2jb/host-settings.json')));
-  assert.deepEqual(settings, {arity: '5', rpc: '0', args: ['192.0.2.1']});
+  assert.deepEqual(settings, {arity: '5', rpc: '0', timeout: '1500000', args: ['192.0.2.1']});
   assert.ok(result.events.some(e => e.type === 'host-ready'));
 });
 test('USB command and failure output preserve the full pairing command', async t => {
@@ -640,3 +778,27 @@ for (const kind of ['commands', 'commands-only']) for (const demo of [false, tru
     assert.equal(forwarded.includes('--demo'),demo);
   });
 }
+
+
+test('USB timing controls are validated before any helper starts', () => {
+  const defaults = hidSettings([]);
+  assert.equal(defaults.pollInterval, 10); assert.equal(defaults.keyHoldMs, 0); assert.equal(defaults.enterSettleMs, 0);
+  assert.deepEqual(hidSettings(['5', '--key-hold-ms', '10', '--enter-settle-ms', '100', '--poll-interval', '6']),
+    {...defaults, delay: 5, keyHoldMs: 10, enterSettleMs: 100, pollInterval: 6});
+  for (const args of [['--poll-interval', '0'], ['--poll-interval', '17'], ['--key-hold-ms', '2001'], ['--enter-settle-ms', '-1'], ['--key-hold-ms', '1.5']])
+    assert.throws(() => hidSettings(args));
+});
+test('selected USB timings reach both text and command helpers', async t => {
+  const root = fixture(t, `
+    require('fs').writeFileSync('timing.json', JSON.stringify({hold: process.env.MAC2JB_KEY_HOLD_MS,
+      enter: process.env.MAC2JB_ENTER_SETTLE_MS, poll: process.env.MAC2JB_POLL_INTERVAL}));
+    console.log('Keyboard enumerated. Sending...'); console.log('Sent line 1');
+  `);
+  for (const kind of ['bootstrap', 'save-bootstrap']) {
+    const result = await run(root, ['hid', kind, 'usb-drd0', '5', '--key-hold-ms', '10', '--enter-settle-ms', '100', '--poll-interval', '6']).done;
+    // SAVE's independent completion protocol may reject this intentionally minimal mock;
+    // the test only asserts that the actual child received the requested timing values.
+    assert.deepEqual(JSON.parse(fs.readFileSync(path.join(root, 'timing.json'))), {hold: '10', enter: '100', poll: '6'});
+    if (kind === 'bootstrap') assert.equal(result.code, 0, result.error);
+  }
+});

@@ -2,6 +2,7 @@
 const {AddonCollection, clean, redactText} = require('./addons.cjs');
 const {renderMenu} = require('./menu.cjs');
 const library = require('./library.cjs');
+const {SourcePreferences} = require('./source-preferences.cjs');
 const {AUTO_HIDE_MS, SEEK_GESTURE_TIMEOUT_MS, playbackOverlayModel, hitTestPlaybackOverlay, nextPlaybackFocus, validPoint, seekPositionAtX} = require('./playback-controls.cjs');
 const {CATALOG_PAGE_SIZE, LIST_PAGE_SIZE, TAB_PAGE_SIZE, pageStart, clamp, buildNavigation, hitTestNavigation} = require('./navigation.cjs');
 const BUTTONS = new Set(['up', 'down', 'left', 'right', 'a', 'b', 'x', 'y', 'l', 'r', 'zl', 'zr', 'plus', 'seekLeft', 'seekRight']);
@@ -25,11 +26,14 @@ const progressInfo = (position, duration) => {
 };
 
 class Controller {
-  constructor({addonUrls = [], libraryItems = [], callbacks = {}, onChange = () => {}, onLog = () => {}, now = () => Date.now(), ...networkOptions} = {}) {
+  constructor({addonUrls = [], libraryItems = [], sourcePreferences = new SourcePreferences(), callbacks = {}, onChange = () => {}, onLog = () => {}, now = () => Date.now(), ...networkOptions} = {}) {
     this.callbacks = callbacks; this.onChange = onChange; this.onLog = onLog;
+    this.sourcePreferences = sourcePreferences;
     this.abort = new AbortController(); this.closed = false;
     this.addons = new AddonCollection({addonUrls, ...networkOptions, signal: this.abort.signal, onLog: value => this._log(value)});
     this.catalogs = []; this.catalogIndex = 0; this.catalogItems = [];
+    this.catalogFilters = new Map(); this.filterChoice = null; this.filterInput = null;
+    this.heroBackdrops = new Map(); this.heroBackdropPending = new Set(); this.heroBackdropTimer = null;
     this.libraryItems = library.normalizeLibrary(libraryItems); this.libraryItem = null;
     this.meta = null; this.video = null; this.streams = [];
     this.view = 'catalog'; this.selected = 0; this.catalogSelected = 0;
@@ -39,7 +43,7 @@ class Controller {
     this.focusArea = 'content'; this.sidebarSelected = 0; this.tabSelected = 0;
     this.mainFocus = 'content'; this.section = 'home'; this.libraryEmpty = false;
     this.busy = false; this.notice = ''; this.loading = '';
-    this.playback = {paused: false, position: 0, duration: 0, volume: 1};
+    this.playback = {paused: false, position: 0, duration: 0};
     this.playTitle = '';
     this.playGeneration = 0; this.playStarting = false;
     this.now = now;
@@ -52,10 +56,34 @@ class Controller {
   _log(message) { if (this.closed) return; try { this.onLog(redactText(message)); } catch {} }
   _emit() {
     if (this.closed) return;
+    this._queueHeroBackdrop();
     try {
       const promise = this.onChange(this.getMenuModel());
       if (promise?.catch) promise.catch(() => this._log('The menu update callback failed.'));
     } catch { this._log('The menu update callback failed.'); }
+  }
+
+  _queueHeroBackdrop() {
+    clearTimeout(this.heroBackdropTimer);
+    this.heroBackdropTimer = null;
+    if (this.view !== 'catalog') return;
+    const item = this.catalogItems[this.selected];
+    if (!item?.id || !item.type || presentationURL(item.background)) return;
+    const key = `${item.type}\0${item.id}`;
+    if (this.heroBackdrops.has(key) || this.heroBackdropPending.has(key)) return;
+    this.heroBackdropTimer = setTimeout(async () => {
+      this.heroBackdropTimer = null;
+      if (this.closed || this.view !== 'catalog' || this.catalogItems[this.selected]?.id !== item.id) return;
+      this.heroBackdropPending.add(key);
+      let background;
+      try { background = presentationURL((await this.addons.meta(item.type, item.id,
+        this.catalogs[this.catalogIndex]?.client))?.background); } catch {}
+      this.heroBackdropPending.delete(key);
+      if (this.closed) return;
+      this.heroBackdrops.set(key, background || null);
+      if (this.heroBackdrops.size > 64) this.heroBackdrops.delete(this.heroBackdrops.keys().next().value);
+      if (this.view === 'catalog' && this.catalogItems[this.selected]?.id === item.id) this._emit();
+    }, 180);
   }
   async _operation(label, action) {
     if (this.busy || this.closed) return false;
@@ -94,13 +122,64 @@ class Controller {
       .map(library.libraryMeta).filter(Boolean);
   }
 
-  async _loadCatalog(index) {
+  _catalogLabel(index) {
+    const catalog = this.catalogs[index];
+    if (!catalog) return '';
+    const matches = this.catalogs.filter(entry => entry.name.toLowerCase() === catalog.name.toLowerCase());
+    if (matches.length < 2) return catalog.name;
+    let label = `${catalog.addonName} · ${catalog.name}`;
+    const sameAddon = matches.filter(entry => entry.addonName === catalog.addonName);
+    if (sameAddon.length > 1) {
+      const sameID = sameAddon.filter(entry => entry.id === catalog.id);
+      const qualifier = sameID.length > 1 ?
+        [catalog.type, catalog.id, index + 1].filter(Boolean).join(' · ') :
+        catalog.id || catalog.type || index + 1;
+      label = `${catalog.addonName} · ${catalog.name} (${qualifier})`;
+    }
+    return label;
+  }
+
+  _activeFilters(index = this.catalogIndex) {
+    return this.catalogFilters.get(index) || {};
+  }
+
+  _filterExtras(index = this.catalogIndex) {
+    return this.catalogs[index]?.extra || [];
+  }
+
+  _openCatalogFilters(index = this.catalogIndex) {
+    this.catalogIndex = index; this.view = 'catalogFilters'; this.selected = 0;
+    this.focusArea = 'content'; this.mainFocus = 'content'; this.tabSelected = index;
+    this.section = 'home'; this.libraryEmpty = false; this.filterChoice = null; this.filterInput = null;
+    this.meta = null; this.video = null; this.streams = []; this.libraryItem = null;
+  }
+
+  setCatalogFilter(name, value) {
+    if (this.closed || this.busy || this.view !== 'catalogFilters' || typeof name !== 'string' ||
+        value !== null && (typeof value !== 'string' || value.length > 256 || /[\x00-\x1f\x7f]/.test(value))) return false;
+    const extra = this._filterExtras().find(entry => entry.name === name);
+    if (!extra || extra.options?.length || extra.name === 'skip') return false;
+    if (value === null) { this.filterInput = null; this._emit(); return true; }
+    const next = {...this._activeFilters()};
+    if (value.trim()) next[name] = value.trim();
+    else if (extra.isRequired) { this.notice = `Enter a ${name} filter first.`; this._emit(); return false; }
+    else delete next[name];
+    this.catalogFilters.set(this.catalogIndex, next); this.filterInput = null; this.notice = ''; this._emit();
+    return true;
+  }
+
+  async _loadCatalog(index, {showFilters = false} = {}) {
     if (!this.catalogs.length) { this.notice = 'No catalogs are available. Add an addon or sign in to Stremio.'; return; }
     const normalized = (index + this.catalogs.length) % this.catalogs.length;
     const catalog = this.catalogs[normalized];
-    const items = catalog.kind ? this._libraryRows(catalog.kind) : await catalog.client.catalog(catalog);
+    const extras = this._activeFilters(normalized);
+    if (!catalog.kind && (showFilters || this._filterExtras(normalized).some(extra => extra.isRequired && !extras[extra.name]))) {
+      this._openCatalogFilters(normalized); return;
+    }
+    const items = catalog.kind ? this._libraryRows(catalog.kind) : await catalog.client.catalog(catalog, extras);
     this.catalogIndex = normalized; this.catalogItems = items;
     this.view = 'catalog'; this.selected = 0; this.catalogSelected = 0;
+    this.filterChoice = null; this.filterInput = null;
     this.focusArea = 'content'; this.mainFocus = 'content'; this.tabSelected = normalized;
     this.section = catalog.kind ? 'library' : 'home'; this.libraryEmpty = false;
     this.meta = null; this.video = null; this.streams = []; this.libraryItem = null;
@@ -177,17 +256,38 @@ class Controller {
     return actions;
   }
 
-  async _openStreams(video = null) {
+  async _openStreams(video = null, autoResume = false) {
     const id = videoID(this.meta, video);
     const streams = await this.addons.streams(this.meta.type, id);
     if (video) this._rememberEpisode(video);
     this.video = video; this.streams = streams;
     this.view = 'sources'; this.selected = 0; this.sourceSelected = 0;
     if (!streams.length) this.notice = 'No sources were returned for this video.';
+    if (autoResume) {
+      const preferred = this.sourcePreferences.find(this.meta.type, this.meta.id, id, streams);
+      if (preferred >= 0) await this._startStream(streams[preferred], preferred);
+    }
   }
 
   _rows() {
-    if (this.view === 'catalogs') return this.catalogs.map(catalog => ({label: catalog.name, detail: catalog.addonName}));
+    if (this.view === 'catalogs') return this.catalogs.map((catalog, index) => ({label: this._catalogLabel(index), detail: catalog.addonName}));
+    if (this.view === 'catalogFilters') return [...this._filterExtras().map(extra => {
+      const value = this._activeFilters()[extra.name];
+      return {label: extra.name === 'skip' ? 'Page' : extra.name === 'search' ? 'Search' :
+        extra.name.charAt(0).toUpperCase() + extra.name.slice(1),
+      detail: value === undefined ? extra.isRequired ? 'Required' : 'Any' : extra.name === 'skip' ?
+        `${Number(value) / 100 + 1}` : value,
+      kind: 'filter', filterName: extra.name, requiresText: !extra.options?.length && extra.name !== 'skip',
+      required: extra.isRequired, value: value || ''};
+    }), {label: 'Show results', detail: this._filterExtras().every(extra => !extra.isRequired || this._activeFilters()[extra.name]) ?
+      'Open catalog' : 'Set required filters first', kind: 'submit'}];
+    if (this.view === 'filterChoices') {
+      const extra = this._filterExtras().find(entry => entry.name === this.filterChoice);
+      if (!extra) return [];
+      const choices = extra.name === 'skip' ? Array.from({length: 11}, (_, index) => String(index * 100)) : extra.options || [];
+      return [...(!extra.isRequired ? [{label: 'Any', value: ''}] : []), ...choices.map(value => ({label: extra.name === 'skip' ?
+        `Page ${Number(value) / 100 + 1}` : value, value}))];
+    }
     if (this.view === 'catalog') return this.catalogItems.map(meta => ({label: meta.name,
       detail: [meta.releaseInfo, meta.type].filter(Boolean).join(' · ')}));
     if (this.view === 'details') return this._detailsActions();
@@ -214,10 +314,12 @@ class Controller {
     return {index, id: presentationID(meta.id), title: clean(meta.name), type: clean(meta.type, 64),
       subtitle: [clean(meta.releaseInfo, 48), clean(meta.type, 64)].filter(Boolean).join(' · '),
       releaseInfo: clean(meta.releaseInfo, 48), poster: presentationURL(meta.poster),
+      background: presentationURL(meta.background) || (hero ?
+        this.heroBackdrops.get(`${meta.type}\0${meta.id}`) || undefined : undefined),
+      logo: presentationURL(meta.logo),
       posterShape: ['poster', 'square', 'landscape'].includes(meta.posterShape) ? meta.posterShape : 'poster',
       description: clean(meta.description, hero ? 600 : 180),
-      ...(hero ? {background: presentationURL(meta.background), logo: presentationURL(meta.logo),
-        genres: (Array.isArray(meta.genres) ? meta.genres : []).slice(0, 8).map(genre => clean(genre, 48)).filter(Boolean),
+      ...(hero ? {genres: (Array.isArray(meta.genres) ? meta.genres : []).slice(0, 8).map(genre => clean(genre, 48)).filter(Boolean),
         runtime: clean(meta.runtime, 48), rating: clean(meta.rating, 16)} : {}),
       selected, inLibrary: Boolean(item && !item.removed && !item.temp), canResume: Boolean(progress), progress};
   }
@@ -227,7 +329,9 @@ class Controller {
     const tabIndex = this.view === 'catalogs' ? selected : this.focusArea === 'tabs' ? clamp(this.tabSelected, this.catalogs.length) : this.catalogIndex;
     const tabStart = Math.max(0, Math.min(tabIndex - 3, this.catalogs.length - TAB_PAGE_SIZE));
     const section = catalog?.kind ? 'Library' : 'Discover';
-    const breadcrumb = this.view === 'catalogs' ? ['Catalogs'] : [section, catalog?.name].filter(Boolean);
+    const breadcrumb = this.view === 'catalogs' ? ['Catalogs'] : [section, this._catalogLabel(this.catalogIndex)].filter(Boolean);
+    if (this.view === 'catalogFilters') breadcrumb.push('Filters');
+    if (this.view === 'filterChoices') breadcrumb.push('Filters', this.filterChoice);
     if (this.meta && this.view !== 'catalog' && this.view !== 'catalogs') breadcrumb.push(this.meta.name);
     if (this.view === 'seasons') breadcrumb.push('Seasons');
     if (['episodes', 'sources', 'playing'].includes(this.view) && this.meta?.type === 'series' && this.selectedSeason !== undefined) {
@@ -251,10 +355,10 @@ class Controller {
     });
     const heroMeta = this.view === 'catalog' ? this.catalogItems[selected] : this.view === 'catalogs' ? null : this.meta;
     return {brand: 'Stremio', breadcrumb,
-      catalog: catalog ? {index: this.libraryEmpty ? -1 : this.catalogIndex, name: clean(catalog.name, 120), addonName: clean(catalog.addonName, 120),
+      catalog: catalog ? {index: this.libraryEmpty ? -1 : this.catalogIndex, name: clean(this.libraryEmpty ? catalog.name : this._catalogLabel(this.catalogIndex), 120), addonName: clean(catalog.addonName, 120),
         kind: catalog.kind || 'addon', type: catalog.type || ''} : null,
       tabs: this.catalogs.slice(tabStart, tabStart + TAB_PAGE_SIZE).map((entry, localIndex) => ({index: tabStart + localIndex,
-        id: presentationID(entry.kind || entry.id || String(tabStart + localIndex)), label: clean(entry.name, 120), detail: clean(entry.addonName, 120),
+        id: presentationID(entry.kind || entry.id || String(tabStart + localIndex)), label: clean(this._catalogLabel(tabStart + localIndex), 120), detail: clean(entry.addonName, 120),
         kind: entry.kind || 'addon', active: !this.libraryEmpty && tabStart + localIndex === this.catalogIndex,
         selected: tabStart + localIndex === tabIndex})),
       tabOffset: tabStart, tabCount: this.catalogs.length,
@@ -272,9 +376,11 @@ class Controller {
     const start = pageStart(selected, this.view === 'catalog' ? CATALOG_PAGE_SIZE : LIST_PAGE_SIZE);
     let title = 'Stremio compatible · alpha', subtitle = '';
     if (this.view === 'catalogs') subtitle = 'Choose a catalog';
+    if (this.view === 'catalogFilters') subtitle = `Choose filters for ${this._catalogLabel(this.catalogIndex)}`;
+    if (this.view === 'filterChoices') subtitle = `Choose ${this.filterChoice}`;
     if (this.view === 'catalog') {
       const catalog = this.libraryEmpty ? {name: 'My Library', addonName: 'Stremio account'} : this.catalogs[this.catalogIndex];
-      subtitle = catalog ? `${catalog.addonName} · ${catalog.name}` : 'Catalogs';
+      subtitle = catalog ? this._catalogLabel(this.catalogIndex) : 'Catalogs';
     }
     if (this.view === 'details' || this.view === 'episodes' || this.view === 'seasons') {
       title = this.meta?.name || title;
@@ -285,18 +391,21 @@ class Controller {
     if (this.view === 'sources') { title = this.video ? episodeLabel(this.video) : this.meta?.name || title; subtitle = 'Choose a source'; }
     if (this.view === 'playing') {
       title = this.playTitle;
-      subtitle = `${this.playback.paused ? 'Paused' : 'Playing'} · ${time(this.playback.position)} / ${time(this.playback.duration)} · ${Math.round(this.playback.volume * 100)}%`;
+      subtitle = `${this.playback.paused ? 'Paused' : 'Playing'} · ${time(this.playback.position)} / ${time(this.playback.duration)}`;
     }
     const model = {width: 640, height: 360, view: this.view, title, subtitle,
       ...this._presentation(rows, selected, start), selected: selected - start, offset: start, count: rows.length,
       selectedIndex: selected,
       selectedSeason: this.selectedSeason ?? null,
+      filterInput: this.filterInput,
       description: this.view === 'details' ? this.meta?.description || '' : '',
       message: this.busy ? this.loading : this.notice, busy: this.busy, isPlaying: this.view === 'playing',
       playbackOverlay: this.view === 'playing' ? this._overlayModel() : null,
-      footer: this.view === 'playing' ? 'A Select / Pause  X / + Controls  L / R Episodes  Hold ZL / ZR or left stick Seek  ↑/↓ Vol  B Hide / Stop' :
+      footer: this.view === 'playing' ? 'A Select / Pause  X / + Controls  L / R Episodes  Hold ZL / ZR or left stick Seek  B Hide / Stop' :
         this.focusArea === 'sidebar' ? '↑/↓ Menu  A Open  → Return  B Return' : this.focusArea === 'tabs' ? '←/→ Catalogs  A Open  ↓ Titles  B Menu' :
-        this.view === 'catalog' ? '←/→ Titles  ↑ Catalogs  A Open  B Menu  X Refresh  Y Next catalog' : '↑/↓ Browse  A Open  B Back  ← Menu  X Refresh'};
+        this.view === 'catalog' ? `←/→ Titles  ↑ Catalogs  L/R Tabs  A Open  B Menu  X ${this._filterExtras().length ? 'Filters' : 'Refresh'}  Y Next catalog` :
+        this.view === 'catalogFilters' || this.view === 'filterChoices' ? '↑/↓ Filters  A Select  B Back  L/R Tabs' :
+          '↑/↓ Browse  L/R Tabs  A Open  B Back  ← Menu  X Refresh'};
     model.navigation = buildNavigation(model, {focusArea: this.focusArea, sidebarIndex: this.sidebarSelected,
       tabIndex: this.tabSelected, section: this.section});
     return model;
@@ -304,6 +413,32 @@ class Controller {
 
   async _select() {
     if (this.view === 'catalogs') { await this._loadCatalog(this.selected); return; }
+    if (this.view === 'catalogFilters') {
+      const row = this._rows()[this.selected];
+      if (row?.kind === 'submit') {
+        const missing = this._filterExtras().find(extra => extra.isRequired && !this._activeFilters()[extra.name]);
+        if (missing) { this.notice = `Choose a ${missing.name} filter first.`; return; }
+        await this._loadCatalog(this.catalogIndex); return;
+      }
+      if (row?.kind !== 'filter') return;
+      if (row.requiresText) {
+        this.filterInput = {name: row.filterName, label: row.label, value: row.value, required: row.required};
+        return;
+      }
+      this.filterChoice = row.filterName; this.view = 'filterChoices'; this.selected = 0;
+      return;
+    }
+    if (this.view === 'filterChoices') {
+      const row = this._rows()[this.selected];
+      if (!row) return;
+      const next = {...this._activeFilters()};
+      if (row.value) next[this.filterChoice] = row.value;
+      else delete next[this.filterChoice];
+      this.catalogFilters.set(this.catalogIndex, next);
+      const name = this.filterChoice; this.filterChoice = null; this.view = 'catalogFilters';
+      this.selected = Math.max(0, this._filterExtras().findIndex(extra => extra.name === name));
+      return;
+    }
     if (this.view === 'catalog') {
       const item = this.catalogItems[this.selected];
       if (item) { this.catalogSelected = this.selected; await this._openMeta(item); }
@@ -315,7 +450,7 @@ class Controller {
       if (action?.action === 'resume') {
         const video = this.meta.videos.find(video => video.id === action.id) ||
           {id: action.id, title: this.meta.name, season: null, episode: null, released: ''};
-        await this._openStreams(video); return;
+        await this._openStreams(video, true); return;
       }
       if (action?.action === 'currentSeason') {
         const group = this._seasonGroups().find(group => group.season === action.season);
@@ -417,10 +552,13 @@ class Controller {
         ...(this.meta.type === 'series' ? {videoIds: this.meta.videos.map(video => video.id)} : {})};
       const resume = library.resumePosition(this.libraryItem, id);
       this.playback = {paused: false, position: resume,
-        duration: this.libraryItem && (this.libraryItem.state.video_id || this.libraryItem._id) === id ? this.libraryItem.state.duration / 1000 : 0,
-        volume: this.playback.volume};
+        duration: this.libraryItem && (this.libraryItem.state.video_id || this.libraryItem._id) === id ? this.libraryItem.state.duration / 1000 : 0};
       await this.callbacks.play({url: source.url, headers: {...source.headers}, title: this.playTitle,
         meta: {id: this.meta.id, type: this.meta.type, videoId: id}, resumePosition: resume, libraryInfo: info});
+      if (generation === this.playGeneration) {
+        try { await this.sourcePreferences.remember(this.meta.type, this.meta.id, id, this.streams, sourceIndex); }
+        catch { this._log('The last playback source could not be saved.'); }
+      }
     } finally { this.playStarting = false; }
     if (generation !== this.playGeneration) return;
     this.view = 'playing'; this.selected = 0;
@@ -429,6 +567,8 @@ class Controller {
 
   async _back() {
     if (this.focusArea === 'sidebar') { this._leaveSidebar(); return; }
+    if (this.view === 'filterChoices') { this.view = 'catalogFilters'; this.filterChoice = null; this.selected = 0; return; }
+    if (this.view === 'catalogFilters') { this.filterInput = null; this.view = 'catalogs'; this.selected = this.catalogIndex; return; }
     if (this.view === 'catalog' || this.view === 'catalogs') { this._openSidebar(); return; }
     this.focusArea = 'content';
     if (this.view === 'sources') {
@@ -451,7 +591,9 @@ class Controller {
 
   async _refresh() {
     if (this.libraryEmpty && this.view === 'catalog') await this._sidebarAction('library');
-    else if (this.view === 'catalog' || this.view === 'catalogs') await this._loadCatalog(this.catalogIndex);
+    else if (this.view === 'catalog' && this._filterExtras().length) this._openCatalogFilters();
+    else if (this.view === 'filterChoices') { this.view = 'catalogFilters'; this.filterChoice = null; }
+    else if (this.view === 'catalog' || this.view === 'catalogs' || this.view === 'catalogFilters') await this._loadCatalog(this.catalogIndex);
     else if (this.view === 'sources') await this._openStreams(this.video);
     else if (this.view === 'details' || this.view === 'seasons' || this.view === 'episodes') await this._openMeta(this.meta);
   }
@@ -546,20 +688,12 @@ class Controller {
     if (['zl', 'zr', 'seekLeft', 'seekRight'].includes(button))
       return this._playbackAction('seek', ['right', 'zr', 'seekRight'].includes(button) ? 10 : -10);
     if (button === 'l' || button === 'r') return this._playbackAction(button === 'r' ? 'nextEpisode' : 'prevEpisode');
-    if (button === 'up' || button === 'down') {
-      this._showOverlay();
-      const delta = button === 'up' ? 0.05 : -0.05;
-      const volume = Math.min(1, Math.max(0, this.playback.volume + delta));
-      const generation = this.playGeneration;
-      await this._playbackCallback('volume', delta);
-      if (generation === this.playGeneration && this.view === 'playing') this.playback.volume = volume;
-    }
     if (button === 'b') return this._playbackAction('stop');
   }
 
   async handleButton(button) {
     if (!BUTTONS.has(button) || this.busy || this.closed || this.view === 'playing' && this.playback.seeking) return false;
-    if (this.view !== 'playing' && ['l', 'r', 'zl', 'zr', 'plus', 'seekLeft', 'seekRight'].includes(button)) return false;
+    if (this.view !== 'playing' && ['zl', 'zr', 'plus', 'seekLeft', 'seekRight'].includes(button)) return false;
     if (this.view === 'playing') {
       if (!PLAYBACK_BUTTONS.has(button)) return false;
       if (this.overlay.visible && this.overlay.mode !== 'controls' && !['l', 'r'].includes(button)) {
@@ -569,6 +703,12 @@ class Controller {
         if (button === 'up' || button === 'down') {
           this.overlay.optionSelected = clamp(this.overlay.optionSelected + (button === 'down' ? 1 : -1), this._overlayModel().optionCount);
           this._showOverlay(); this._emit(); return true;
+        }
+        if (button === 'left' || button === 'right') {
+          const action = button === 'left' ? 'previousOptions' : 'nextOptions';
+          const page = this._overlayModel().optionPaging.find(row => row.action === action && !row.disabled);
+          if (!page) return false;
+          this.overlay.optionSelected = page.index; this._showOverlay(); this._emit(); return true;
         }
         if (button === 'a') {
           const row = this._overlayModel().optionRows.find(row => row.focused);
@@ -593,7 +733,10 @@ class Controller {
         if (control.id === 'audio' || control.id === 'subtitles') { this._openTrackOptions(control.id); this._emit(); return true; }
         return this._operation('Updating playback…', () => this._playbackAction(control.id));
       }
+      if (button === 'up' || button === 'down') return false;
     }
+    if (this.view !== 'playing' && (button === 'l' || button === 'r'))
+      return this._operation('Loading…', () => this._loadCatalog(this.catalogIndex + (button === 'r' ? 1 : -1)));
     if (this.view !== 'playing' && this._moveBrowseFocus(button)) return true;
     return this._operation(this.view === 'playing' ? 'Updating playback…' : 'Loading…', async () => {
       if (this.view === 'playing') { await this._playingButton(button); return; }
@@ -795,20 +938,25 @@ class Controller {
 
   updatePlayback(update = {}) {
     if (this.closed) return;
+    const wasPaused = this.playback.paused;
+    const wasSeeking = this.playback.seeking;
     const previousPosition = this.playback.position;
-    const previous = [Math.floor(this.playback.position), Math.floor(this.playback.duration), this.playback.volume, this.playback.paused, this.playback.seeking].join(':');
-    for (const key of ['position', 'duration', 'volume']) if (Number.isFinite(update[key]) &&
-      (key === 'volume' || update[key] >= 0 && update[key] <= library.MAX_SECONDS))
-      this.playback[key] = key === 'volume' ? Math.max(0, Math.min(1, update[key])) : Math.max(0, update[key]);
+    const previous = [Math.floor(this.playback.position), Math.floor(this.playback.duration), this.playback.paused, this.playback.seeking].join(':');
+    for (const key of ['position', 'duration']) if (Number.isFinite(update[key]) &&
+      update[key] >= 0 && update[key] <= library.MAX_SECONDS)
+      this.playback[key] = update[key];
     if (typeof update.paused === 'boolean') this.playback.paused = update.paused;
     if (typeof update.seeking === 'boolean') this.playback.seeking = update.seeking;
+    if (wasSeeking && update.seeking === false) this._cancelSeek();
+    if ((wasPaused && update.paused === false) || (wasSeeking && update.seeking === false))
+      this.overlay.lastInteraction = this.now();
     if (this.seekPreview !== null) this.seekPreview = this.playback.duration ? Math.max(0, Math.min(
       this.playback.duration - (this.seekGesture?.owner === 'touch' ? 0 : 0.1),
       this.seekPreview + (this.seekGesture?.owner === 'touch' ? 0 : this.playback.position - previousPosition))) : null;
     if (['audioTracks', 'subtitleTracks', 'selectedAudioId', 'audioTrackId', 'selectedSubtitleId', 'subtitleTrackId'].some(key =>
       Object.prototype.hasOwnProperty.call(update, key))) this.setMediaTracks(update);
     this._updateLibrarySnapshot(false);
-    const changed = previous !== [Math.floor(this.playback.position), Math.floor(this.playback.duration), this.playback.volume, this.playback.paused, this.playback.seeking].join(':');
+    const changed = previous !== [Math.floor(this.playback.position), Math.floor(this.playback.duration), this.playback.paused, this.playback.seeking].join(':');
     if (changed && (this.view !== 'playing' || this.overlay.visible)) this._emit();
   }
 
@@ -845,6 +993,9 @@ class Controller {
 
   playbackFailed(message = 'Playback failed. Check the Mac activity log.') {
     if (this.closed || this.view !== 'playing' && !this.playStarting) return;
+    if (this.meta && this.streams[this.sourceSelected])
+      this.sourcePreferences.forget(this.meta.type, this.meta.id, videoID(this.meta, this.video),
+        this.streams, this.sourceSelected).catch(() => this._log('The failed playback source could not be cleared.'));
     this._updateLibrarySnapshot(false); this.playGeneration++;
     this._cancelSeek();
     this.overlay.mode = 'controls'; this.overlay.visible = false;
@@ -854,7 +1005,7 @@ class Controller {
 
   setPlaybackInfo(update) { this.updatePlayback(update); }
 
-  close() { this.closed = true; this._cancelSeek(); this.playGeneration++; this.abort.abort(); }
+  close() { this.closed = true; clearTimeout(this.heroBackdropTimer); this._cancelSeek(); this.playGeneration++; this.abort.abort(); }
 
   renderMenu(options) { return renderMenu(this.getMenuModel(), options); }
 }

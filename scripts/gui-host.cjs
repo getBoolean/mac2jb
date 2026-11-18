@@ -1,22 +1,37 @@
 #!/usr/bin/env node
 'use strict';
-// Native GUI adapter. Keep the audited ns2jb snapshot unchanged and preserve
-// the host's command output in the GUI's diagnostic stream.
 process.umask(0o077);
 const fs = require('node:fs');
 const path = require('node:path');
 const net = require('node:net');
 const {spawn} = require('node:child_process');
-const {selectedProfile, profileById, validStartCommand} = require('./host-profiles.cjs');
+const {selectedProfile, profileById, validStartCommand, incompatibleLegacyStartHint} = require('./host-profiles.cjs');
+const {autoControllers} = require('./usb-controllers.cjs');
 const root = path.resolve(__dirname, '..');
 const timingDefaults = Object.freeze({delay: 10, enumerationTimeout: 4, loadWaitMs: 1000,
-  runWaitMs: 1000, removeWaitMs: 1000, loadConfirmWaitMs: 1000});
+  runWaitMs: 0, removeWaitMs: 0, loadConfirmWaitMs: 0, keyHoldMs: 0, enterSettleMs: 0, pollInterval: 10});
+function hostSettings(args) {
+  if (args[0] !== 'host') throw Error('Expected a host command.');
+  const values = args.slice(2);
+  let stageTimeoutMinutes = 10;
+  const position = values.indexOf('--host-stage-timeout-minutes');
+  if (position !== -1) {
+    const value = values[position + 1];
+    if (!/^(?:[1-9]|[1-5][0-9]|60)$/.test(value || '') ||
+        values.indexOf('--host-stage-timeout-minutes', position + 1) !== -1)
+      throw Error('Host stage timeout must be 1–60 minutes.');
+    stageTimeoutMinutes = Number(value);
+    values.splice(position, 2);
+  }
+  return {args: args.slice(0, 2).concat(values), stageTimeoutMinutes};
+}
 function hidSettings(args) {
   const settings = {...timingDefaults};
   const values = [...args];
   if (values.length && !values[0].startsWith('--')) settings.delay = Number(values.shift());
   const options = {'--enumeration-timeout': 'enumerationTimeout', '--load-wait-ms': 'loadWaitMs',
-    '--run-wait-ms': 'runWaitMs', '--remove-wait-ms': 'removeWaitMs', '--load-confirm-wait-ms': 'loadConfirmWaitMs'};
+    '--run-wait-ms': 'runWaitMs', '--remove-wait-ms': 'removeWaitMs', '--load-confirm-wait-ms': 'loadConfirmWaitMs',
+    '--key-hold-ms': 'keyHoldMs', '--enter-settle-ms': 'enterSettleMs', '--poll-interval': 'pollInterval'};
   while (values.length) {
     const option = values.shift();
     if (option === "--demo") {
@@ -33,13 +48,13 @@ function hidSettings(args) {
   }
   for (const name of Object.keys(timingDefaults)) {
     const value = settings[name];
-    const minimum = name === 'delay' || name === 'enumerationTimeout' ? 1 : 0;
-    const maximum = name === 'delay' ? 2000 : name === 'enumerationTimeout' ? 120 : 120000;
+    const minimum = name === 'delay' || name === 'enumerationTimeout' || name === 'pollInterval' ? 1 : 0;
+    const maximum = ['delay', 'keyHoldMs', 'enterSettleMs'].includes(name) ? 2000 : name === 'pollInterval' ? 16 : name === 'enumerationTimeout' ? 120 : 120000;
     if (!Number.isInteger(value) || value < minimum || value > maximum) throw Error(`Invalid ${name}: use ${minimum}..${maximum}.`);
   }
   return settings;
 }
-function commandsOnlySettings(args, profile = profileById('BermTheSequel')) {
+function commandsOnlySettings(args, profile = selectedProfile(root)) {
   const timings=[];let csv,startCommand,startPrefix=false;
   for(let index=0;index<args.length;index++) {
     const option=args[index];
@@ -62,6 +77,20 @@ function commandsOnlySettings(args, profile = profileById('BermTheSequel')) {
     throw Error(`Selected START needs either --start-prefix or the exact ${profile.startArgumentCount}-argument host START command.`);
   return {...hidSettings(timings),commands,startPrefix,...(startCommand===undefined?{}:{startCommand})};
 }
+function heldCommandsSettings(args, profile = selectedProfile(root)) {
+  const timing = [];
+  let startCommand;
+  for (let index = 0; index < args.length; index++) {
+    if (args[index] === '--start-command') {
+      if (startCommand !== undefined || index + 1 >= args.length)
+        throw Error('Missing or duplicate --start-command.');
+      startCommand = args[++index];
+    } else timing.push(args[index]);
+  }
+  if (startCommand !== undefined && !validStartCommand(startCommand, profile))
+    throw Error('The active host START command is invalid for this host.');
+  return {...hidSettings(timing), ...(startCommand === undefined ? {} : {startCommand})};
+}
 function emit(type, fields = {}) { process.stdout.write(JSON.stringify({type, ...fields}) + '\n'); }
 function lines(stream, callback, limit = 65536) {
   let pending = '';
@@ -77,16 +106,16 @@ function lines(stream, callback, limit = 65536) {
   });
   stream.on('end', () => {if (pending) callback(pending);});
 }
-function validStart(line, address, profile = profileById('BermTheSequel')) {
+function validStart(line, address, profile = selectedProfile(root)) {
   return validStartCommand(line,profile,address);
 }
 function verifiedResult(result) {
   return result?.verified === true && result?.fs?.verified === true &&
     result?.fs?.restored === true && result?.fs?.cleanup?.cleanedUp === true;
 }
-function networkBindFailure(line, address) {
+function networkBindFailure(line, address, port = 39380) {
   const match = /\blisten\s+EADDRNOTAVAIL\b.*?\s(\d+(?:\.\d+){3}):(\d+)\b/.exec(line);
-  if (!match || match[1] !== address || match[2] !== '39380') return null;
+  if (!match || match[1] !== address || match[2] !== String(port)) return null;
   return {address, diagnostic: line.trim().slice(0, 2048)};
 }
 function networkUnavailableMessage(address) {
@@ -103,7 +132,7 @@ function stop() {
   stopTimer = setTimeout(() => signalGroup(current, 'SIGKILL'), 2000);
   stopTimer.unref();
 }
-async function host(address) {
+async function host(address, stageTimeoutMinutes = 10) {
   if (!net.isIPv4(address)) throw Error('Choose the Mac’s LAN IPv4 address.');
   const profile = selectedProfile(root);
   const folder = path.join(root, 'vendor/ns2jb');
@@ -118,20 +147,21 @@ async function host(address) {
     cwd: folder, detached: true, stdio: ['ignore', 'pipe', 'pipe'],
     // Use the selected host's matching bootstrap without changing its source.
     // GUI sessions finish after verification, regardless of inherited settings.
-    env: {...process.env, NS2_BASIC_ARITY: String(profile.startArgumentCount), NS2_RPC_MODE: '0'}
+    env: {...process.env, NS2_BASIC_ARITY: String(profile.startArgumentCount), NS2_RPC_MODE: '0',
+      MAC2JB_HOST_STAGE_TIMEOUT_MS: String(stageTimeoutMinutes * 60000)}
   });
   const child = current;
   let published = false, directory, publicationError, networkFailure, networkTimer, progressed = false;
   function output(line) {
     try {
     const clean = line.trim();
-    const bindFailure = networkBindFailure(clean, address);
+    const bindFailure = networkBindFailure(clean, address, profile.startPort);
     if (bindFailure && !networkFailure) {
       networkFailure = bindFailure;
       signalGroup(child, 'SIGTERM');
       networkTimer = setTimeout(() => signalGroup(child, 'SIGKILL'), 2000); networkTimer.unref();
     }
-    if (validStart(clean, address, profile) && !published && !stopping && !networkFailure) {
+    if (/^V=START\(\d+(?:,\d+)+\)$/.test(clean) && validStart(clean, address, profile) && !published && !stopping && !networkFailure) {
       const temporary = active + '.' + process.pid + '.tmp';
       fs.writeFileSync(temporary, `${child.pid}\n${clean}\n`, {mode: 0o600, flag: 'wx'});
       // link provides no-replace publication, unlike rename on an existing file.
@@ -143,14 +173,14 @@ async function host(address) {
       const candidate = path.resolve(clean.slice('Run folder: '.length));
       if (candidate.startsWith(runs + path.sep)) {directory = candidate; progressed = true; emit('run-folder', {path: candidate});}
     }
-    if (/^(?:Waiting for Switch 2 at |Connected\b|[1-4]\/4 |Sending: |MAC2JB_GUI |Keyboard enumerated\. Sending|Typing line |Sent line )/.test(clean)) progressed = true;
-    if (clean.startsWith('Waiting for Switch 2 at '))
+    if (/^(?:Waiting for Switch 2 at |Console listener ready at |Connected\b|[1-4]\/4 |Sending: |MAC2JB_GUI |Keyboard enumerated\. Sending|Typing line |Sent line )/.test(clean)) progressed = true;
+    if (clean.startsWith('Waiting for Switch 2 at ') || clean.startsWith('Console listener ready at '))
       emit('host-stage', {stage: 'waiting', message: 'Waiting for the Switch to connect over the local network'});
     else if (clean.startsWith('Connected. Checking the application'))
       emit('host-stage', {stage: 'connected', message: 'Switch connected — checking the application'});
     else if (/^[1-4]\/4 /.test(clean)) emit('host-stage', {
       stage: 'pipeline', completed: Number(clean[0])-1, total: 4, message: clean});
-    emit('log', {message: line});
+    if (!incompatibleLegacyStartHint(clean, profile.startArgumentCount)) emit('log', {message: line});
     } catch (error) {
       publicationError ||= error;
       signalGroup(child, 'SIGTERM');
@@ -185,15 +215,14 @@ async function host(address) {
   emit('failed', {message: result?.error || 'The host ended without a verified result. Restart the console before retrying.'});
   return code || 1;
 }
-async function hid(kind, controller, settings = timingDefaults) {
-  const profile = selectedProfile(root);
+async function hid(kind, controller, settings = timingDefaults, profile = selectedProfile(root)) {
   if (settings.demo && !profile.supportsDemo) throw Error(`${profile.label} does not support the demo in this pinned build.`);
   if (!['bootstrap', 'commands', 'commands-only', 'save-bootstrap'].includes(kind)) throw Error('Invalid transfer kind.');
   if (controller !== 'auto' && !/^usb-drd(?:[0-9]|1[0-5])$/.test(controller)) throw Error('Choose a controller from 0 to 15.');
   if(controller!=='auto'&&settings.preferredController!==undefined)throw Error('A preferred controller is only available in Automatic mode.');
   const {delay, enumerationTimeout, loadWaitMs, runWaitMs, removeWaitMs, loadConfirmWaitMs} = settings;
-  const candidates = controller === 'auto' ? [...new Set([...(settings.preferredController?[settings.preferredController]:[]),'usb-drd0','usb-drd1','usb-drd3'])] : [controller];
-  let safeFailures=0;
+  const candidates = controller === 'auto' ? autoControllers(settings.preferredController) : [controller];
+  let safeFailures=0, initFailures=0;
   const saveBootstrap = kind === 'save-bootstrap';
   const textTransfer = kind === 'bootstrap';
   const commandNames=saveBootstrap?['SAVE']:kind==='commands-only'?settings.commands.map(name=>name.toUpperCase()):['LOAD','RUN','REMOVE','START'];
@@ -209,15 +238,21 @@ async function hid(kind, controller, settings = timingDefaults) {
     const executable = path.join(root, textTransfer ? 'mac2jb-send' : 'mac2jb-commands');
     const args = textTransfer ? [asset, '--delay-ms', String(delay)] : [
       '--auto', ...(kind !== 'bootstrap' && settings.demo ? ['--demo'] : []), '--delay-ms', String(delay), '--gui-events', '--enumeration-timeout', String(enumerationTimeout),
-      ...(profile.startArgumentCount === 9 ? ['--start-arity','9'] : []),
+      ...(profile.startArgumentCount === 9 ? ['--start-arity','9'] : []), '--start-port', String(profile.startPort),
+      '--save-name', profile.saveName || 'NS2', '--load-name', profile.saveName || 'NS2',
       '--load-wait-ms', String(loadWaitMs), '--run-wait-ms', String(runWaitMs),
       '--remove-wait-ms', String(removeWaitMs), '--load-confirm-wait-ms', String(loadConfirmWaitMs),
       ...(saveBootstrap ? ['--save-bootstrap'] : []),
+      ...(kind === 'commands' && settings.startCommand ?
+        ['--commands','load,run,remove,start','--start-command',settings.startCommand] : []),
       ...(kind === 'commands-only' ? ['--commands',settings.commands.join(','),
         ...(settings.startPrefix?['--start-prefix']:settings.startCommand?['--start-command',settings.startCommand]:[])] : [])];
     current = spawn(executable, args, {cwd: root, detached: true, stdio: ['ignore', 'pipe', 'pipe'],
       env: {...process.env, MAC2JB_AUTO_WORKER: '1', MAC2JB_CONTROLLER: candidate,
-        MAC2JB_ENUMERATION_TIMEOUT_SECONDS: String(enumerationTimeout)}});
+        MAC2JB_ENUMERATION_TIMEOUT_SECONDS: String(enumerationTimeout),
+        MAC2JB_KEY_HOLD_MS: String(settings.keyHoldMs ?? timingDefaults.keyHoldMs),
+        MAC2JB_ENTER_SETTLE_MS: String(settings.enterSettleMs ?? timingDefaults.enterSettleMs),
+        MAC2JB_POLL_INTERVAL: String(settings.pollInterval ?? timingDefaults.pollInterval)}});
     const child = current;
     let output = '', typing = false, timedOut = false, announced = false, commandStep = 0, nativeEvents = false, nativeLineEvents = false,prefixCompleted=false;
     const completedCommands=new Set();
@@ -278,7 +313,7 @@ async function hid(kind, controller, settings = timingDefaults) {
         if(event.type==='command-prefix-complete') {
           if(kind!=='commands-only'||!settings.startPrefix||prefixCompleted||event.step!==commandTotal||
             event.completed!==commandTotal-1||event.total!==commandTotal||event.label!=='START'||
-            event.prefix!=='V=START(39380,'||event.startPending!==true||completedCommands.size!==commandTotal-1)return;
+            event.prefix!==`V=START(${profile.startPort},`||event.startPending!==true||completedCommands.size!==commandTotal-1)return;
           prefixCompleted=true;
           markTyping();
           emit(event.type,{kind,step:event.step,completed:event.completed,total:commandTotal,label:'START',startPending:true});return;
@@ -371,25 +406,53 @@ async function hid(kind, controller, settings = timingDefaults) {
       emit('failed', {partial: true, message: 'Input may be partial. Automatic retry was stopped. Inspect and clear the Switch input before trying again.'}); return 1;
     }
     const enumerationError = /^USB host did not enumerate a keyboard(?:\.| on selected controller\. Check data role, cable, and host USB descriptors\.)?$/m.test(output);
-    const initializationError=/^(?:libusbd_init failed\b|USB configuration failed\b|USB interface setup failed\b|USB enumeration error(?::|\s)|USB keyboard enumeration failed\b)/m.test(output);
-    const safeEnumerationFailure=!initializationError&&((timedOut&&(['SIGTERM','SIGKILL'].includes(signal)||[1,130].includes(code)))||(!signal&&code===1&&enumerationError));
+    const noGadgetInitialization=/^libusbd_init failed\b/m.test(output);
+    const initializationError=/^(?:USB configuration failed\b|USB interface setup failed\b|USB enumeration error(?::|\s)|USB keyboard enumeration failed\b)/m.test(output);
+    if (/^No active ns2jb command at /m.test(output)) {
+      emit('failed', {message: 'The active host START command was not available to the USB sender. No console command was typed.'});
+      return code || 1;
+    }
+    const safeEnumerationFailure=!initializationError&&((controller==='auto'&&!signal&&code===1&&noGadgetInitialization)||
+      (timedOut&&(['SIGTERM','SIGKILL'].includes(signal)||[1,130].includes(code)))||(!signal&&code===1&&enumerationError));
     if (!safeEnumerationFailure) {
-      emit('failed', {message: 'USB initialization failed. Check that the approved usbgadget driver is installed and loaded.'}); return code || 1;
+      emit('failed', {message: 'USB initialization failed. Check that usbgadget is loaded and attached to a USB device controller.'}); return code || 1;
     }
     safeFailures++;
-    emit('log', {message: `${candidate} did not enumerate; no typing was detected.`});
+    if(noGadgetInitialization)initFailures++;
+    emit('log', {message: noGadgetInitialization
+      ? `${candidate} could not initialize its USB gadget; no typing was detected.`
+      : `${candidate} did not enumerate; no typing was detected.`});
   }
   if (stopping) {emit('cancelled', {message: 'Transfer stopped. Inspect the Switch for partial input.'}); return 130;}
-  emit('failed', {...(safeFailures===candidates.length?{retrySafe:true}:{}),message: 'No controller connected. The Mac must NOT be supplying charging power to the Switch. Unplug the USB-C cable from the Switch, wait about one second, then plug it back into the Switch and verify that power is directed toward the Mac. Software cannot force the power role. You can also choose a controller manually.'}); return 1;
+  emit('failed', {...(safeFailures===candidates.length?{retrySafe:true}:{}),message: initFailures===candidates.length
+    ? 'USB initialization failed on every controller. Check that usbgadget is loaded and attached to a USB device controller.'
+    : 'No controller connected. The Mac must NOT be supplying charging power to the Switch. Unplug the USB-C cable from the Switch, wait about one second, then plug it back into the Switch and verify that power is directed toward the Mac. Software cannot force the power role. You can also choose a controller manually.'}); return 1;
 }
 async function main(args = process.argv.slice(2)) {
+  let stageTimeoutMinutes = 10;
+  if (args[0] === 'host') ({args, stageTimeoutMinutes} = hostSettings(args));
+  if (args[0] === 'host' && args.length === 4 && args[2] === '--post-run-options' &&
+      args[3] === '--seedsow-save') {
+    if (!selectedProfile(root).supportsSaveKit)
+      throw Error('Seedsow save installation requires a SaveKit-capable host.');
+    return require('./gui-session.cjs').main({root, address: args[1], emit, lines,
+      verifiedResult, seedsowSave: true, savekitTools: true, stageTimeoutMinutes});
+  }
+  if (args[0] === 'host' && args.length === 4 && args[2] === '--post-run-options' &&
+      args[3] === '--savekit-tools') {
+    if (!selectedProfile(root).supportsSaveKit)
+      throw Error('SaveKit tools require a SaveKit-capable host.');
+    return require('./gui-session.cjs').main({root, address: args[1], emit, lines,
+      verifiedResult, savekitTools: true, stageTimeoutMinutes});
+  }
   if (args[0] === 'host' && args.length === 3 && args[2] === '--post-run-options') {
     if (!selectedProfile(root).supportsHeldRPC) throw Error('The selected host does not provide held RPC.');
-    return require('./gui-session.cjs').main({root, address: args[1], emit, lines, verifiedResult});
+    return require('./gui-session.cjs').main({root, address: args[1], emit, lines, verifiedResult, stageTimeoutMinutes});
   }
   if (args.length === 1 && args[0] === '--self-test') {
     const address = '192.0.2.1';
-    const value = 'V=START(' + [39380, ...address.split('.')].join(',') + ')';
+    const profile = profileById('BermTheSequel');
+    const value = 'V=START(' + [profile.startPort, ...address.split('.')].join(',') + ')';
     if (!validStart(value, address) || validStart(value, '192.0.2.2') ||
         validStart(value.slice(0, -1) + ',0,0,0,0)', address) ||
         verifiedResult({verified: true}) || !verifiedResult({verified: true,
@@ -399,13 +462,22 @@ async function main(args = process.argv.slice(2)) {
     return 0;
   }
   process.on('SIGINT', stop); process.on('SIGTERM', stop);
-  if (args[0] === 'host' && args.length === 2) return host(args[1]);
+  if (args[0] === 'host' && args.length === 2) return host(args[1], stageTimeoutMinutes);
   if (args[0] === 'hid' && args[1] === 'commands-only')
     return hid(args[1], args[2], commandsOnlySettings(args.slice(3),selectedProfile(root)));
+  if (args[0] === 'hid' && args[1] === 'kaihen-commands') {
+    const profile = profileById('kurumuz');
+    const settings = heldCommandsSettings(args.slice(3), profile);
+    if (!settings.startCommand) throw Error('kaiHEN requires its current five-argument START command.');
+    return hid('commands', args[2], settings, profile);
+  }
+  if (args[0] === 'hid' && args[1] === 'commands')
+    return hid(args[1], args[2], heldCommandsSettings(args.slice(3),selectedProfile(root)));
   if (args[0] === 'hid' && args.length >= 3) return hid(args[1], args[2], hidSettings(args.slice(3)));
-  throw Error('Usage: gui-host.cjs host IPv4 | hid bootstrap|commands|save-bootstrap auto|usb-drdN [delay-ms] | hid commands-only auto|usb-drdN [delay-ms] --commands CSV [--start-prefix|--start-command TEXT]');
+  throw Error('Usage: gui-host.cjs host IPv4 [--host-stage-timeout-minutes 1..60] | hid bootstrap|commands|save-bootstrap auto|usb-drdN [delay-ms] | hid commands-only auto|usb-drdN [delay-ms] --commands CSV [--start-prefix|--start-command TEXT]');
 }
-module.exports = {validStart, verifiedResult, hidSettings,commandsOnlySettings, lines, main, networkBindFailure, networkUnavailableMessage};
+module.exports = {validStart, verifiedResult, hidSettings,commandsOnlySettings,heldCommandsSettings, hostSettings,
+  lines, main, networkBindFailure, networkUnavailableMessage};
 if (require.main === module) main().then(code => {process.exitCode = code;}).catch(error => {
   signalGroup(current, 'SIGTERM'); emit('failed', {message: error.message}); process.exitCode = 1;
 });

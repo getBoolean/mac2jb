@@ -10,9 +10,11 @@ enum EmbeddedPayloadMetadata { static let sha256 = "unused-fixture" }
 
 @MainActor final class SetupFixture {
     let root: URL
+    let timingSuiteName = "mac2jb-test-timing-" + UUID().uuidString
     let model: SessionModel
 
-    init(edition: SmileBASICEdition, addressProvider: @escaping () -> [NetworkAddress] = { [] }) throws {
+    init(edition: SmileBASICEdition, host: HostProfile = .kurumuz,
+         addressProvider: @escaping () -> [NetworkAddress] = { [] }) throws {
         root = FileManager.default.temporaryDirectory.appendingPathComponent("mac2jb-setup-model-" + UUID().uuidString)
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: false,
                                                attributes: [.posixPermissions: 0o700])
@@ -101,10 +103,73 @@ enum EmbeddedPayloadMetadata { static let sha256 = "unused-fixture" }
                 : > held-choice-received
                 gate release-rpc-held
                 printf '{"type":"rpc-held","path":"%s/held-fixture","rpcCommand":"inert-fixture-rpc"}\n' "$PWD" ;;
-              *'"action":"launch-gpubrewlauncher"'*|*'"action":"launch-hblauncher"'*|*'"action":"launch-izlauncher"'*)
+              *'"action":"start-savekit"'*)
+                emit '{"type":"savekit-selected","message":"SaveKit is ready"}' ;;
+              *'"action":"finish-savekit"'*)
+                emit '{"type":"savekit-done","message":"RPC is ready for homebrew"}' ;;
+              *'"action":"install-seedsow-save"'*)
+                : > seedsow-install-received
+                gate release-seedsow-save-complete
+                mkdir -p held-fixture/seedsow-backups/demo-fixture
+                backup="$PWD/held-fixture/seedsow-backups/demo-fixture"
+                if [ -f skip-seedsow-install ]; then
+                  printf '{"type":"savekit-skipped","files":1,"backupPath":"%s","message":"Already installed"}\n' "$backup"
+                else
+                  printf '{"type":"savekit-complete","files":1,"backupPath":"%s"}\n' "$backup"
+                fi
+                emit '{"type":"savekit-ready","message":"RPC remains held"}' ;;
+              *'"action":"install-artemis-save"'*)
+                case "$control" in
+                  *'"game":"seedsow"'*) game=seedsow ;;
+                  *'"game":"nora"'*) game=nora ;;
+                  *'"game":"nora1"'*) game=nora1 ;;
+                  *'"game":"hamidashi"'*) game=hamidashi ;;
+                  *) emit '{"type":"action-rejected","action":"install-artemis-save"}'; continue ;;
+                esac
+                : > artemis-install-received
+                gate release-artemis-save-complete
+                if [ -f recoverable-artemis-install ]; then
+                  printf '{"type":"savekit-recoverable","game":"%s","message":"Pinned upstream download unavailable; RPC is still open"}\n' "$game"
+                  continue
+                fi
+                mkdir -p "held-fixture/artemis-backups/$game-fixture"
+                backup="$PWD/held-fixture/artemis-backups/$game-fixture"
+                printf '{"type":"savekit-complete","game":"%s","files":9,"backupPath":"%s"}\n' "$game" "$backup"
+                if [ -f fail-artemis-after-complete ]; then
+                  printf '{"type":"savekit-failed","game":"%s","backupPath":"%s","message":"Held RPC disconnected after save verification. Restart the console."}\n' "$game" "$backup"
+                  : > artemis-failure-received
+                  gate release-artemis-failure
+                  exit 1
+                fi
+                if [ -f pause-artemis-ready ]; then
+                  : > artemis-save-complete-observed
+                  gate release-artemis-ready
+                fi
+                printf '{"type":"savekit-ready","game":"%s","message":"RPC remains held"}\n' "$game" ;;
+              *'"action":"install-gravcirc-save"'*)
+                : > gravcirc-install-received
+                gate release-gravcirc-save-complete
+                mkdir -p held-fixture/gravcirc-backups/gravcirc-fixture
+                backup="$PWD/held-fixture/gravcirc-backups/gravcirc-fixture"
+                printf '{"type":"savekit-complete","game":"gravcirc","files":18,"backupPath":"%s"}\n' "$backup"
+                emit '{"type":"savekit-ready","game":"gravcirc","message":"RPC remains held"}' ;;
+              *'"action":"savekit-tool"'*)
+                case "$control" in
+                  *'"action":"titles"'*)
+                    emit '{"type":"savekit-tool-titles","titles":["010042d022aea000","0100b4b00f9f6000","01005eb012fe2000","0100aaaaaaaaaaaa"],"names":{"0100aaaaaaaaaaaa":"Fixture game"},"writable":["010042d022aea000"],"message":"4 titles found"}'
+                    emit '{"type":"savekit-tool-complete","action":"titles","message":"Title list ready"}' ;;
+                  *) emit '{"type":"savekit-tool-complete","action":"backup","message":"Save export verified"}' ;;
+                esac ;;
+              *'"action":"launch-mintbrew"'*)
                 emit '{"type":"homebrew-started"}'
                 gate release-gpu-running
                 emit '{"type":"homebrew-running","message":"Inert GPU launcher ready."}' ;;
+              *'"action":"dump-system-code"'*)
+                emit '{"type":"homebrew-stopped"}'
+                mkdir -p dump-fixture
+                printf '{"type":"dump-started","path":"%s/dump-fixture"}\n' "$PWD"
+                printf '{"type":"dump-complete","path":"%s/dump-fixture"}\n' "$PWD"
+                printf '{"type":"rpc-held","path":"%s/held-fixture","rpcCommand":"inert-fixture-rpc"}\n' "$PWD" ;;
               *'"action":"finish"'*)
                 emit '{"type":"homebrew-stopped"}'
                 emit '{"type":"rpc-finishing"}'
@@ -168,11 +233,8 @@ enum EmbeddedPayloadMetadata { static let sha256 = "unused-fixture" }
               printf '{"type":"command-complete","kind":"commands","step":%s,"completed":%s,"total":4,"label":"%s"}\n' "$step" "$step" "$label"
               if [ "$step" = 1 ]; then
                 gate release-load-confirmation
-                emit '{"type":"wait","kind":"commands","completed":1,"total":4,"label":"LOAD confirmation","remainingMs":1000}'
-              fi
-              if [ "$step" -lt 4 ]; then
-                gate "release-command-wait-$step"
-                printf '{"type":"wait","kind":"commands","completed":%s,"total":4,"label":"%s","remainingMs":1000}\n' "$step" "$label"
+                emit '{"type":"wait","kind":"commands","completed":1,"total":4,"label":"LOAD","remainingMs":1000}'
+                gate release-command-wait-1
               fi
             done
             gate release-command-transfer
@@ -233,7 +295,8 @@ enum EmbeddedPayloadMetadata { static let sha256 = "unused-fixture" }
         let executable = root.appendingPathComponent("node")
         try Data(worker.utf8).write(to: executable)
         try FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: executable.path)
-        model = SessionModel(addressProvider: addressProvider, runtime: BundledRuntime(root: root), edition: edition)
+        try Data("{\"id\":\"\(host.rawValue)\"}".utf8).write(to: root.appendingPathComponent("selected-host.json"))
+        model = SessionModel(addressProvider: addressProvider, runtime: BundledRuntime(root: root), edition: edition, timingDefaults: UserDefaults(suiteName: timingSuiteName)!, networkDefaults: UserDefaults(suiteName: timingSuiteName)!)
         model.phase = .ready; model.driverLoaded = true
     }
 
@@ -244,6 +307,7 @@ enum EmbeddedPayloadMetadata { static let sha256 = "unused-fixture" }
             .split(separator: "\n").compactMap { try? JSONSerialization.jsonObject(with: Data($0.utf8)) as? [String:Any] }
     }
     func dispose() {
+        UserDefaults(suiteName: timingSuiteName)?.removePersistentDomain(forName: timingSuiteName)
         if let log = model.diagnosticLogURL, log.deletingLastPathComponent() != root,
            log.deletingLastPathComponent().lastPathComponent.hasPrefix("mac2jb-gui-error-") {
             try? FileManager.default.removeItem(at: log.deletingLastPathComponent())
@@ -326,10 +390,12 @@ enum EmbeddedPayloadMetadata { static let sha256 = "unused-fixture" }
             let args = try String(contentsOf: save.root.appendingPathComponent("arguments"), encoding: .utf8)
                 .split(separator: "\n").last.map(String.init) ?? ""
             check(args.contains("hid save-bootstrap auto 10") && args.contains("--preferred-controller usb-drd3") &&
-                  args.contains("--load-wait-ms 1000") && args.contains("--run-wait-ms 1000") &&
-                  args.contains("--remove-wait-ms 1000") && args.contains("--demo") == (edition == .demo) &&
-                  !args.contains("--commands") && !args.contains("--start-command"),
-                  "\(edition) SAVE uses the frozen edition, 10 ms timing and proven USB controller only")
+                  args.contains("--load-wait-ms 1000") && args.contains("--run-wait-ms 0") &&
+                  args.contains("--remove-wait-ms 0") && args.contains("--load-confirm-wait-ms 0") &&
+                  args.contains("--demo") == (edition == .demo) &&
+                  !args.contains("--commands") && !args.contains("--start-command") &&
+                  !args.contains("--save-name") && !args.contains("--load-name") && !args.contains("--start-port"),
+                  "\(edition) SAVE uses the frozen edition, 10 ms timing and proven USB controller; host flags come from the adapter")
             save.model.typeBootstrapSave(directModeConfirmed: true)
             check(save.invocations == ["bootstrap", "save-bootstrap"] && addressReads == 0 && save.model.activeAddress.isEmpty,
                   "SAVE sends once and never discovers a host address or launches an ns2jb host")
@@ -355,7 +421,7 @@ enum EmbeddedPayloadMetadata { static let sha256 = "unused-fixture" }
         guarded.model.driverSetupRunning = true; rejectsSave("driver installation"); guarded.model.driverSetupRunning = false
         guarded.model.keyDelayMs = 0; rejectsSave("invalid key timing"); guarded.model.keyDelayMs = 10
         guarded.model.enumerationTimeoutSeconds = 0; rejectsSave("invalid enumeration timeout"); guarded.model.enumerationTimeoutSeconds = 4
-        guarded.model.loadConfirmWaitMs = -1; rejectsSave("invalid command timing"); guarded.model.loadConfirmWaitMs = 1000
+        guarded.model.loadWaitMs = -1; rejectsSave("invalid command timing"); guarded.model.loadWaitMs = 1000
         for phase in [SessionPhase.ready, .bootstrap, .savingBootstrap, .commands, .failed, .cancelled, .verified] {
             guarded.model.phase = phase; guarded.model.typeBootstrapSave(directModeConfirmed: true)
             check(!guarded.model.canTypeBootstrapSave && guarded.model.phase == phase && guarded.invocations.isEmpty,
@@ -435,7 +501,8 @@ enum EmbeddedPayloadMetadata { static let sha256 = "unused-fixture" }
         }
         let persisted = SessionModel(addressProvider: { [] })
         check(persisted.selectedEdition == .full && persisted.activeEdition == .full, "an old saved preference does not silently select the demo")
-        check(persisted.loadWaitMs == 1000 && persisted.runWaitMs == 1000 && persisted.removeWaitMs == 1000, "default inter-command waits are one second")
+        check(persisted.loadWaitMs == 1000 && persisted.runWaitMs == 0 && persisted.removeWaitMs == 0 && persisted.loadConfirmWaitMs == 0,
+              "only the post-confirmation LOAD wait defaults to one second")
         check(persisted.keyDelayMs == 10, "default keystroke delay is 10 ms")
         check(persisted.stremioQuality == .p720, "a new installation starts at 720p")
         for quality in StremioQuality.allCases {
@@ -588,7 +655,7 @@ enum EmbeddedPayloadMetadata { static let sha256 = "unused-fixture" }
         try await until("commands-only sender exit") { !commands.model.hasLiveWorkers }
         check(commands.model.phase == .commandsSent && commands.model.canReturnToStart && !commands.model.isBusy && commands.model.canStartKeyboard,
               "ordinary subset completion permits an explicit manual keyboard continuation but never auto-connects")
-        check(commands.model.status == "Commands sent. Check your Switch." &&
+        check(commands.model.status == "Commands sent — check your Switch" &&
               commands.model.detail.contains("No ns2jb host was started") && commands.model.detail.contains("not been verified"),
               "the terminal result explicitly distinguishes delivery from host verification")
         check(commands.model.workflowProgress.state(for: 2) == .pending && commands.invocations == ["commands-only"],
@@ -600,8 +667,10 @@ enum EmbeddedPayloadMetadata { static let sha256 = "unused-fixture" }
         withExtendedLifetime(subsetStatusObservation) {}
         let arguments = try String(contentsOf: commands.root.appendingPathComponent("arguments"), encoding: .utf8)
         check(arguments.contains("hid commands-only auto 10") && arguments.contains("--commands load,remove") &&
-              arguments.contains("--load-confirm-wait-ms 1000") && !arguments.contains("--start-command") && !arguments.contains("192.0.2"),
-              "only the frozen CSV and timings reach the adapter; no START or local IP is synthesized")
+              arguments.contains("--load-confirm-wait-ms 0") && arguments.contains("--load-wait-ms 1000") &&
+              !arguments.contains("--start-command") && !arguments.contains("192.0.2") &&
+              !arguments.contains("--save-name") && !arguments.contains("--load-name") && !arguments.contains("--start-port"),
+              "only the frozen CSV, edition and timings reach the adapter; host names and port come from its selected profile")
         commands.model.returnToStart()
         check(commands.model.phase == .ready, "commands-only can return to the normal start screen after drain")
 
@@ -704,45 +773,58 @@ enum EmbeddedPayloadMetadata { static let sha256 = "unused-fixture" }
                   "\(failure) cannot trigger a keyboard handoff or retry")
         }
 
-        for (launcher, action) in [("GPUBrewLauncher", "launch-gpubrewlauncher"), ("HBLauncher", "launch-hblauncher"), ("IZlauncher", "launch-izlauncher")] {
         let gpu = try SetupFixture(edition: .full, addressProvider: { [address] })
         defer { gpu.dispose() }
-        let launch = { if action == "launch-hblauncher" { gpu.model.launchHBLauncher() } else if action == "launch-izlauncher" { gpu.model.launchIZlauncher() } else { gpu.model.launchGPUBrewLauncher() } }
+        let addonURLs = ["https://example.invalid/manifest.json"]
+        let libraryItems: [[String: Any]] = [["id": "fixture-library"]]
         gpu.model.addresses = [address]; gpu.model.selectedAddress = address.address
         try gpu.put("pre-events-host", "{\"type\":\"typing\",\"kind\":\"bootstrap\",\"controller\":\"usb-drd3\"}\n{\"type\":\"typing\",\"kind\":\"bootstrap\",\"controller\":\"usb-drd3\"}\n")
-        launch()
+        gpu.model.launchMintBrew(accountAddons: addonURLs, libraryItems: libraryItems)
         check(!gpu.model.postRun.homebrewAttempted && !gpu.model.hasLiveWorkers,
-              "the GPU launcher cannot create a host or consume an attempt from the start screen")
+              "MintBrew cannot create a host or consume an attempt from the start screen")
         gpu.model.start()
         try await until("held choice received by inert host") { FileManager.default.fileExists(atPath: gpu.root.appendingPathComponent("held-choice-received").path) }
-        launch()
         check(!gpu.model.postRun.homebrewAttempted && !gpu.model.postRun.heldConfirmed,
-              "optimistic held choice without positive rpc-held proof cannot launch GPU homebrew")
+              "the held choice cannot launch MintBrew without positive rpc-held proof")
         check(gpu.model.lastSuccessfulController == nil, "host events never teach the USB controller preference")
         try gpu.put("release-rpc-held")
-        try await until("actual model positive held proof") { gpu.model.canLaunchHomebrew }
-        launch()
-        check(gpu.model.homebrewTitle == launcher && gpu.model.postRun.homebrewAttempted && gpu.model.phase == .launchingHomebrew,
-              "GPU launcher gets its own test identity and consumes the shared single app attempt")
-        gpu.model.launchGPUBrewLauncher(); gpu.model.launchHBLauncher(); gpu.model.launchIZlauncher(); gpu.model.launchStremio(); gpu.model.checkRPCStatus(); gpu.model.startKeyboardForwarding()
+        try await until("held RPC choice") { gpu.model.phase == .rpcHeld && gpu.model.canLaunchHomebrew }
+        check(!gpu.model.postRun.homebrewAttempted, "held RPC leaves the app choice to the user")
+        gpu.model.launchMintBrew(accountAddons: addonURLs, libraryItems: libraryItems)
+        try await until("chosen MintBrew launch") {
+            gpu.model.postRun.homebrewAttempted && gpu.model.phase == .launchingHomebrew
+        }
+        check(gpu.model.homebrewTitle == "MintBrew" && !gpu.model.canLaunchHomebrew &&
+              gpu.model.detail.contains("safely disconnect") && gpu.model.detail.contains("same network") &&
+              gpu.model.detail.contains("SmileBASIC and mac2jb open"),
+              "the selected MintBrew path shows post-RPC USB guidance")
+        gpu.model.launchMintBrew(); gpu.model.checkRPCStatus(); gpu.model.startKeyboardForwarding()
         check(!gpu.model.postRun.canFinish && !gpu.model.canLaunchHomebrew && !gpu.model.canStartKeyboard,
-              "GPU startup blocks other apps, status, keyboard and premature Finish")
+              "MintBrew startup blocks other apps, status, keyboard and premature Finish")
         try gpu.put("release-gpu-running")
-        try await until("GPU launcher running") { gpu.model.phase == .homebrewRunning }
-        check(gpu.model.postRun.canFinish && gpu.model.postRun.homebrewStage == .running,
-              "a running GPU launcher keeps the existing Finish control")
+        try await until("MintBrew running", diagnostic: { " phase=\(gpu.model.phase) status=\(gpu.model.status) detail=\(gpu.model.detail) log=\(gpu.model.log.suffix(500))" }) { gpu.model.phase == .homebrewRunning }
+        check(gpu.model.postRun.canFinish && gpu.model.postRun.homebrewStage == .running && gpu.model.canDumpSystemCode,
+              "a running MintBrew exposes the existing Finish control and an in-session system-code dump")
+        gpu.model.dumpSystemCode()
+        try await until("MintBrew held-session system-code dump") {
+            gpu.model.postRun.dumpCompleted && gpu.model.postRun.stage == .held
+        }
+        check(gpu.model.dumpFolder != nil && !gpu.model.canDumpSystemCode,
+              "the held-session dump exposes its folder and cannot repeat in this session")
         gpu.model.finishPostRun()
-        try await until("GPU launcher original-session final cleanup") { gpu.model.phase == .verified && !gpu.model.hasLiveWorkers }
+        try await until("MintBrew original-session final cleanup") { gpu.model.phase == .verified && !gpu.model.hasLiveWorkers }
         let controls = try String(contentsOf: gpu.root.appendingPathComponent("controls"), encoding: .utf8)
             .split(separator: "\n").map { try JSONSerialization.jsonObject(with: Data($0.utf8)) as! [String:Any] }
-        check(controls.compactMap { $0["action"] as? String } == ["post-run", action, "finish"] && gpu.invocations == ["host"],
-              "GPU launch uses one control on its existing host and never starts a second exploit or retries")
-        if action == "launch-izlauncher" {
-            check(controls[1].count == 1, "IZlauncher attaches to the current session without overriding its host or edition")
-        }
-        }
+        check(controls.compactMap { $0["action"] as? String } ==
+              ["post-run", "launch-mintbrew", "dump-system-code", "finish"] &&
+              gpu.invocations == ["host"],
+              "chosen MintBrew and its dump use the same original held host")
+        let launchControl = controls.first { $0["action"] as? String == "launch-mintbrew" }
+        check((launchControl?["addonUrls"] as? [String]) == addonURLs &&
+              (launchControl?["libraryItems"] as? [[String: String]])?.first?["id"] == "fixture-library",
+              "chosen MintBrew receives the current Stremio account configuration")
 
-        for (keepRPC, launcher) in [(false, "gpu"), (true, "gpu"), (true, "hb"), (true, "iz")] {
+        for keepRPC in [false, true] {
             let host = try SetupFixture(edition: .full, addressProvider: { [address] })
             defer { host.dispose() }
             host.model.addresses = [address]; host.model.selectedAddress = address.address
@@ -767,16 +849,18 @@ enum EmbeddedPayloadMetadata { static let sha256 = "unused-fixture" }
                   "host-ready exposes only the captured pairing command and never launches HID")
             check(host.model.activeSessionSupportsHomebrew == keepRPC && !host.model.canLaunchHomebrew && !host.model.postRun.heldConfirmed,
                   "host readiness alone never grants homebrew or held proof")
-            host.model.start(); host.model.launchGPUBrewLauncher(); host.model.launchHBLauncher(); host.model.launchIZlauncher()
+            host.model.start(); host.model.launchMintBrew()
             try host.put("release-console-result")
             if keepRPC {
                 try await until("manual host held choice") { FileManager.default.fileExists(atPath: host.root.appendingPathComponent("held-choice-received").path) }
                 check(!host.model.canLaunchHomebrew, "post-run choice alone is not positive retained-endpoint proof")
                 try host.put("release-rpc-held")
                 try await until("host-only positive held proof") { host.model.canLaunchHomebrew }
-                if launcher == "hb" { host.model.launchHBLauncher() } else if launcher == "iz" { host.model.launchIZlauncher() } else { host.model.launchGPUBrewLauncher() }
-                check(host.model.homebrewTitle == (launcher == "hb" ? "HBLauncher" : launcher == "iz" ? "IZlauncher" : "GPUBrewLauncher"),
-                      "host-only launches the selected independent launcher")
+                check(host.model.phase == .rpcHeld && !host.model.postRun.homebrewAttempted,
+                      "host-only held RPC keeps app selection manual")
+                host.model.launchMintBrew()
+                check(host.model.homebrewTitle == "MintBrew",
+                      "host-only launches the selected homebrew")
                 try host.put("release-gpu-running")
                 try await until("homebrew on manually connected host") { host.model.phase == .homebrewRunning }
                 host.model.finishPostRun()
@@ -789,27 +873,423 @@ enum EmbeddedPayloadMetadata { static let sha256 = "unused-fixture" }
                   "host-only sends only the address and optional held flag, never invalid USB timings")
         }
 
-        let demoIZ = try SetupFixture(edition: .demo, addressProvider: { [address] })
-        defer { demoIZ.dispose() }
-        demoIZ.model.addresses = [address]; demoIZ.model.selectedAddress = address.address
-        demoIZ.model.start()
-        try await until("demo held choice") { FileManager.default.fileExists(atPath: demoIZ.root.appendingPathComponent("held-choice-received").path) }
-        try demoIZ.put("release-rpc-held")
-        try await until("demo held proof") { demoIZ.model.canLaunchHomebrew }
-        check(demoIZ.model.activeEdition == .demo && demoIZ.model.activeHost == .bermTheSequel && demoIZ.model.canLaunchIZlauncher,
-              "the Berm host's verified demo session permits IZlauncher")
-        demoIZ.model.launchIZlauncher()
-        check(demoIZ.model.postRun.homebrewAttempted && demoIZ.model.phase == .launchingHomebrew &&
-              demoIZ.model.homebrewTitle == "IZlauncher",
-              "demo IZlauncher consumes the same held session's sole app attempt")
-        try demoIZ.put("release-gpu-running")
-        try await until("demo IZlauncher running") { demoIZ.model.phase == .homebrewRunning }
-        demoIZ.model.finishPostRun()
-        try await until("demo IZlauncher session finishes") { demoIZ.model.phase == .verified && !demoIZ.model.hasLiveWorkers }
-        let demoControls = try String(contentsOf: demoIZ.root.appendingPathComponent("controls"), encoding: .utf8)
+        let manualSave = try SetupFixture(edition: .demo, addressProvider: { [address] })
+        defer { manualSave.dispose() }
+        manualSave.model.addresses = [address]; manualSave.model.selectedAddress = address.address
+        manualSave.model.driverLoaded = false
+        try manualSave.put("manual-host-fixture")
+        try manualSave.put("manual-host-held")
+        try manualSave.put("manual-host-ready", "{\"type\":\"host-ready\",\"startCommand\":\"V=START(39380,192,0,2,42)\"}\n")
+        manualSave.model.startHostOnly(keepRPC: true)
+        try manualSave.put("release-host-ready")
+        try await until("manual SaveKit host waits for commands") { manualSave.model.phase == .waitingForConsole }
+        try manualSave.put("release-console-result")
+        try await until("manual SaveKit host offers held choice") {
+            FileManager.default.fileExists(atPath: manualSave.root.appendingPathComponent("held-choice-received").path)
+        }
+        try manualSave.put("release-rpc-held")
+        try await until("manual SaveKit host holds RPC") {
+            manualSave.model.phase == .rpcHeld && manualSave.model.canStartSaveKit &&
+            manualSave.model.canInstallSeedsowSave
+        }
+        manualSave.model.installSeedsowSave()
+        try await until("manual SaveKit install accepted") {
+            FileManager.default.fileExists(atPath: manualSave.root.appendingPathComponent("seedsow-install-received").path)
+        }
+        try manualSave.put("release-seedsow-save-complete")
+        try await until("manual SaveKit install returns to homebrew") {
+            manualSave.model.phase == .rpcHeld && manualSave.model.seedsowInstallCompleted &&
+            manualSave.model.canLaunchHomebrew && manualSave.model.canUseSaveKitTools
+        }
+        manualSave.model.launchMintBrew()
+        try manualSave.put("release-gpu-running")
+        try await until("manual SaveKit MintBrew runs") { manualSave.model.phase == .homebrewRunning }
+        manualSave.model.finishPostRun()
+        try await until("manual SaveKit cleanup") {
+            manualSave.model.phase == .verified && !manualSave.model.hasLiveWorkers
+        }
+
+        let assistedHost = try SetupFixture(edition: .full, addressProvider: { [address] })
+        defer { assistedHost.dispose() }
+        assistedHost.model.addresses = [address]; assistedHost.model.selectedAddress = address.address
+        try assistedHost.put("manual-host-fixture")
+        try assistedHost.put("manual-host-ready", "{\"type\":\"host-ready\",\"startCommand\":\"V=START(39380,192,0,2,42)\"}\n")
+        assistedHost.model.startHostOnly(keepRPC: false)
+        try assistedHost.put("release-host-ready")
+        try await until("host-only sender becomes available") { assistedHost.model.canSendHostOnlyCommands }
+        check(assistedHost.model.canStartKeyboard && assistedHost.model.hostStartCommand == "V=START(39380,192,0,2,42)" &&
+              assistedHost.invocations == ["host"],
+              "host-only offers live keyboard and the exact current pairing command without starting HID")
+        assistedHost.model.sendHostOnlyCommands()
+        check(assistedHost.model.phase == .commands && !assistedHost.model.canSendHostOnlyCommands,
+              "explicit host-only button starts the existing four-command HID sender alongside the host")
+        try await until("host-only command worker starts") { assistedHost.invocations == ["host", "commands"] }
+        try assistedHost.put("release-commands")
+        for step in 1...4 {
+            try assistedHost.put("release-command-start-\(step)")
+            try assistedHost.put("release-command-complete-\(step)")
+        }
+        try assistedHost.put("release-load-confirmation")
+        try assistedHost.put("release-command-wait-1")
+        try assistedHost.put("release-command-transfer")
+        try await until("host-only command sender finishes", diagnostic: {
+            " phase=\(assistedHost.model.phase) status=\(assistedHost.model.status) detail=\(assistedHost.model.detail) invocations=\(assistedHost.invocations) log=\(assistedHost.model.log.suffix(400))"
+        }) {
+            assistedHost.model.phase == .waitingForConsole && assistedHost.invocations == ["host", "commands"]
+        }
+        check(!assistedHost.model.canSendHostOnlyCommands && !assistedHost.model.canStartKeyboard,
+              "completed host-only command transfer cannot be sent twice or overlap live keyboard")
+        try assistedHost.put("release-console-result")
+        try await until("assisted host-only verification") { assistedHost.model.phase == .verified && !assistedHost.model.hasLiveWorkers }
+        let assistedArguments = try String(contentsOf: assistedHost.root.appendingPathComponent("arguments"), encoding: .utf8)
+        check(assistedArguments.contains("hid commands auto 10") && !assistedArguments.contains("--start-prefix") &&
+              assistedArguments.contains("--start-command V=START(39380,192,0,2,42)"),
+              "host-only button uses the host's published pairing instead of inventing a START address")
+
+        let keyboardHost = try SetupFixture(edition: .full, addressProvider: { [address] })
+        defer { keyboardHost.dispose() }
+        keyboardHost.model.addresses = [address]; keyboardHost.model.selectedAddress = address.address
+        try keyboardHost.put("manual-host-fixture")
+        try keyboardHost.put("host-stage-fixture")
+        try keyboardHost.put("manual-host-ready", "{\"type\":\"host-ready\",\"startCommand\":\"V=START(39380,192,0,2,42)\"}\n")
+        keyboardHost.model.startHostOnly(keepRPC: false)
+        try keyboardHost.put("release-host-ready")
+        try await until("host-only live keyboard can connect") { keyboardHost.model.canStartKeyboard }
+        keyboardHost.model.startKeyboardForwarding()
+        check(keyboardHost.model.phase == .waitingForConsole && keyboardHost.model.hasLiveWorkers &&
+              !keyboardHost.model.canSendHostOnlyCommands,
+              "live keyboard preserves the waiting host and prevents a second automatic command sequence")
+        try keyboardHost.put("release-live")
+        try await until("host-only live keyboard is active") { keyboardHost.model.keyboardActive }
+        check(keyboardHost.model.phase == .waitingForConsole && keyboardHost.invocations == ["host", "live"],
+              "live keyboard is usable while the original host keeps listening")
+        try keyboardHost.put("release-host-connected")
+        try await until("host connection releases only live keyboard") {
+            keyboardHost.model.hostIsExploiting && !keyboardHost.model.keyboardActive &&
+            keyboardHost.model.phase == .waitingForConsole
+        }
+        check(keyboardHost.model.hasLiveWorkers && keyboardHost.model.error == nil,
+              "host connection keeps its worker while the keyboard releases")
+        try keyboardHost.put("release-host-waiting")
+        try keyboardHost.put("release-host-pipeline")
+        try keyboardHost.put("release-console-result")
+        try await until("host verifies after live keyboard release") {
+            keyboardHost.model.phase == .verified && !keyboardHost.model.hasLiveWorkers
+        }
+
+        let demo = try SetupFixture(edition: .demo, addressProvider: { [address] })
+        defer { demo.dispose() }
+        demo.model.addresses = [address]; demo.model.selectedAddress = address.address
+        demo.model.start()
+        try await until("demo held choice") { FileManager.default.fileExists(atPath: demo.root.appendingPathComponent("held-choice-received").path) }
+        try demo.put("release-rpc-held")
+        try await until("demo held RPC choice") { demo.model.phase == .rpcHeld && demo.model.canLaunchHomebrew }
+        demo.model.launchMintBrew()
+        try await until("demo MintBrew launch") { demo.model.postRun.homebrewAttempted }
+        check(demo.model.activeEdition == .demo && demo.model.activeHost == .kurumuz &&
+              demo.model.homebrewTitle == "MintBrew" && demo.model.phase == .launchingHomebrew,
+              "the verified kurumuz demo flow launches the selected MintBrew option")
+        try demo.put("release-gpu-running")
+        try await until("demo MintBrew running", diagnostic: { " phase=\(demo.model.phase) status=\(demo.model.status) detail=\(demo.model.detail) log=\(demo.model.log.suffix(500))" }) { demo.model.phase == .homebrewRunning }
+        demo.model.finishPostRun()
+        try await until("demo MintBrew session finishes") { demo.model.phase == .verified && !demo.model.hasLiveWorkers }
+        let demoControls = try String(contentsOf: demo.root.appendingPathComponent("controls"), encoding: .utf8)
             .split(separator: "\n").map { try JSONSerialization.jsonObject(with: Data($0.utf8)) as! [String:Any] }
-        check(demoControls.compactMap { $0["action"] as? String } == ["post-run", "launch-izlauncher", "finish"] && demoIZ.invocations == ["host"],
-              "demo IZlauncher reuses the original Berm host without another bootstrap or edition override")
+        check(demoControls.compactMap { $0["action"] as? String } ==
+              ["post-run", "launch-mintbrew", "finish"] && demo.invocations == ["host"],
+              "chosen demo MintBrew reuses the original kurumuz host")
+
+        for savekitHost in [HostProfile.kurumuz, .cellenseres, .astral] {
+        let savekitChoice = try SetupFixture(edition: .demo, host: savekitHost, addressProvider: { [address] })
+        defer { savekitChoice.dispose() }
+        savekitChoice.model.addresses = [address]; savekitChoice.model.selectedAddress = address.address
+        check(savekitChoice.model.selectedHost == savekitHost && savekitHost.supportsSaveKit && savekitHost.supportsNativeHBLauncher,
+              "\(savekitHost.rawValue) exposes SaveKit and native HBLauncher controls")
+        savekitChoice.model.selectRunMode(.seedsowSave)
+        savekitChoice.model.start()
+        try await until("SaveKit post-run choice") {
+            FileManager.default.fileExists(atPath: savekitChoice.root.appendingPathComponent("held-choice-received").path)
+        }
+        try savekitChoice.put("release-rpc-held")
+        try await until("SaveKit held RPC") {
+            savekitChoice.model.phase == .rpcHeld && savekitChoice.model.canStartSaveKit
+        }
+        check(savekitChoice.model.canLaunchModloader == savekitHost.supportsModloader,
+              "\(savekitHost.rawValue) held RPC follows the Modloader host capability")
+        savekitChoice.model.startSaveKit()
+        try await until("SaveKit selected") {
+            savekitChoice.model.savekitChoiceStarted && savekitChoice.model.canUseSaveKitTools
+        }
+        check(!savekitChoice.model.canLaunchHomebrew && !savekitChoice.model.canInstallSeedsowSave,
+              "SaveKit choice keeps other post-RPC paths unavailable")
+        savekitChoice.model.runSaveKitTool(["action": "titles"])
+        try await until("SaveKit title list") {
+            savekitChoice.model.savekitTitles.count == 4 && !savekitChoice.model.savekitBusy
+        }
+        check(!savekitChoice.model.savekitTitles.contains("010012900d38a000") &&
+              savekitChoice.model.savekitTitles.contains("0100aaaaaaaaaaaa") &&
+              savekitChoice.model.savekitTitleNames["0100aaaaaaaaaaaa"] == "Fixture game",
+              "SaveKit preserves every title and its name")
+        check(savekitChoice.model.canOpenAnotherSave,
+              "a manual title ID remains available when a save title is absent from the installed list")
+        if savekitHost == .kurumuz {
+            savekitChoice.model.runSaveKitTool(["action": "write", "titleId": "010042d022aea000",
+                                                 "uid": String(repeating: "a", count: 32),
+                                                 "sourceFolder": savekitChoice.root.path, "allowReplace": true])
+            try await until("regular jailbreak SaveKit write finishes") {
+                !savekitChoice.model.savekitBusy && savekitChoice.model.savekitSaveOperationUsed
+            }
+            check(savekitChoice.model.canOpenAnotherSave,
+                  "a verified SaveKit write keeps another save action available")
+            let controlsBeforeRetry = try String(contentsOf: savekitChoice.root.appendingPathComponent("controls"), encoding: .utf8)
+            check(controlsBeforeRetry.contains("\"action\":\"write\""),
+                  "regular jailbreak sends the selected SaveKit write request to the held host")
+            savekitChoice.model.runSaveKitTool(["action": "backup", "titleId": "010042d022aea000",
+                                                 "uid": String(repeating: "a", count: 32)])
+            try await until("second SaveKit action finishes") { !savekitChoice.model.savekitBusy }
+            let controlsAfterRetry = try String(contentsOf: savekitChoice.root.appendingPathComponent("controls"), encoding: .utf8)
+            check(controlsAfterRetry != controlsBeforeRetry && controlsAfterRetry.contains("\"action\":\"backup\""),
+                  "a completed SaveKit write permits another save action in the same held session")
+        } else {
+            savekitChoice.model.runSaveKitTool(["action": "backup", "titleId": "010012900d38a000",
+                                                 "uid": String(repeating: "a", count: 32), "all": true])
+            try await until("save export without installed title") { !savekitChoice.model.savekitBusy }
+            check(savekitChoice.model.savekitSaveOperationUsed,
+                  "a manual save export does not depend on installed title discovery")
+        }
+        check(savekitChoice.model.canFinishSaveKit && !savekitChoice.model.canLaunchHomebrew,
+              "completed SaveKit export can return to homebrew after checking held RPC")
+        savekitChoice.model.finishSaveKit()
+        try await until("SaveKit returns to homebrew") {
+            savekitChoice.model.savekitChoiceFinished && savekitChoice.model.canLaunchHomebrew &&
+            !savekitChoice.model.canUseSaveKitTools
+        }
+        savekitChoice.model.launchMintBrew()
+        try savekitChoice.put("release-gpu-running")
+        try await until("MintBrew starts after SaveKit") { savekitChoice.model.phase == .homebrewRunning }
+        savekitChoice.model.finishPostRun()
+        try await until("SaveKit choice cleanup") {
+            savekitChoice.model.phase == .verified && !savekitChoice.model.hasLiveWorkers
+        }
+        }
+
+        for skipped in [false, true] {
+            let seedsow = try SetupFixture(edition: .demo, addressProvider: { [address] })
+            defer { seedsow.dispose() }
+            seedsow.model.addresses = [address]; seedsow.model.selectedAddress = address.address
+            if skipped { try seedsow.put("skip-seedsow-install") }
+            seedsow.model.selectRunMode(.seedsowSave)
+            seedsow.model.start()
+            try await until("Seedsow post-run choice") {
+                FileManager.default.fileExists(atPath: seedsow.root.appendingPathComponent("held-choice-received").path)
+            }
+            try seedsow.put("release-rpc-held")
+            try await until("Seedsow held RPC") {
+                seedsow.model.phase == .rpcHeld && seedsow.model.canInstallSeedsowSave
+            }
+            seedsow.model.installSeedsowSave()
+            try await until("Seedsow install accepted") {
+                FileManager.default.fileExists(atPath: seedsow.root.appendingPathComponent("seedsow-install-received").path)
+            }
+            check(seedsow.model.phase == .installingSave && !seedsow.model.canLaunchHomebrew,
+                  "homebrew stays unavailable during the Seedsow \(skipped ? "skip" : "write")")
+            try seedsow.put("release-seedsow-save-complete")
+            try await until("Seedsow save finishes with held RPC") {
+                seedsow.model.phase == .rpcHeld && seedsow.model.seedsowInstallCompleted &&
+                seedsow.model.canLaunchHomebrew && seedsow.model.canUseSaveKitTools
+            }
+            check(seedsow.model.seedsowInstallSkipped == skipped,
+                  "Seedsow \(skipped ? "skip" : "write") preserves its completion state")
+            if skipped {
+                seedsow.model.runSaveKitTool(["action": "backup", "titleId": "0100aaaaaaaaaaaa",
+                                               "uid": String(repeating: "a", count: 32), "all": true])
+                try await until("post-Seedsow backup finishes") { !seedsow.model.savekitBusy }
+                check(seedsow.model.savekitSaveOperationUsed && !seedsow.model.canLaunchHomebrew,
+                      "a separate save export needs Done to verify held RPC before homebrew")
+                seedsow.model.finishSaveKit()
+                try await until("post-Seedsow SaveKit returns to homebrew") {
+                    seedsow.model.savekitChoiceFinished && seedsow.model.canLaunchHomebrew
+                }
+                seedsow.model.launchMintBrew()
+                try seedsow.put("release-gpu-running")
+                try await until("MintBrew runs after post-Seedsow SaveKit") {
+                    seedsow.model.phase == .homebrewRunning
+                }
+            } else {
+                seedsow.model.launchMintBrew()
+                try await until("MintBrew launches after Seedsow write") {
+                    seedsow.model.postRun.homebrewAttempted
+                }
+                check(!seedsow.model.canLaunchHomebrew && !seedsow.model.canUseSaveKitTools,
+                      "MintBrew owns the held session after Seedsow completes")
+                try seedsow.put("release-gpu-running")
+                try await until("MintBrew runs after Seedsow write") { seedsow.model.phase == .homebrewRunning }
+            }
+            seedsow.model.finishPostRun()
+            try await until("Seedsow session cleanup") {
+                seedsow.model.phase == .verified && !seedsow.model.hasLiveWorkers
+            }
+        }
+
+        for game in [ArtemisSaveGame.seedsow, .nora, .nora1, .hamidashi] {
+            check(game.launcher == (game == .seedsow ? "seedsowhax" :
+                                     game == .nora ? "nora2hax" :
+                                     game == .nora1 ? "norahax" : "hamihax"),
+                  "Artemis save names use their lowercase display form")
+            let artemis = try SetupFixture(edition: .demo, addressProvider: { [address] })
+            defer { artemis.dispose() }
+            artemis.model.addresses = [address]; artemis.model.selectedAddress = address.address
+            if game == .nora { try artemis.put("pause-artemis-ready") }
+            artemis.model.selectRunMode(.seedsowSave)
+            artemis.model.start()
+            try await until("Artemis post-run choice") {
+                FileManager.default.fileExists(atPath: artemis.root.appendingPathComponent("held-choice-received").path)
+            }
+            try artemis.put("release-rpc-held")
+            try await until("Artemis held RPC") {
+                artemis.model.phase == .rpcHeld && artemis.model.canInstallSeedsowSave
+            }
+            artemis.model.installArtemisSave(game: game)
+            try await until("Artemis install accepted") {
+                FileManager.default.fileExists(atPath: artemis.root.appendingPathComponent("artemis-install-received").path)
+            }
+            check(artemis.model.activeSaveGame == game && artemis.model.phase == .installingSave &&
+                  !artemis.model.canLaunchHomebrew,
+                  "\(game.launcher) selection keeps the session reserved for its save write")
+            try artemis.put("release-artemis-save-complete")
+            if game == .nora {
+                try await until("Nora save files verified before ready") {
+                    artemis.model.seedsowInstallCompleted &&
+                    FileManager.default.fileExists(atPath: artemis.root.appendingPathComponent("artemis-save-complete-observed").path)
+                }
+                check(artemis.model.phase == .installingSave && !artemis.model.canLaunchHomebrew,
+                      "verified save files alone do not unlock homebrew before the ready event")
+                try artemis.put("release-artemis-ready")
+            }
+            try await until("Artemis save finishes with held RPC") {
+                artemis.model.phase == .rpcHeld && artemis.model.seedsowInstallCompleted &&
+                artemis.model.canLaunchHomebrew
+            }
+            check(artemis.model.seedsowBackupFolder?.path.contains("/artemis-backups/\(game.rawValue)-") == true &&
+                  artemis.model.status.contains(game.launcher),
+                  "\(game.launcher) verifies the game-specific original-save backup")
+            let nextGame: ArtemisSaveGame = game == .seedsow ? .nora : .seedsow
+            artemis.model.installArtemisSave(game: nextGame)
+            check(artemis.model.phase == .installingSave && !artemis.model.seedsowInstallCompleted &&
+                  artemis.model.seedsowBackupFolder == nil && !artemis.model.canLaunchHomebrew,
+                  "another save write clears the previous result and blocks homebrew again")
+            try await until("second Artemis save finishes with held RPC") {
+                artemis.model.phase == .rpcHeld && artemis.model.seedsowInstallCompleted &&
+                artemis.model.canLaunchHomebrew
+            }
+            check(artemis.model.activeSaveGame == nextGame &&
+                  artemis.model.seedsowBackupFolder?.path.contains("/artemis-backups/\(nextGame.rawValue)-") == true,
+                  "the same held session can install a different Artemis save")
+            artemis.model.launchMintBrew()
+            try await until("MintBrew launch sent after \(game.launcher) write") {
+                artemis.model.postRun.homebrewAttempted
+            }
+            try artemis.put("release-gpu-running")
+            try await until("MintBrew runs after \(game.launcher) write") {
+                artemis.model.phase == .homebrewRunning
+            }
+            artemis.model.finishPostRun()
+            try await until("Artemis session cleanup") {
+                artemis.model.phase == .verified && !artemis.model.hasLiveWorkers
+            }
+        }
+
+        let gravcirc = try SetupFixture(edition: .demo, addressProvider: { [address] })
+        defer { gravcirc.dispose() }
+        gravcirc.model.addresses = [address]
+        gravcirc.model.selectedAddress = address.address
+        gravcirc.model.selectRunMode(.seedsowSave)
+        gravcirc.model.start()
+        try await until("Gravity Circuit post-run choice") {
+            FileManager.default.fileExists(atPath: gravcirc.root.appendingPathComponent("held-choice-received").path)
+        }
+        try gravcirc.put("release-rpc-held")
+        try await until("Gravity Circuit held RPC") {
+            gravcirc.model.phase == .rpcHeld && gravcirc.model.canInstallGravCircSave
+        }
+        gravcirc.model.installGravCircSave()
+        try await until("Gravity Circuit install accepted") {
+            FileManager.default.fileExists(atPath: gravcirc.root.appendingPathComponent("gravcirc-install-received").path)
+        }
+        check(gravcirc.model.activeSaveGame == .gravcirc && gravcirc.model.phase == .installingSave &&
+              !gravcirc.model.canLaunchHomebrew,
+              "Gravity Circuit write reserves the held session")
+        try gravcirc.put("release-gravcirc-save-complete")
+        try await until("Gravity Circuit save returns to choices") {
+            gravcirc.model.phase == .rpcHeld && gravcirc.model.seedsowInstallCompleted &&
+            gravcirc.model.canLaunchHomebrew
+        }
+        check(gravcirc.model.seedsowBackupFolder?.path.contains("/gravcirc-backups/gravcirc-") == true,
+              "Gravity Circuit keeps its verified backup")
+        gravcirc.model.finishPostRun()
+        try await until("Gravity Circuit session cleanup") {
+            gravcirc.model.phase == .verified && !gravcirc.model.hasLiveWorkers
+        }
+
+        let artemisDisconnect = try SetupFixture(edition: .demo, addressProvider: { [address] })
+        defer { artemisDisconnect.dispose() }
+        artemisDisconnect.model.addresses = [address]
+        artemisDisconnect.model.selectedAddress = address.address
+        try artemisDisconnect.put("fail-artemis-after-complete")
+        artemisDisconnect.model.selectRunMode(.seedsowSave)
+        artemisDisconnect.model.start()
+        try await until("disconnected Artemis host choice") {
+            FileManager.default.fileExists(atPath: artemisDisconnect.root.appendingPathComponent("held-choice-received").path)
+        }
+        try artemisDisconnect.put("release-rpc-held")
+        try await until("disconnected Artemis held RPC") {
+            artemisDisconnect.model.phase == .rpcHeld && artemisDisconnect.model.canInstallArtemisSave
+        }
+        artemisDisconnect.model.installArtemisSave(game: .nora)
+        try artemisDisconnect.put("release-artemis-save-complete")
+        try await until("verified save with disconnected RPC") {
+            artemisDisconnect.model.phase == .failed &&
+            FileManager.default.fileExists(atPath: artemisDisconnect.root.appendingPathComponent("artemis-failure-received").path)
+        }
+        check(artemisDisconnect.model.seedsowInstallCompleted && artemisDisconnect.model.seedsowInstallStarted &&
+              !artemisDisconnect.model.canLaunchHomebrew && !artemisDisconnect.model.canInstallArtemisSave &&
+              artemisDisconnect.model.detail.contains("Restart the console"),
+              "verified save files do not unlock homebrew when held RPC disconnects")
+        try artemisDisconnect.put("release-artemis-failure")
+        try await until("disconnected Artemis host exits") { !artemisDisconnect.model.hasLiveWorkers }
+        check(artemisDisconnect.model.canReturnToStart,
+              "the disconnected save page permits a fresh start after the host exits")
+
+        let artemisUnavailable = try SetupFixture(edition: .demo, addressProvider: { [address] })
+        defer { artemisUnavailable.dispose() }
+        artemisUnavailable.model.addresses = [address]
+        artemisUnavailable.model.selectedAddress = address.address
+        try artemisUnavailable.put("recoverable-artemis-install")
+        artemisUnavailable.model.selectRunMode(.seedsowSave)
+        artemisUnavailable.model.start()
+        try await until("recoverable Artemis host choice") {
+            FileManager.default.fileExists(atPath: artemisUnavailable.root.appendingPathComponent("held-choice-received").path)
+        }
+        try artemisUnavailable.put("release-rpc-held")
+        try await until("recoverable Artemis held RPC") {
+            artemisUnavailable.model.phase == .rpcHeld && artemisUnavailable.model.canInstallSeedsowSave
+        }
+        artemisUnavailable.model.installArtemisSave(game: .nora)
+        try await until("recoverable Artemis action accepted") {
+            FileManager.default.fileExists(atPath: artemisUnavailable.root.appendingPathComponent("artemis-install-received").path)
+        }
+        try artemisUnavailable.put("release-artemis-save-complete")
+        try await until("recoverable Artemis download returns to choices") {
+            artemisUnavailable.model.phase == .rpcHeld &&
+            artemisUnavailable.model.canInstallSeedsowSave && artemisUnavailable.model.canLaunchHomebrew
+        }
+        check(!artemisUnavailable.model.seedsowInstallCompleted &&
+              artemisUnavailable.model.detail.contains("RPC is still open"),
+              "a checked upstream download failure leaves verified RPC available for another choice")
+        artemisUnavailable.model.finishPostRun()
+        try await until("recoverable Artemis cleanup") {
+            artemisUnavailable.model.phase == .verified && !artemisUnavailable.model.hasLiveWorkers
+        }
 
         let unprovenHost = try SetupFixture(edition: .full, addressProvider: { [address] })
         defer { unprovenHost.dispose() }
@@ -1027,9 +1507,12 @@ enum EmbeddedPayloadMetadata { static let sha256 = "unused-fixture" }
             commandFlow.model.phase == .commands && FileManager.default.fileExists(atPath: commandFlow.root.appendingPathComponent("waiting-commands").path)
         }
         let commandArguments = try String(contentsOf: commandFlow.root.appendingPathComponent("arguments"), encoding: .utf8)
-        check(commandArguments.contains("--load-confirm-wait-ms 1000") &&
-              commandArguments.contains("--demo") == (edition == .demo),
-              "both editions pass a one-second confirmation wait to the native command sender")
+        check(commandArguments.contains("--load-confirm-wait-ms 0") && commandArguments.contains("--load-wait-ms 1000") &&
+              commandArguments.contains("--run-wait-ms 0") && commandArguments.contains("--remove-wait-ms 0") &&
+              commandArguments.contains("--demo") == (edition == .demo) &&
+              !commandArguments.contains("--save-name") && !commandArguments.contains("--load-name") &&
+              !commandArguments.contains("--start-port"),
+              "both editions pass one second after LOAD confirmation without duplicating host profile flags")
         try await Task.sleep(nanoseconds: 30_000_000)
         check(commandFlow.model.status == "Waiting for USB keyboard…" && commandFlow.model.isEnumerating,
               "standard commands wait for USB and ignore invalid count, label and purpose events")
@@ -1054,13 +1537,9 @@ enum EmbeddedPayloadMetadata { static let sha256 = "unused-fixture" }
             check(commandFlow.model.progressLabel == "\(step) of 4 commands sent", "\(label) completion counts only submitted commands")
             if step == 1 {
                 try commandFlow.put("release-load-confirmation")
-                let confirmationStatus = edition == .demo ? "Waiting to confirm LOADV (OK)…" : "Waiting to confirm LOAD (YES)…"
-                try await until("waiting before the second Enter") { commandFlow.model.status == confirmationStatus }
-                check(commandFlow.model.progressLabel.contains("1 of 4 commands sent"), "LOAD confirmation wait does not claim confirmation has already been accepted")
-            }
-            if step < 4 {
-                try commandFlow.put("release-command-wait-\(step)")
-                try await until("post-\(label) wait") { commandFlow.model.status == "Waiting after \(label)…" }
+                try await until("post-confirmation LOAD wait") { commandFlow.model.status == "Waiting after LOAD…" }
+                check(commandFlow.model.progressLabel.contains("1 of 4 commands sent"), "LOAD settle wait preserves command progress")
+                try commandFlow.put("release-command-wait-1")
             }
         }
         check(commandFlow.model.phase == .commands && !commandFlow.model.canLaunchHomebrew,
@@ -1078,7 +1557,7 @@ enum EmbeddedPayloadMetadata { static let sha256 = "unused-fixture" }
 
         let ui = try String(contentsOfFile: CommandLine.arguments[1], encoding: .utf8)
         check(ui.contains("I’m using the SmileBASIC demo") && ui.contains("selectedEdition"), "the view exposes the demo edition selector")
-        check(ui.contains("Picker(\"Quality\"") && ui.contains("$model.stremioQuality"), "Stremio offers the persistent quality selection")
+        check(ui.contains("Picker(\"Video output\"") && ui.contains("$model.stremioQuality"), "Stremio offers the persistent quality selection")
         check(SmileBASICEdition.allCases == [.full, .demo] && SmileBASICEdition(rawValue: "demo") == .demo, "full and demo editions can be selected")
         print("First-time setup, keyboard, commands-only, host-only and homebrew model checks passed: \(checks). No app, driver, keychain, USB or RPC operations run.")
     }

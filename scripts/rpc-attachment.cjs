@@ -1,17 +1,16 @@
 #!/usr/bin/env node
 'use strict';
-// Authorize one local development attachment without owning the source host.
 const fs = require('node:fs/promises');
 const path = require('node:path');
 const crypto = require('node:crypto');
 const http = require('node:http');
 const net = require('node:net');
-const {selectedProfile, trustedProfileForDigest} = require('./host-profiles.cjs');
+const {profiles, trustedProfileForDigest} = require('./host-profiles.cjs');
 const {verifiedSession} = require('./gui-dump.cjs');
 const FORMAT = 'mac2jb-local-rpc-attachment-v1';
 const OWNER = '.mac2jb-attachment-owner.json';
 const ATTEMPT = '.mac2jb-hblauncher-attempt.json';
-const applications = new Set(['hblauncher', 'gpubrewlauncher', 'izlauncher', 'stremio', 'ouncecake']);
+const applications = new Set(['hblauncher', 'gpubrewlauncher', 'mintbrew', 'native-hblauncher', 'custom-homebrew', 'stremio', 'ouncecake', 'modloader', 'system-code-dump', 'savekit']);
 const check = (value, message) => {if (!value) throw Error(message);};
 const hash = value => crypto.createHash('sha256').update(value).digest('hex');
 
@@ -37,9 +36,9 @@ async function writeJSON(file, value, exclusive = false) {
   await fs.writeFile(file, JSON.stringify(value, null, 2)+'\n', {flag: exclusive ? 'wx' : 'w', mode: 0o600});
 }
 
-// Do not require code from the selected run until every bundled input matches.
-// Generated JSON/captures may be present, but extra executable modules may not.
-async function verifyCode(directory, source) {
+// do not require code from the selected run until every bundled input matches.
+// generated json/captures may be present, but extra executable modules may not.
+async function verifyCode(directory, source, replacements = {}) {
   const expected = new Map();
   async function sourceFiles(relative) {
     const folder = path.join(source, 'engine', relative);
@@ -50,7 +49,7 @@ async function verifyCode(directory, source) {
       else {
         const info = await owned(file, 'file', false);
         check(info.size <= 16 * 1024 * 1024, 'Bundled code input exceeds its limit.');
-        expected.set(name, hash(await fs.readFile(file)));
+        expected.set(name, replacements['engine/'+name] ?? hash(await fs.readFile(file)));
       }
     }
   }
@@ -59,7 +58,7 @@ async function verifyCode(directory, source) {
     const memory = /^switch2\/memory\/reserved-gap-\d{10,17}-(.+)\.cjs$/.exec(name);
     if (memory) {
       const suffix = memory[1], direct = new Set(['cache-address-plan','fs-memory-control','session-tools',
-        'run-control','capture-workers','native-links']);
+        'run-control','capture-workers','native-links','wave-overlap']);
       if (direct.has(suffix)) return 'switch2/memory/'+suffix+'.cjs';
       if (['native-worker','affinity'].includes(suffix)) return 'switch2/app/'+suffix+'.cjs';
       const copies = {'source':'probe-reserved-gap','address-plan-source':'cache-address-plan',
@@ -87,7 +86,7 @@ async function verifyCode(directory, source) {
       else {
         check(!item.isSymbolicLink(), 'The selected run contains a source-tree symlink: '+name);
         const executable = /\.(?:cjs|mjs|js|node)$/i.test(name) || path.basename(name) === 'package.json';
-        // The live runner atomically renames generated JSON/capture temporary
+        // the live runner atomically renames generated json/capture temporary
         // files. They are not code inputs, and may vanish after readdir.
         if (!expected.has(name) && !executable) continue;
         const info = await owned(file, 'file', false);
@@ -109,6 +108,21 @@ async function verifyCode(directory, source) {
     check(hash(await fs.readFile(file)) === digest, 'The selected run is missing matching host code: '+name);
   }
   return hash(JSON.stringify([...expected].sort(([a], [b]) => a.localeCompare(b))));
+}
+
+function trustedSourceForDigest(root, digest) {
+  if (profiles.some(profile => profile.sourceSha256 === digest && profile.supportsHeldRPC))
+    return {...trustedProfileForDigest(root, digest), replacements:{}};
+  const savekit = require('./prepare-seedsow-host.cjs');
+  for (const id of savekit.supported) {
+    try {
+      const trusted = savekit.expectedPatchedSource(root, id);
+      if (trusted.sourceSha256 === digest) return trusted;
+    } catch (error) {
+      if (error.code !== 'ENOENT') throw error;
+    }
+  }
+  throw Error('This session was not created by a supported pinned RPC host.');
 }
 
 function statusRequest(port, timeoutMs = 180000, signal) {
@@ -153,10 +167,16 @@ function retainedInfo(socketPath, timeoutMs = 60000, signal) {
 
 async function inspect(root, directory, options = {}) {
   await owned(directory, 'directory');
-  check(selectedProfile(root).supportsHeldRPC, 'Select a host profile that supports held RPC.');
   const result = await readJSON(path.join(directory, 'result.json'));
-  const trusted = trustedProfileForDigest(root, result.sourceSha256), profile = trusted.profile;
-  // Bounded private reads supplement the ordinary held proof validator.
+  const civ = /\/civswitch-fs-[a-f0-9]{16}\/port\/engine\/runs\/switch2-[A-Za-z0-9_-]+$/.test(directory);
+  const artemis = /\/artemis-fs-[a-f0-9]{16}\/port\/engine\/runs\/switch2-[A-Za-z0-9_-]+$/.test(directory);
+  const trusted = civ ? await require('./prepare-civswitch-savekit.cjs').verifyPreparedRun(null, directory)
+    : artemis ? await require('./prepare-artemis-fs.cjs').verifyPreparedRun(null, directory)
+      : trustedSourceForDigest(root, result.sourceSha256);
+  check(trusted.sourceSha256 === undefined || trusted.sourceSha256 === result.sourceSha256,
+    'The held run source digest does not match its pinned host.');
+  const profile = trusted.profile;
+  // bounded private reads supplement the ordinary held proof validator.
   const current = await readJSON(path.join(directory, 'switch2/fs-execution-current.json'));
   async function runJSON(file) {
     check(typeof file === 'string' && file.startsWith(directory+path.sep) && path.resolve(file) === file,
@@ -174,28 +194,31 @@ async function inspect(root, directory, options = {}) {
   const connectionFile = path.join(directory, 'connection.json');
   const connection = await readJSON(connectionFile), addresses = connection.addresses;
   check(Number.isSafeInteger(connection.port) && connection.port > 0 && connection.port <= 65535 &&
-    addresses?.session === proof.session && addresses?.platform === 2 && addresses?.target === 'switch2',
+    addresses?.session === proof.session && addresses?.platform === 2 &&
+    addresses?.target === (civ ? 'civ7' : artemis ? 'artemis-seedsow' : 'switch2'),
     'The native bridge does not belong to the selected held run.');
-  for (const name of ['scratch','main','sdk','backing','controller'])
+  for (const name of ['scratch','main','sdk',...(civ || artemis ? [] : ['backing','controller'])])
     check(Number.isSafeInteger(addresses[name]) && addresses[name] >= 4096 && addresses[name] < 2 ** 39,
       'Invalid held native address: '+name);
+  if (civ || artemis) check(addresses.backing === 0 && addresses.controller === 0,
+    'The application bridge has unexpected reserved addresses.');
   const socketPath = current.retainedEndpoint.socketPath;
   check(acquisition.socketPath === socketPath && report.memoryControl?.socketPath === socketPath,
     'The held retained endpoint does not belong to the current acquisition.');
   check(path.isAbsolute(socketPath) && path.resolve(socketPath) === socketPath &&
     !(await fs.lstat(socketPath)).isSymbolicLink(), 'The retained endpoint must be an owned local socket.');
-  // macOS TMPDIR commonly starts with /var, whose system alias is /private/var.
+  // macos tmpdir commonly starts with /var, whose system alias is /private/var.
   const canonicalSocket = await fs.realpath(socketPath);
   await owned(canonicalSocket, 'socket');
   await owned(path.dirname(canonicalSocket), 'directory');
   const connectionSha256 = hash(await fs.readFile(connectionFile));
-  const codeSha256 = await verifyCode(directory, trusted.sourceDirectory);
+  const codeSha256 = await verifyCode(directory, trusted.sourceDirectory, trusted.replacements);
   const status = await (options.statusRequest || statusRequest)(connection.port, options.timeoutMs, options.signal);
   check(status?.ready === true, 'The original native RPC bridge is not ready.');
   let info, busy = false;
   try {info = await (options.retainedInfo || retainedInfo)(socketPath, options.timeoutMs, options.signal);}
   catch (error) {
-    // The upstream runner rejects this read-only request before dispatch when
+    // the upstream runner rejects this read-only request before dispatch when
     // another retained operation owns it. Monitoring must not interrupt that work.
     if (options.allowRetainedBusy && error.message === 'Another memory request is active') busy = true;
     else throw error;
@@ -206,7 +229,7 @@ async function inspect(root, directory, options = {}) {
     'The live retained endpoint did not confirm this exact held session.');
   check(hash(await fs.readFile(connectionFile)) === connectionSha256,
     'The original native bridge changed while checking its identity.');
-  return {directory, session:proof.session, profileId:profile.id, sourceSha256:profile.sourceSha256,
+  return {directory, session:proof.session, profileId:profile.id, sourceSha256:result.sourceSha256,
     proofFile:proof.proofFile, reportFile:proof.reportFile, socketPath, connectionSha256, codeSha256,
     description:profile.label+' · '+proof.session, status:{...status, ...(busy ? {retainedBusy:true} : {})}};
 }
@@ -230,7 +253,7 @@ async function claimedStatus(initial, options) {
   const connectionFile = path.join(directory, 'connection.json'), connection = await readJSON(connectionFile);
   check(hash(await fs.readFile(connectionFile)) === initial.connectionSha256,
     'The original held RPC session connection changed.');
-  // Once an app owns the attempt, never probe the retained FS runner: even an
+  // once an app owns the attempt, never probe the retained fs runner: even an
   // info request takes its exclusive busy flag. Mutable in-flight proof fields
   // are not evidence of session loss. Native status is serialized by the bridge.
   const status = await (options.statusRequest || statusRequest)(connection.port, options.timeoutMs, options.signal);
@@ -241,6 +264,34 @@ async function manifestDirectory(root) {
   const directory = path.join(root, '.attachments');
   await fs.mkdir(directory, {recursive:true, mode:0o700});
   await owned(directory, 'directory'); return directory;
+}
+
+async function selectedRun(root, selected, options = {}) {
+  await owned(selected, 'directory');
+  if (!(await absent(path.join(selected, 'result.json')))) return inspect(root, selected, options);
+  const vendor = path.join(selected, 'vendor');
+  await owned(vendor, 'directory');
+  const matches = [];
+  for (const host of (await fs.readdir(vendor, {withFileTypes:true})).slice(0, 32)) {
+    if (!host.isDirectory() || host.name !== 'ns2jb' &&
+        !/^ns2-savekit-host-[A-Za-z0-9]{6}$/.test(host.name)) continue;
+    const runs = path.join(vendor, host.name, 'runs');
+    try {await owned(runs, 'directory');} catch {continue;}
+    for (const run of (await fs.readdir(runs, {withFileTypes:true})).slice(0, 32)) {
+      if (!run.isDirectory() || !/^switch2-[A-Za-z0-9]{6}$/.test(run.name)) continue;
+      try {
+        const current = await inspect(root, path.join(runs, run.name),
+          {...options, timeoutMs:Math.min(options.timeoutMs ?? 2500, 2500), allowRetainedBusy:true});
+        matches.push(current);
+      } catch {}
+      if (matches.length > 1) break;
+    }
+    if (matches.length > 1) break;
+  }
+  check(matches.length === 1, matches.length
+    ? 'This session has multiple live RPC runs. Choose the specific run folder.'
+    : 'No verified live RPC run was found inside this session folder.');
+  return matches[0];
 }
 
 async function validateManifest(root, directory, manifestPath = process.env.MAC2JB_ATTACHED_RUN_MANIFEST, options = {}) {
@@ -263,12 +314,11 @@ async function validateManifest(root, directory, manifestPath = process.env.MAC2
 
 async function prepare(root, config, options = {}) {
   check(config && config.kind === 'local' && typeof config.runDirectory === 'string' &&
-    path.isAbsolute(config.runDirectory), 'Choose an existing local held RPC run folder.');
+    path.isAbsolute(config.runDirectory), 'Choose an existing local held RPC run or session folder.');
   root = await fs.realpath(root);
-  const directory = path.resolve(config.runDirectory);
-  // Reject aliased selections rather than following a link into another run.
-  check(config.runDirectory === directory, 'Use the canonical path to the held run folder.');
-  const initial = await inspect(root, directory, options);
+  const selected = path.resolve(config.runDirectory);
+  check(config.runDirectory === selected, 'Use the canonical path to the held run or session folder.');
+  const initial = await selectedRun(root, selected, options), directory = initial.directory;
   check(await absent(path.join(directory, ATTEMPT)) && await absent(path.join(directory, OWNER)),
     'This held session already has a homebrew attempt. Start a fresh console session.');
   const token = crypto.randomBytes(32).toString('hex');
@@ -318,15 +368,38 @@ async function prepare(root, config, options = {}) {
     })();
     return claimInFlight;
   }
+  async function releaseApplication() {
+    check(claimed && !closed && !lost, 'No live application claim can be released.');
+    await claimInFlight;
+    const status = await verify();
+    check(status?.ready === true && await absent(path.join(directory, ATTEMPT)),
+      'The app did not prove a pre-transfer failure. Keep this session claimed.');
+    const ownerFile = path.join(directory, OWNER), owner = await readJSON(ownerFile);
+    check(owner.token === token && owner.session === initial.session && owner.application === manifest.application,
+      'The original session attachment ownership changed.');
+    const application = manifest.application;
+    delete manifest.application;
+    try {
+      await writeJSON(manifestPath, manifest);
+      await fs.unlink(ownerFile);
+    } catch (error) {
+      manifest.application = application;
+      await writeJSON(manifestPath, manifest).catch(() => {});
+      throw error;
+    }
+    claimed = false; claimInFlight = undefined;
+    return status;
+  }
   async function close() {
     if (closed) return; closed = true;
     abortVerification();
     await claimInFlight?.catch(()=>{});
     await removeAuthorization();
-    // Never remove the original attempt/owner markers, stop its host or retire FS.
+    // never remove the original attempt/owner markers, stop its host or retire fs.
   }
-  return {directory, sourceSession:initial.session, description:initial.description,
-    manifestPath, verify, abortVerification, claimApplication, close};
+  return {directory, sourceSession:initial.session, profileId:initial.profileId,
+    description:initial.description,
+    manifestPath, verify, abortVerification, claimApplication, releaseApplication, close};
 }
 
-module.exports = {prepare, validateManifest, inspect, verifyCode, statusRequest, retainedInfo, OWNER, ATTEMPT};
+module.exports = {prepare, validateManifest, inspect, selectedRun, verifyCode, statusRequest, retainedInfo, OWNER, ATTEMPT};

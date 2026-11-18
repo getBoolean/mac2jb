@@ -36,10 +36,20 @@ import Foundation
         precondition(failed.receive("homebrew-stopped") && failed.homebrewStage == .failed)
         precondition(failed.finish() && failed.receive("rpc-finishing") && failed.receive("verified"))
 
+        var retry = held()
+        precondition(retry.launchHomebrew() && retry.receive("homebrew-started"))
+        precondition(retry.receive("homebrew-failed", retrySafe: true) && retry.homebrewStage == .idle)
+        precondition(retry.heldConfirmed && retry.canLaunchHomebrew && retry.canCheckStatus)
+        precondition(retry.launchHomebrew() && retry.homebrewStage == .launching)
+        precondition(retry.receive("homebrew-failed") && !retry.canLaunchHomebrew)
+
         var ended = held()
         ended.launchHomebrew(); ended.receive("homebrew-running")
+        precondition(ended.canStopHomebrew)
         precondition(ended.receive("homebrew-stopped") && ended.homebrewStage == .stopped)
         precondition(ended.canFinish && !ended.canLaunchHomebrew && !ended.canCheckStatus)
+        precondition(ended.receive("homebrew-ready") && ended.canLaunchHomebrew && !ended.homebrewAttempted)
+        precondition(ended.launchHomebrew() && !ended.canLaunchHomebrew)
         ended.stop()
         precondition(!ended.canLaunchHomebrew && !ended.heldConfirmed)
         precondition(!ended.receive("homebrew-running") && !ended.receive("rpc-held"))
@@ -51,6 +61,6 @@ import Foundation
         precondition(!dump.canLaunchHomebrew && !dump.homebrewAttempted)
         let fresh = held()
         precondition(fresh.canLaunchHomebrew && !fresh.homebrewAttempted)
-        print("Homebrew state checks passed: confirmed ownership, one attempt, status/finish gates, failure cleanup, and fresh-session reset.")
+        print("Homebrew state checks passed: confirmed ownership, verified reentry, status/finish gates, failure cleanup, and fresh-session reset.")
     }
 }

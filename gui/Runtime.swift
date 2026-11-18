@@ -7,13 +7,18 @@ private func embeddedPayloadBytes() -> UnsafePointer<UInt8>?
 @_silgen_name("mac2jb_payload_size")
 private func embeddedPayloadSize() -> UInt
 
+private struct RuntimeFileManifest: Decodable {
+    let requiredPaths: [String]
+    let testRequiredPaths: [String]
+}
+
 struct BundledRuntime {
     let root: URL
     var host: HostProfile {
         guard let data = try? Data(contentsOf: root.appendingPathComponent("selected-host.json")),
               let value = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-              let id = value["id"] as? String else { return .bermTheSequel }
-        return HostProfile(rawValue: id) ?? .bermTheSequel
+              let id = value["id"] as? String else { return .defaultHost }
+        return HostProfile(rawValue: id) ?? .defaultHost
     }
 
     enum RuntimeError: LocalizedError {
@@ -25,7 +30,7 @@ struct BundledRuntime {
 
     // Each launch has its own host files and pairing state. A prior session's
     // pairing command can never be consumed by a new GUI launch.
-    static func prepare(sessionParent: URL? = nil, host: HostProfile = .bermTheSequel) throws -> BundledRuntime {
+    static func prepare(sessionParent: URL? = nil, host: HostProfile = .defaultHost) throws -> BundledRuntime {
         umask(0o077)
         guard let bytes = embeddedPayloadBytes(), embeddedPayloadSize() > 0 else {
             throw RuntimeError.invalid("The offline runtime is missing from this app. Rebuild or download a complete app.")
@@ -81,8 +86,9 @@ struct BundledRuntime {
             _ = try tar(["-xzf", archive.path, "-C", root.path,
                          "--no-same-owner", "--no-same-permissions"])
             try manager.removeItem(at: archive)
-            let executablePaths = Set(["node", "mac2jb-send", "mac2jb-commands", "mac2jb-keyboard",
-                                       "homebrew/bin/spirv-val", "homebrew/python/bin/python3",
+            let executablePaths = Set(["node", "mac2jb-send", "mac2jb-commands", "mac2jb-keyboard", "mac2jb-civswitch-hid",
+                                       "tools/nxformat/1.0.4/bin/nxconvert",
+                                       "homebrew/bin/spirv-val", "homebrew/bin/glslangValidator", "homebrew/python/bin/python3",
                                        "homebrew/python/bin/python3.13"])
             if let walker = manager.enumerator(at: root, includingPropertiesForKeys: [.isDirectoryKey, .isSymbolicLinkKey]) {
                 for case let url as URL in walker {
@@ -103,28 +109,22 @@ struct BundledRuntime {
                     try manager.setAttributes([.posixPermissions: mode], ofItemAtPath: url.path)
                 }
             }
-            for path in ["node", "mac2jb-send", "mac2jb-commands", "mac2jb-keyboard", "vendor/libusbd/libusbd.dylib",
-                         "scripts/gui-keyboard.cjs",
-                         "scripts/gui-host.cjs", "scripts/gui-session.cjs", "scripts/gui-dump.cjs",
-                         "scripts/gui-attach.cjs", "scripts/rpc-attachment.cjs",
-                         "scripts/host-profiles.cjs", "scripts/prepare-host-profiles.cjs", "packaging/host-profiles.json",
-                         "vendor/ns2jb-hosts/pepsipu/run.cjs", "vendor/ns2jb-hosts/kurumuz/run.cjs",
-                         "scripts/gui-homebrew.cjs", "scripts/gui-stremio.cjs", "stremio/pipeline.cjs", "stremio/app/app.json", "scripts/check-homebrew-runtime.cjs",
-                         "scripts/gui-hblauncher.cjs", "vendor/HBLauncher/homebrew-launcher/launcher.cjs",
-                         "vendor/HBLauncher/apps/ftpd-sb/app.json", "packaging/HBLauncher-v0.2.0-SHA256SUMS",
-                         "scripts/gui-gpubrewlauncher.cjs", "vendor/GPUBrewLauncher/homebrew-launcher/launcher.cjs",
-                         "vendor/GPUBrewLauncher/CREDITS", "packaging/GPUBrewLauncher-SHA256SUMS",
-                         "scripts/gui-izlauncher.cjs", "scripts/prepare-izlauncher.cjs", "scripts/check-izlauncher-runtime.cjs",
-                         "vendor/IZ2S-Platform/LICENSE", "packaging/IZ2S-Platform-SHA256SUMS",
-                         "packaging/IZ2S-Platform-provenance.json", "homebrew/IZ2S-Platform/mac2jb-runtime.json",
-                         "homebrew/IZ2S-Platform/shells/izlauncher/server/runtime.cjs",
-                         "homebrew/IZ2S-Platform/modules/iz-exchange/iz-exchange.izm",
-                         "scripts/gui-ouncecake.cjs", "vendor/OunceCake/LICENSE", "vendor/OunceCake/engine/oz-code/native.bin",
-                         "packaging/OunceCake-provenance.json", "packaging/OunceCake-SHA256SUMS",
-                         "homebrew/manifest.json", "homebrew/fonts/DejaVuSans.ttf",
-                         "scripts/install-driver.sh", "drivers/SHA256SUMS",
-                         "drivers/usbgadget.kext/Contents/MacOS/usbgadget",
-                         "vendor/ns2jb/run.cjs", "assets/bootstrap.bas", "source/LICENSE"] {
+            let manifestURL = root.appendingPathComponent("packaging/runtime-files.json")
+            guard let manifestData = try? Data(contentsOf: manifestURL),
+                  let manifest = try? JSONDecoder().decode(RuntimeFileManifest.self, from: manifestData) else {
+                throw RuntimeError.invalid("The embedded runtime file manifest is missing or invalid.")
+            }
+            let requiredPaths = manifest.requiredPaths +
+                (AppBuildIdentity.isTestBuild ? manifest.testRequiredPaths : [])
+            guard !requiredPaths.isEmpty && requiredPaths.allSatisfy({ path in
+                !path.hasPrefix("/") && !path.contains("\\") &&
+                path.split(separator: "/", omittingEmptySubsequences: false).allSatisfy {
+                    !$0.isEmpty && $0 != "." && $0 != ".."
+                }
+            }) else {
+                throw RuntimeError.invalid("The embedded runtime file manifest contains an unsafe path.")
+            }
+            for path in requiredPaths {
                 guard manager.fileExists(atPath: root.appendingPathComponent(path).path) else {
                     throw RuntimeError.invalid("The embedded runtime is incomplete: \(path).")
                 }

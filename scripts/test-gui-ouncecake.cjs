@@ -1,10 +1,11 @@
 'use strict';
 const test=require('node:test'),assert=require('node:assert/strict');
-const fs=require('node:fs/promises'),path=require('node:path'),os=require('node:os'),{PassThrough}=require('node:stream');
+const fs=require('node:fs/promises'),path=require('node:path'),os=require('node:os'),crypto=require('node:crypto'),{PassThrough}=require('node:stream');
 const {spawnSync}=require('node:child_process');
 const {main,verifySnapshot,validateConfiguration,catalogEntries,validateAttachment}=require('./gui-ouncecake.cjs');
-const {deployFtp}=require('../vendor/OunceCake/engine/ftp.cjs');
 const {withProgramIndexMap}=require('../vendor/OunceCake/engine/fs-context.cjs');
+const {buildIndex}=require('../vendor/OunceCake/engine/mounts.cjs');
+const {prepareInstalledLicense}=require('../vendor/OunceCake/engine/program.cjs');
 const root=path.resolve(__dirname,'..'),title='0100000000001234';
 const wait=ms=>new Promise(resolve=>setTimeout(resolve,ms));
 const deferred=()=>{let resolve;const promise=new Promise(done=>{resolve=done;});return {promise,resolve};};
@@ -12,23 +13,70 @@ async function until(check){for(let n=0;n<200;n++){if(check())return;await wait(
 async function folder(t){const value=await fs.mkdtemp(path.join(await fs.realpath(os.tmpdir()),'ouncecake-fixture-'));t.after(()=>fs.rm(value,{recursive:true,force:true}));return value;}
 test('real self-test verifies the complete pin and image without a run or native connection',async()=>{
  const result=spawnSync(process.execPath,[path.join(root,'scripts/gui-ouncecake.cjs'),'--self-test'],{encoding:'utf8',timeout:10000});
- assert.equal(result.status,0,result.stderr);assert.equal(JSON.parse(result.stdout).files,17);
- assert.equal(JSON.parse(result.stdout).commit,'e3bcbd229be2229d44f036455adddda921ade3b2');
+ assert.equal(result.status,0,result.stderr);assert.equal(JSON.parse(result.stdout).files,36);
+ assert.equal(JSON.parse(result.stdout).commit,'6dfd7750752f8b6c18f2c40b34fdadc628cd9a6e');
 });
 test('changed bundled code is refused before loading any console interface',async t=>{
  const target=await folder(t);await fs.mkdir(path.join(target,'vendor'));await fs.mkdir(path.join(target,'packaging'));
- await fs.cp(path.join(root,'vendor/OunceCake'),path.join(target,'vendor/OunceCake'),{recursive:true});
+ await fs.cp(path.join(root,'vendor/OunceCake'),path.join(target,'vendor/OunceCake'),{
+  recursive:true,filter:source=>!source.split(path.sep).includes('.build')});
  for(const file of ['OunceCake-SHA256SUMS','OunceCake-upstream-SHA256SUMS','OunceCake-provenance.json'])await fs.copyFile(path.join(root,'packaging',file),path.join(target,'packaging',file));
  await fs.appendFile(path.join(target,'vendor/OunceCake/engine/session.cjs'),'\n// changed');
  await assert.rejects(verifySnapshot(target),/Changed bundled OunceCake file/);
 });
 test('configuration and catalog are explicit, bounded and omit arbitrary fields',()=>{
  assert.deepEqual(validateConfiguration({consoleAddress:'192.0.2.20',port:2121}),{consoleAddress:'192.0.2.20',port:2121});
- for(const value of [{port:2121},{consoleAddress:'host.local',port:2121},{consoleAddress:'192.0.2.1',port:21},null,[]])assert.throws(()=>validateConfiguration(value));
+ assert.deepEqual(validateConfiguration({consoleAddress:'192.0.2.20',port:2121,mode:'ftp'}),
+  {consoleAddress:'192.0.2.20',port:2121,mode:'ftp'});
+ for(const value of [{port:2121},{consoleAddress:'host.local',port:2121},
+  {consoleAddress:'192.0.2.1',port:21},{consoleAddress:'192.0.2.1',port:2121,mode:'other'},null,[]])
+  assert.throws(()=>validateConfiguration(value));
  const catalog=catalogEntries([{title,name:'💛'.repeat(100)+'\nSECRET',storages:[4,4,2],token:'secret'}]);
  assert.ok(Buffer.byteLength(catalog[0].name)<=160);assert.deepEqual(catalog[0].storages,[4,2]);assert.equal(catalog[0].token,undefined);
  assert.throws(()=>catalogEntries([]));assert.throws(()=>catalogEntries(Array(1001).fill({title,name:'Title',storages:[4]})));
  assert.throws(()=>catalogEntries([{title,name:'Title',storages:[3]}]));
+});
+test('native game card with zero FS606 RightsId skips ES account ELicense lookup',async()=>{
+ const {prepareNativeInstalledLicense}=require('../vendor/OunceCake/engine/native-license.cjs');
+ let esCalled=false;
+ const result=await prepareNativeInstalledLicense({
+  s:{threads:new Set(),async ipc(label,handle,command){assert.equal(command,606);return {result:0,data:Buffer.alloc(16)};}},
+  root:1,domain:{},service:async()=>{esCalled=true;throw Error('ES should not be queried when FS606 RightsId is zero');},
+  programId:'0400341027e14000',storage:2,optional:false
+ });
+ assert.equal(result,false);
+ assert.equal(esCalled,false);
+});
+test('optional native license without an ES owner returns for legacy fallback before FS606',async()=>{
+ const {prepareNativeInstalledLicense}=require('../vendor/OunceCake/engine/native-license.cjs');
+ const calls=[];
+ const result=await prepareNativeInstalledLicense({
+  s:{threads:new Set(),bytes:0x80000,base:0,async write(){},async readOwned(address,size){return Buffer.alloc(size);},
+   async ipc(label,handle,command){calls.push(command);if(command===606)throw Error('FS606 unavailable');
+    assert.ok(command===1004||command===1005);return {result:0,data:Buffer.alloc(4)};}},
+  root:1,domain:{},service:async name=>{assert.equal(name,'es');return 2;},
+  programId:'0100000000001234',storage:4,optional:true
+ });
+ assert.equal(result,false);
+ assert.deepEqual(calls,[1004,1005,1004]);
+});
+test('game-card program path checks FS606 before ES and installed content still checks rights',async()=>{
+ const calls=[];
+ const programId='0400f5802371e000',identity=Buffer.alloc(8);
+ identity.writeBigUInt64LE(BigInt('0x'+programId));
+ let rights=Buffer.alloc(16);
+ const attachment={s:{base:0x10000,threads:new Set(),async write(){calls.push('write');},
+  async ipc(label,handle,command,input){calls.push('FS606');assert.equal(command,606);assert.equal(input[0],storage);return {result:0,data:rights};}},
+  root:7,domain:{async send(){calls.push('identity');return {result:0,data:identity};}},
+  service:async()=>{calls.push('service');throw Error('ES requested');}};
+ const source={storage:2,contentPath:'@GcS00000001://game.nca',attributes:1};
+ let storage=2;
+ assert.equal(await prepareInstalledLicense({...attachment,title:programId,source}),false);
+ assert.deepEqual(calls,['write','identity','FS606']);
+ calls.length=0;storage=4;rights=Buffer.alloc(16,1);
+ await assert.rejects(prepareInstalledLicense({...attachment,title:programId,
+  source:{...source,storage,contentPath:'@Ncm://game.nca'}}),/ES requested/);
+ assert.deepEqual(calls,['write','identity','FS606','service']);
 });
 async function proofFixture(t){
  const directory=await folder(t),session='owned-session',reportFile=path.join(directory,'report.json'),engine=path.join(directory,'switch2');
@@ -60,25 +108,52 @@ async function helperFixture(t,options={}){
   async close(){calls.push('attachment-close');this.s.base=0;this.s.handles.clear();}};
  const modules={session:{async attachGame(){calls.push('attach');if(options.attachFailure)throw Error('attachment ownership uncertain');return attachment;}},
   content:{async discoverGames(){calls.push('catalog');return [{title,name:'Fixture Game',storages:[4]}];}},
-  mounts:{async prepareGame(args){calls.push('prepare:'+args.title);if(options.prepareFailure)throw Error('mount failed');return {index:Buffer.alloc(64),sources:[{handle:7}]};}},
-  ftp:{async deployFtp(args){calls.push('deploy:'+args.port);return {async close(){calls.push('ftp-close');if(options.stopFailure)throw Object.assign(Error('thread still active'),{cleanupBlocked:true});return {nativeStopped:true,joined:true,mappingsCleared:true};}};}}};
+  mounts:{async prepareGame(args){calls.push('prepare:'+args.title);if(options.prepareFailure)throw Error('mount failed');return {index:buildIndex([{path:'/game',kind:'storage',entries:[{path:'/file.bin',type:'file',size:1}]}]),sources:[{handle:7}]};}},
+  server:{async deployServer(args){calls.push('deploy:'+args.port);return {address:options.serverAddress||'192.0.2.88',async close(){calls.push('server-close');if(options.stopFailure)throw Object.assign(Error('thread still active'),{cleanupBlocked:true});return {nativeStopped:true,joined:true,mappingsCleared:true};}};}}};
  const promise=main([held],{root:directory,input,modules,isLive:()=>live,waitBlocked:()=>blockedGate.promise,
-  verifySnapshot:async()=>({vendor:'unused',image:Buffer.alloc(16)}),validateRun:async()=>({directory:held,proof:{session:'held-session'}}),validateAttachment:async()=>{},
+  verifySnapshot:async()=>({vendor:path.join(root,'vendor/OunceCake'),image:Buffer.alloc(16)}),validateRun:async()=>({directory:held,proof:{session:'held-session'}}),validateAttachment:async()=>{},
+  createFtpBridge:async({sourceAddress,sourcePort})=>{calls.push('ftp-start:'+sourceAddress+':'+sourcePort);
+   return {address:'127.0.0.1',port:34678,async close(){calls.push('ftp-close');}};},
   emit:(type,fields)=>{events.push({type,...fields});options.onEvent?.({type,...fields},input);}
  }).finally(()=>{finished=true;});promise.catch(()=>{});
- input.write(JSON.stringify({consoleAddress:'192.0.2.88',port:2121})+'\n');
+ input.write(JSON.stringify({consoleAddress:'192.0.2.88',port:2121,
+  ...(options.ftp?{mode:'ftp'}:{})})+'\n');
  t.after(async()=>{live=false;input.end();blockedGate.resolve();await promise.catch(()=>{});});
  return {input,events,calls,attachment,promise,blockedGate,get finished(){return finished;}};
 }
-test('one selected catalog title uses the exact configured console endpoint and stops FTP before attachment',async t=>{
+test('one selected catalog title uses the exact configured console endpoint and stops HTTP/WebDAV before attachment',async t=>{
  const f=await helperFixture(t,{onEvent(event,input){if(event.type==='catalog')input.write(JSON.stringify({action:'select-game',titleId:title})+'\n'+JSON.stringify({action:'select-game',titleId:title})+'\n');if(event.type==='running')input.end();}});
  await f.promise;assert.equal(f.calls.filter(call=>call.startsWith('prepare:')).length,1);assert.equal(f.calls.filter(call=>call.startsWith('deploy:')).length,1);
- const running=f.events.find(event=>event.type==='running');assert.equal(running.host,'192.0.2.88');assert.equal(running.ftpURL,'ftp://192.0.2.88:2121');
- assert.ok(f.calls.indexOf('ftp-close')<f.calls.indexOf('attachment-close'));assert.equal(f.events.at(-1).type,'stopped');
+ const running=f.events.find(event=>event.type==='running');assert.equal(running.host,'192.0.2.88');assert.equal(running.httpURL,'http://192.0.2.88:2121/');
+ assert.ok(f.calls.indexOf('server-close')<f.calls.indexOf('attachment-close'));assert.equal(f.events.at(-1).type,'stopped');
+ assert.equal(f.events.at(-1).cleanupVerified,true);
+ assert.deepEqual(f.events.at(-1).attemptMarkers,['.mac2jb-hblauncher-attempt.json','.mac2jb-ouncecake-attempt.json']);
+ assert.equal(f.events.at(-1).attemptMarkerSha256,crypto.createHash('sha256').update(
+  await fs.readFile(path.join(path.dirname(path.dirname(f.events.at(-1).path)),'held','.mac2jb-hblauncher-attempt.json'))).digest('hex'));
 });
-test('EOF before selection releases only the attachment and never deploys native FTP',async t=>{
+test('FTP mode publishes the Mac-local address and closes the bridge before the console server',async t=>{
+ const f=await helperFixture(t,{ftp:true,onEvent(event,input){
+  if(event.type==='catalog')input.write(JSON.stringify({action:'select-game',titleId:title})+'\n');
+  if(event.type==='running')input.end();
+ }});
+ await f.promise;
+ const running=f.events.find(event=>event.type==='running');
+ assert.equal(running.httpURL,'http://192.0.2.88:2121/');
+ assert.equal(running.ftpURL,'ftp://127.0.0.1:34678/');
+ assert.ok(f.calls.indexOf('ftp-start:192.0.2.88:2121')<f.calls.indexOf('ftp-close'));
+ assert.ok(f.calls.indexOf('ftp-close')<f.calls.indexOf('server-close'));
+ assert.equal(f.events.at(-1).cleanupVerified,true);
+});
+test('EOF before selection releases only the attachment and never deploys the native server',async t=>{
  const f=await helperFixture(t,{onEvent(event,input){if(event.type==='catalog')input.end();}});await f.promise;
  assert.deepEqual(f.calls,['attach','catalog','attachment-close']);
+});
+test('server address mismatch is rejected before endpoint publication and still cleaned up',async t=>{
+ const f=await helperFixture(t,{serverAddress:'192.0.2.89',onEvent(event,input){if(event.type==='catalog')input.write(JSON.stringify({action:'select-game',titleId:title})+'\n');}});
+ await assert.rejects(f.promise,/different console address/);
+ assert.equal(f.events.some(event=>event.type==='running'),false);
+ assert.ok(f.calls.indexOf('server-close')<f.calls.indexOf('attachment-close'));
+ assert.equal(f.events.at(-1).cleanupBlocked,false);
 });
 test('an existing launcher or Stremio attempt prevents another native attachment',async t=>{
  const f=await helperFixture(t,{existingAttempt:true});await assert.rejects(f.promise,/EEXIST/);assert.deepEqual(f.calls,[]);
@@ -92,73 +167,6 @@ for(const failure of ['attachFailure','prepareFailure','stopFailure'])test(failu
  assert.equal(f.calls.includes('attachment-close'),false);
 });
 
-function nativeFixture(scenario={}){
- const sdk=2**32,base=2**33,thread=2**34,destination=2**35,trace=[];let clock=0,stop=false;
- const names=['_ZN2nn6socket6SocketEiii','_ZN2nn6socket4BindEiPKNS0_8SockAddrEj','_ZN2nn6socket6ListenEii',
-  '_ZN2nn6socket6AcceptEiPNS0_8SockAddrEPj','_ZN2nn6socket4RecvEiPvmi','_ZN2nn6socket4SendEiPKvmi',
-  '_ZN2nn6socket5CloseEi','_ZN2nn6socket4PollEPNS0_6PollFdEmi','_ZN2nn6socket11GetSockNameEiPNS0_8SockAddrEPj',
-  '_ZN2nn6socket5FcntlEiiz','_ZN2nn6socket12GetLastErrnoEv'];
- const strings=Buffer.from('\0'+names.join('\0')+'\0'),symbols=Buffer.alloc(names.length*24);let stringAt=1;
- names.forEach((name,index)=>{const at=index*24;symbols.writeUInt32LE(stringAt,at);symbols[at+4]=2;symbols.writeUInt16LE(1,at+6);symbols.writeBigUInt64LE(BigInt(0x4000+index*64),at+8);symbols.writeBigUInt64LE(32n,at+16);stringAt+=Buffer.byteLength(name)+1;});
- class Session{
-  constructor(){this.base=0;this.handles=new Set();this.threads=new Set();}
-  async initialize(){trace.push('initialize');this.base=base;}
-  async verifyCode(expected,label){trace.push('verify:'+label);if(scenario.signatureFailure)throw Error('instructions differ');}
-  async read(address,size){
-   const output=Buffer.alloc(size);
-   if(address===sdk){output.writeInt32LE(0x100,4);return output;}
-   if(address===sdk+0x100){output.write('MOD0');output.writeInt32LE(0x100,4);return output;}
-   if(address===sdk+0x200){[[4,0x1000],[5,0x2000],[6,0x3000],[10,strings.length],[11,24]].forEach(([tag,value],index)=>{output.writeBigInt64LE(BigInt(tag),index*16);output.writeBigUInt64LE(BigInt(value),index*16+8);});return output;}
-   if(address===sdk+0x1000){output.writeUInt32LE(names.length,4);return output;}
-   if(address===sdk+0x2000)return strings;
-   if(address===sdk+0x3000)return symbols;
-   throw Error('Unexpected native read');
-  }
-  async readOwned(address,size){const output=Buffer.alloc(size);if(address===base+0xa000){output.writeBigUInt64LE(BigInt(thread));return output;}
-   if(address===base+0x4000){output.writeUInt32LE(stop?2:scenario.neverReady?0:1,16);return output;}throw Error('Unexpected owned read');}
-  async write(address){if(address===base+0x400c){trace.push('stop');stop=true;}else trace.push('write');}
-  async ipc(label,handle,command){if(command===0x524f0012){trace.push('map');if(scenario.mapFailure)throw Error('mapping uncertain');}
-   if(command===0x524f0013)trace.push('unmap');const processReply=label==='FTP verify application process';
-   const data=Buffer.alloc(processReply&&scenario.shortProcessReply?32:104);data.writeBigUInt64LE(processReply&&scenario.zeroProcessId?0n:77n);
-   if(data.length>=96)data.writeBigUInt64LE(BigInt(processReply&&scenario.badDestination?destination+1:destination),88);
-   return {result:processReply&&scenario.processError?5:0,data};}
-  async cleanup(){trace.push('free');if(!scenario.cleanupDeferred)this.base=0;}
-  rpc={query:async address=>({result:0,permissions:5,attributes:0,address:sdk,size:0x5e1000}),
-   call4:async()=>{trace.push('create');if(scenario.createFailure)throw Error('native create uncertain');return 0;},
-   call3:async address=>{if(address===sdk+1217808){trace.push('tryWait');return scenario.stopTimeout?0:1;}trace.push('join');return scenario.joinFailure?5:0;}};
- }
- const attachment={Session,live:{sdk},s:{threads:new Set()},async service(){return 7;}};
- return {trace,attachment,options:{attachment,image:Buffer.alloc(10813),index:Buffer.alloc(64),sources:[{handle:7,kind:0,size:0}],port:2121,
-  timing:{startupMs:100,stopMs:100,now:()=>clock,pause:async ms=>{clock+=ms;}}}};
-}
-test('native FTP qualifies fixed helpers, confirms listening and joins before unmapping/freeing',async()=>{
- const f=nativeFixture(),server=await deployFtp(f.options);assert.equal((await server.status()).state,1);
- assert.equal(f.trace.filter(item=>item.startsWith('verify:')).length,5);const result=await server.close();assert.equal(result.nativeStopped,true);
- assert.ok(f.trace.indexOf('join')<f.trace.indexOf('unmap'));assert.ok(f.trace.lastIndexOf('unmap')<f.trace.indexOf('free'));
- const count=f.trace.length;await server.close();assert.equal(f.trace.length,count,'cleanup cannot replay');
-});
-test('native signature mismatch refuses deployment before any executable mapping or thread',async()=>{
- const f=nativeFixture({signatureFailure:true});await assert.rejects(deployFtp(f.options),/instructions differ/);
- assert.equal(f.trace.includes('create'),false);assert.equal(f.trace.includes('map'),false);assert.equal(f.trace.includes('free'),true);
-});
-test('native startup that never becomes listening fails and cleans up only after verified stop',async()=>{
- const f=nativeFixture({neverReady:true});await assert.rejects(deployFtp(f.options),/did not confirm listening/);
- assert.ok(f.trace.indexOf('join')<f.trace.indexOf('unmap'));assert.equal(f.trace.includes('free'),true);
-});
-for(const scenario of ['stopTimeout','joinFailure','createFailure','mapFailure'])test('uncertain '+scenario+' never unmaps or frees native resources',async()=>{
- const f=nativeFixture({[scenario]:true});let task;
- if(scenario==='stopTimeout'||scenario==='joinFailure'){const server=await deployFtp(f.options);task=server.close();}else task=deployFtp(f.options);
- await assert.rejects(task,error=>error.cleanupBlocked===true);assert.equal(f.trace.includes('unmap'),false);assert.equal(f.trace.includes('free'),false);
- if(scenario==='stopTimeout')assert.equal(f.trace.includes('join'),false);
-});
-test('deferred native allocation cleanup cannot claim successful shutdown',async()=>{
- const f=nativeFixture({cleanupDeferred:true}),server=await deployFtp(f.options);
- await assert.rejects(server.close(),error=>error.cleanupBlocked===true&&/deferred/.test(error.message));
-});
-for(const scenario of ['shortProcessReply','zeroProcessId','badDestination','processError'])test(scenario+' rejects the process response before mapping code',async()=>{
- const f=nativeFixture({[scenario]:true});await assert.rejects(deployFtp(f.options));
- assert.equal(f.trace.includes('map'),false);assert.equal(f.trace.includes('create'),false);
-});
 async function mapFixture(t,{cycle=false,small=false,badAddress=false}={}){
  const directory=await folder(t),engine=path.join(directory,'switch2');await fs.mkdir(path.join(engine,'ro'),{recursive:true});await fs.mkdir(path.join(engine,'tools'));
  await fs.writeFile(path.join(engine,'ro','map-session-layout.json'),'{}');const moduleFile=path.join(engine,'tools/fs-memory.cjs');await fs.writeFile(moduleFile,'module.exports={};');

@@ -1,5 +1,4 @@
 #!/usr/bin/env python3
-"""Audit complete source distributions and the explicitly approved driver."""
 import hashlib
 import json
 import stat
@@ -22,47 +21,124 @@ required = {
     'mac2jb/vendor/ns2jb/run.cjs',
     'mac2jb/vendor/ns2jb-hosts/pepsipu/run.cjs',
     'mac2jb/vendor/ns2jb-hosts/kurumuz/run.cjs',
+    'mac2jb/vendor/ns2jb-hosts/cellenseres/run.cjs',
     'mac2jb/gui/HostProfile.swift',
     'mac2jb/scripts/host-profiles.cjs',
     'mac2jb/scripts/prepare-host-profiles.cjs',
     'mac2jb/packaging/host-profiles.json',
     'mac2jb/scripts/gui-attach.cjs',
+    'mac2jb/scripts/gui-discover-rpc.cjs',
     'mac2jb/scripts/rpc-attachment.cjs',
+    'mac2jb/scripts/homebrew-reentry.cjs',
     'mac2jb/vendor/HBLauncher/homebrew-launcher/launcher.cjs',
     'mac2jb/vendor/GPUBrewLauncher/homebrew-launcher/launcher.cjs',
     'mac2jb/vendor/GPUBrewLauncher/CREDITS',
     'mac2jb/vendor/GPUBrewLauncher/REFERENCE.md',
+    'mac2jb/vendor/MintBrew/homebrew-launcher/launcher.cjs',
+    'mac2jb/vendor/MintBrew/manifest.json',
+    'mac2jb/vendor/MintBrew/README.md',
+    'mac2jb/vendor/MintBrew/CREDITS',
+    'mac2jb/vendor/MintBrew/apps/hello-world/app.json',
+    'mac2jb/vendor/MintBrew/apps/froggy-road/app.json',
     'mac2jb/scripts/gui-gpubrewlauncher.cjs',
     'mac2jb/scripts/gui-hblauncher.cjs',
-    'mac2jb/scripts/gui-izlauncher.cjs',
-    'mac2jb/scripts/prepare-izlauncher.cjs',
-    'mac2jb/scripts/check-izlauncher-runtime.cjs',
-    'mac2jb/vendor/IZ2S-Platform/LICENSE',
-    'mac2jb/vendor/IZ2S-Platform/COPYRIGHT',
-    'mac2jb/vendor/IZ2S-Platform/LICENSE-SCOPE.md',
-    'mac2jb/vendor/IZ2S-Platform/THIRD_PARTY.json',
-    'mac2jb/vendor/IZ2S-Platform/shells/izlauncher/server/runtime.cjs',
-    'mac2jb/vendor/IZ2S-Platform/modules/iz-exchange/module.json',
-    'mac2jb/packaging/IZ2S-Platform-provenance.json',
-    'mac2jb/packaging/IZ2S-Platform-SHA256SUMS',
+    'mac2jb/scripts/gui-mintbrew.cjs',
+    'mac2jb/scripts/prepare-mintbrew.cjs',
+    'mac2jb/integrations/mintbrew-native/host.cjs',
+    'mac2jb/integrations/mintbrew-stremio/adapter.cjs',
+    'mac2jb/scripts/gui-custom-homebrew.cjs',
+    'mac2jb/scripts/custom-rpc-package.cjs',
     'mac2jb/packaging/GPUBrewLauncher-provenance.json',
     'mac2jb/packaging/GPUBrewLauncher-SHA256SUMS',
     'mac2jb/scripts/gui-homebrew.cjs',
+    'mac2jb/scripts/gui-native-hblauncher.cjs',
+    'mac2jb/scripts/gui-savekit-tools.cjs',
+    'mac2jb/scripts/gui-dnswitch.cjs',
+    'mac2jb/scripts/gui-webkit-research.cjs',
+    'mac2jb/scripts/gui-bundled-browser-probes.cjs',
+    'mac2jb/scripts/gui-nup.cjs',
+    'mac2jb/packaging/NUP-source.json',
+    'mac2jb/gui/NUPToolsView.swift',
+    'mac2jb/scripts/gui-nxformat.cjs',
+    'mac2jb/packaging/NXFormat-source.json',
+    'mac2jb/gui/NXFormatToolsView.swift',
+    'mac2jb/scripts/gui-civhomebrew.cjs',
+    'mac2jb/scripts/civhomebrew-catalog-overlay.cjs',
+    'mac2jb/integrations/civhomebrew-catalog/catalog.js',
+    'mac2jb/integrations/civhomebrew-catalog/catalog-ui.js',
+    'mac2jb/packaging/CivHomebrew-source.json',
+    'mac2jb/scripts/gui-civswitch-moonlight.cjs',
+    'mac2jb/packaging/Moonlight-CivSwitch-source.json',
+    'mac2jb/scripts/gui-civswitch-sw2nes.cjs',
+    'mac2jb/packaging/SW2NES-source.json',
+    'mac2jb/integrations/sw2nes/v1.0.1/sw2nes.civapp',
+    'mac2jb/integrations/sw2nes/v1.0.1/LICENSE',
+    'mac2jb/integrations/sw2nes/v1.0.1/source/tools/build.sh',
+    'mac2jb/integrations/sw2nes/v1.0.1/source/third_party/QuickNES_Core/LICENSE',
+    'mac2jb/scripts/gui-civswitch-jellyfin.cjs',
+    'mac2jb/scripts/gui-civswitch-package.cjs',
+    'mac2jb/packaging/Jellyfin-CivSwitch-source.json',
+    'mac2jb/integrations/jellyfin/0.0.1/jellyfin-civswitch.civapp',
+    'mac2jb/integrations/jellyfin/0.0.1/THIRD_PARTY.md',
+    'mac2jb/integrations/jellyfin/0.0.1/BRANDING.md',
+    'mac2jb/gui/CivSwitchAppsModel.swift',
+    'mac2jb/integrations/nup-support/site-packages/zstandard/backend_c.cpython-313-darwin.so',
+    'mac2jb/integrations/nup-support/site-packages/zstandard-0.25.0.dist-info/licenses/LICENSE',
+    'mac2jb/integrations/nsp-box/cli.py',
+    'mac2jb/integrations/nsp-box/LICENSE.txt',
+    'mac2jb/gui/NSPBoxToolsView.swift',
+    'mac2jb/gui/ArtemisHTTPView.swift',
+    'mac2jb/integrations/kaihen/provenance.json',
+    'mac2jb/scripts/check-webkit-research.cjs',
+    'mac2jb/packaging/switch2-browser-research-provenance.json',
+    'mac2jb/vendor/switch2-captive-portal-research/LICENSE-NOTICE.md',
+    'mac2jb/vendor/switch2-captive-portal-research/serve-switch2-browser-probe.py',
+    'mac2jb/vendor/switch2-captive-portal-research/switch2-browser-probe.html',
+    'mac2jb/integrations/browser-probes/manifest.json',
+    'mac2jb/integrations/browser-probes/index.html',
+    'mac2jb/integrations/browser-probes/probes.js',
+    'mac2jb/integrations/browser-probes/style.css',
+    'mac2jb/scripts/dnswitch-launch.applescript',
+    'mac2jb/gui/DNSwitchModel.swift',
+    'mac2jb/gui/WebKitResearchModel.swift',
+    'mac2jb/gui/SaveKitToolsView.swift',
     'mac2jb/scripts/gui-stremio.cjs',
+    'mac2jb/stremio/source-preferences.cjs',
     'mac2jb/scripts/gui-ouncecake.cjs',
+    'mac2jb/scripts/gui-ouncecake-civ7.cjs',
     'mac2jb/keyboard.c',
+    'mac2jb/civswitch-hid.c',
+    'mac2jb/gui/CivSwitchModel.swift',
+    'mac2jb/vendor/CivSwitch/LICENSE',
+    'mac2jb/vendor/CivSwitch/core.js',
+    'mac2jb/vendor/CivSwitch/PicoSwitch/compress.js',
+    'mac2jb/integrations/civswitch/payload.txt',
+    'mac2jb/integrations/civswitch/provenance.json',
+    'mac2jb/integrations/civswitch/verify.cjs',
+    'mac2jb/integrations/civswitch/probe.cjs',
+    'mac2jb/integrations/civswitch/send-hello.cjs',
+    'mac2jb/integrations/civswitch/send-hello.test.cjs',
+    'mac2jb/integrations/civswitch/hello.js',
     'mac2jb/gui/PostBootstrapCommand.swift',
     'mac2jb/scripts/gui-keyboard.cjs',
+    'mac2jb/scripts/usb-controllers.cjs',
     'mac2jb/vendor/OunceCake/LICENSE',
     'mac2jb/vendor/OunceCake/README.md',
     'mac2jb/vendor/OunceCake/engine/oz-code/native.c',
     'mac2jb/vendor/OunceCake/engine/oz-code/native.h',
     'mac2jb/vendor/OunceCake/engine/oz-code/layout.ld',
     'mac2jb/vendor/OunceCake/engine/oz-code/native.bin',
-    'mac2jb/vendor/OunceCake/engine/build-ftp.cjs',
+    'mac2jb/vendor/OunceCake/engine/build-native.cjs',
+    'mac2jb/vendor/OunceCake/engine/zip-download.cjs',
     'mac2jb/packaging/OunceCake-provenance.json',
     'mac2jb/packaging/OunceCake-SHA256SUMS',
     'mac2jb/packaging/OunceCake-upstream-SHA256SUMS',
+    'mac2jb/vendor/OunceCake-Civ7/LICENSE',
+    'mac2jb/vendor/OunceCake-Civ7/README.md',
+    'mac2jb/vendor/OunceCake-Civ7/engine/civ7-ftp.cjs',
+    'mac2jb/vendor/OunceCake-Civ7/engine/oz-code/native-civ7.bin',
+    'mac2jb/packaging/OunceCake-Civ7-provenance.json',
+    'mac2jb/packaging/OunceCake-Civ7-SHA256SUMS',
     'mac2jb/stremio/pipeline.cjs',
     'mac2jb/stremio/receiver.cjs',
     'mac2jb/stremio/receiver-program.cjs',
@@ -82,11 +158,11 @@ required = {
     'mac2jb/scripts/prepare-homebrew-apps.cjs',
     'mac2jb/assets/homebrew-apps/ftpd-sb/README.md',
     'mac2jb/assets/homebrew-apps/ftpd-sb/app.json',
-    'mac2jb/drivers/README.md',
     'mac2jb/drivers/LICENSE',
     'mac2jb/drivers/LICENSE-APSL-2.0.txt',
     'mac2jb/drivers/SHA256SUMS',
     'mac2jb/scripts/install-driver.sh',
+    'mac2jb/scripts/package-gui-payload.py',
     'mac2jb/assets/bootstrap.bas',
     'mac2jb/mac2jb.command',
     'mac2jb/setup.sh',
@@ -98,6 +174,98 @@ block_suffixes = ('.o', '.dylib', '.log', '.xcuserstate', '.pyc', '.bak', '.kate
 violations = []
 with zipfile.ZipFile(archive) as z:
     names = set(z.namelist())
+    removed_components = (
+        'integrations/artemis',
+        'integrations/seedsow-editor-pro',
+        'integrations/seedsow-lua',
+        'integrations/balatro-rce/balatro-switch-rce-1.1.0.zip',
+        'integrations/balatro-rce/balatro-cpypwn-showcase.zip',
+        'integrations/gravcirc-rce/GC-v1.1.zip',
+        'integrations/gravcirc-rce/GC-v1.1-cpypwn-showcase.zip',
+        'packaging/ArtemisLauncher-v1.json',
+        'packaging/ArtemisLauncher-v2.json',
+        'packaging/ArtemisLauncher-seedsow-full.json',
+        'packaging/ArtemisLauncher-upstream-saves.json',
+        'packaging/ArtemisLauncher-nora1.json',
+        'packaging/ArtemisLauncher-bundles.json',
+        'packaging/SeedsowEditorPro-v0.4.0.json',
+        'packaging/GravCirc-v1.1.json',
+        'packaging/GravCirc-v1.1-SHA256SUMS',
+        'vendor/ns2-savekit/Seedsow-Lua-Editor-Save.zip',
+        'gui/CivSwitchControlCenterModel.swift',
+        'vendor/CivSwitch-ControlCenter',
+        'integrations/civswitch-control-center',
+        'vendor/IZ2S-Platform', 'vendor/IZDOOM', 'vendor/BlitBun',
+        'vendor/ns2jb-hosts/izmysh-legacy', 'integrations/izlauncher-shell',
+        'integrations/blitbun', 'integrations/vacootube', 'integrations/izdoom',
+        'integrations/mintbrew-iz-exchange', 'integrations/super-file-bros',
+        'integrations/civswitch/izlauncher-save',
+        'vendor/MintBrew/apps/izdoom', 'vendor/MintBrew/apps/iz-exchange',
+        'scripts/gui-izlauncher.cjs', 'scripts/gui-civswitch-izlauncher.cjs',
+        'scripts/gui-civswitch-izlauncher-save.cjs', 'scripts/prepare-izlauncher.cjs',
+        'scripts/check-izlauncher-runtime.cjs', 'scripts/izlauncher-modules.cjs',
+        'scripts/izlauncher-panel.cjs', 'scripts/stage-custom-izmodule.cjs',
+        'packaging/IZ2S-Platform-provenance.json',
+        'packaging/IZ2S-Platform-SHA256SUMS',
+        'packaging/IZMYSH-legacy-provenance.json',
+        'packaging/IZMYSH-legacy-SHA256SUMS',
+        'packaging/IZCIVSwitch-izlauncher-save.json',
+    )
+    for name in names:
+        relative = name.removeprefix('mac2jb/').rstrip('/')
+        if any(relative == component or relative.startswith(component + '/')
+               for component in removed_components):
+            violations.append('removed component remains in source: ' + name)
+    try:
+        test_build = json.loads(z.read('mac2jb/packaging/test-build.json')).get('testBuild') is True
+    except (KeyError, ValueError, TypeError):
+        test_build = False
+    personal_required = {
+        'mac2jb/integrations/civswitch/hello.js',
+        'mac2jb/integrations/civswitch/send-hello.cjs',
+        'mac2jb/integrations/civswitch/send-hello.test.cjs',
+    }
+    if not test_build:
+        required.difference_update(personal_required)
+        for name in names:
+            if ('cpypwn' in name.lower() or 'showcase' in name.lower()) and name.startswith('mac2jb/integrations/'):
+                violations.append('personal showcase in public source: ' + name)
+            if name in personal_required:
+                violations.append('personal demo in public source: ' + name)
+            if name == 'mac2jb/scripts/build-seedsow-full-showcase.cjs':
+                violations.append('personal showcase builder in public source')
+    def audit_inventory(label, manifest, prefix, manifest_sha256, count, exact=True):
+        try:
+            data = z.read(manifest)
+            if hashlib.sha256(data).hexdigest() != manifest_sha256:
+                raise ValueError('changed inventory manifest')
+            expected = {}
+            for line in data.decode().splitlines():
+                digest, relative = line.split('  ', 1)
+                parts = relative.split('/')
+                if (len(digest) != 64 or any(c not in '0123456789abcdef' for c in digest)
+                        or not relative or relative.startswith('/') or '\\' in relative
+                        or any(part in ('', '.', '..') for part in parts)
+                        or any(ord(character) < 32 for character in relative)
+                        or relative in expected):
+                    raise ValueError('invalid inventory entry')
+                expected[relative] = digest
+            if len(expected) != count:
+                raise ValueError('unexpected inventory length')
+            actual = {name[len(prefix):] for name in names if name.startswith(prefix) and not name.endswith('/')}
+            if exact and actual != set(expected):
+                violations.append('incomplete or unexpected ' + label + ' source distribution')
+            for relative, digest in expected.items():
+                name = prefix + relative
+                if name not in names or hashlib.sha256(z.read(name)).hexdigest() != digest:
+                    violations.append('missing or changed ' + label + ' source: ' + name)
+                elif stat.S_IFMT(z.getinfo(name).external_attr >> 16) not in (0, stat.S_IFREG):
+                    violations.append('non-regular ' + label + ' source: ' + name)
+            return expected
+        except (KeyError, ValueError, UnicodeError):
+            violations.append('missing or malformed ' + label + ' inventory')
+            return {}
+
     for missing in sorted(required - names):
         violations.append('missing required file: ' + missing)
     for path in sorted(names):
@@ -114,6 +282,27 @@ with zipfile.ZipFile(archive) as z:
             'xcuserdata' in p.parts or 'project.xcworkspace' in p.parts or p.name.startswith('._') or
             p.name in block_names or p.suffix in block_suffixes or any(part.endswith('.dSYM') for part in p.parts)):
             violations.append('excluded binary/local/unused file: ' + path)
+    try:
+        provenance = json.loads(z.read('mac2jb/packaging/switch2-browser-research-provenance.json'))
+        files = provenance['files']
+        if (provenance['revision'] != '07cd867af2f1dc8f7b6ce59d964c3827cc3997b3'
+                or not isinstance(files, dict) or len(files) != 28):
+            raise ValueError('changed browser research provenance')
+        research_prefix = 'mac2jb/vendor/switch2-captive-portal-research/'
+        actual = {name[len(research_prefix):] for name in names
+                  if name.startswith(research_prefix) and not name.endswith('/')}
+        if actual != set(files):
+            violations.append('incomplete or unexpected browser research distribution')
+        for relative, digest in files.items():
+            parts = relative.split('/')
+            if (not parts or any(part in ('', '.', '..') for part in parts)
+                    or len(digest) != 64 or any(c not in '0123456789abcdef' for c in digest)):
+                raise ValueError('invalid browser research provenance entry')
+            name = research_prefix + relative
+            if name not in names or hashlib.sha256(z.read(name)).hexdigest() != digest:
+                violations.append('missing or changed browser research file: ' + name)
+    except (KeyError, ValueError, TypeError, UnicodeError):
+        violations.append('missing or malformed browser research provenance')
     driver_files = {
         'Contents/Info.plist': 'c38786b3eb1b51055505bca54c88df77b797e1785c146ec1d54ee3273a934faf',
         'Contents/MacOS/usbgadget': 'a32119c7908098c49c2540a17aad4d172378de969885ad4f4a752bdb8ef91308',
@@ -132,20 +321,32 @@ with zipfile.ZipFile(archive) as z:
             registry = json.loads(z.read(host_profiles))
             pins = {
                 'pepsipu': '95f5525089273c5fce0b95047f3600f8442e96ae',
-                'kurumuz': '857aa2c7240218580250cb777dc0c2ceecff56cb',
-                'BermTheSequel': '84619429e937c132e27a6d576892515ea0018d86',
+                'kurumuz': '28f03b5895e5569d8fbc35cbed84906b8f0a65b2',
+                'cellenseres': '2f686045ff88e5a97f959d19752e00ef3b62011f',
+                'BermTheSequel': '9accf75508f4e7033ffc6912b2ebb7e0b6704e84',
+                'astral': '81d5bb114c856109dadaf1077d927a9f297fe58d',
             }
             profiles = registry['profiles']
-            if (registry.get('format') != 'mac2jb-host-profiles-v1' or registry.get('default') != 'BermTheSequel'
-                    or len(profiles) != 3 or {row['id'] for row in profiles} != set(pins)):
+            if (registry.get('format') != 'mac2jb-host-profiles-v1' or registry.get('default') != 'kurumuz'
+                    or len(profiles) != 5 or {row['id'] for row in profiles} != set(pins)):
                 raise ValueError('invalid host profile registry')
             for row in profiles:
                 host = row['id']
                 folder = 'vendor/ns2jb' if host == 'BermTheSequel' else 'vendor/ns2jb-hosts/' + host
-                if (row['label'] != host or row['revision'] != pins[host] or row['sourceDirectory'] != folder
-                        or row['startArgumentCount'] != (9 if host == 'pepsipu' else 5)
-                        or row['supportsHeldRPC'] != (host != 'pepsipu')
-                        or row['supportsDemo'] != (host == 'BermTheSequel') or not row.get('licenseStatus')):
+                label = 'Cellenseres' if host == 'cellenseres' else 'Astral (custom)' if host == 'astral' else host
+                held = host != 'pepsipu'
+                demo = host in ('kurumuz', 'cellenseres', 'BermTheSequel', 'astral')
+                savekit = host in ('kurumuz', 'cellenseres', 'astral')
+                modloader = host in ('kurumuz', 'cellenseres')
+                arity = 9 if host == 'pepsipu' else 5
+                port = 39380
+                save_name = 'NS2'
+                if (row['label'] != label or row['revision'] != pins[host] or row['sourceDirectory'] != folder
+                        or row['startArgumentCount'] != arity or row.get('startPort', 39380) != port
+                        or row.get('saveName', 'NS2') != save_name or row['supportsHeldRPC'] != held
+                        or row['supportsDemo'] != demo or bool(row.get('supportsSaveKit')) != savekit
+                        or bool(row.get('supportsNativeHBLauncher')) != savekit
+                        or bool(row.get('supportsModloader')) != modloader or not row.get('licenseStatus')):
                     raise ValueError('changed host provenance or capabilities')
                 prefix = 'mac2jb/' + folder + '/'
                 expected = {}
@@ -188,21 +389,55 @@ with zipfile.ZipFile(archive) as z:
                     raise ValueError('invalid OunceCake manifest')
                 expected[ounce_prefix + relative] = digest
             actual = {name for name in names if name.startswith(ounce_prefix) and not name.endswith('/')}
-            if len(expected) != 17 or actual != set(expected):
+            upstream_manifest = 'mac2jb/packaging/OunceCake-upstream-SHA256SUMS'
+            bundled_upstream_manifest = ounce_prefix + 'SHA256SUMS'
+            if (len(expected) != 36 or actual != set(expected) | {bundled_upstream_manifest}
+                    or z.read(bundled_upstream_manifest) != z.read(upstream_manifest)):
                 violations.append('incomplete or unexpected OunceCake source distribution')
             for name, digest in expected.items():
                 if name not in names or hashlib.sha256(z.read(name)).hexdigest() != digest:
                     violations.append('missing or changed OunceCake source: ' + name)
             native = ounce_prefix + 'engine/oz-code/native.bin'
-            if hashlib.sha256(z.read(native)).hexdigest() != '9af1776daae66e5566b9fb52e9017b6b78203e4c93d3b63d7000f0196eb5ff1e':
+            if hashlib.sha256(z.read(native)).hexdigest() != 'aa2ca4e1351217dbd8d16940672552632d3275f8d313dc4cc0a75e6af534e525':
                 violations.append('changed pinned OunceCake native image')
             provenance = json.loads(z.read('mac2jb/packaging/OunceCake-provenance.json'))
-            if provenance.get('commit') != 'e3bcbd229be2229d44f036455adddda921ade3b2' or provenance.get('license') != 'GPLv2':
+            if provenance.get('commit') != '6dfd7750752f8b6c18f2c40b34fdadc628cd9a6e' or provenance.get('license') != 'GPLv2':
                 violations.append('changed OunceCake upstream provenance')
             if b'GNU GENERAL PUBLIC LICENSE' not in z.read(ounce_prefix + 'LICENSE'):
                 violations.append('missing OunceCake GPL license text')
         except (KeyError, ValueError, UnicodeError):
             violations.append('missing or malformed OunceCake source/provenance')
+    civ7_manifest = 'mac2jb/packaging/OunceCake-Civ7-SHA256SUMS'
+    civ7_prefix = 'mac2jb/vendor/OunceCake-Civ7/'
+    if civ7_manifest in names:
+        try:
+            expected = {}
+            for line in z.read(civ7_manifest).decode().splitlines():
+                digest, relative = line.split('  ', 1)
+                if (len(digest) != 64 or any(c not in '0123456789abcdef' for c in digest)
+                        or relative.startswith('/') or '..' in PurePosixPath(relative).parts
+                        or '\\' in relative or civ7_prefix + relative in expected):
+                    raise ValueError('invalid OunceCake Civ7 manifest')
+                expected[civ7_prefix + relative] = digest
+            actual = {name for name in names if name.startswith(civ7_prefix) and not name.endswith('/')}
+            if len(expected) != 24 or actual != set(expected):
+                violations.append('incomplete or unexpected OunceCake Civ7 source distribution')
+            for name, digest in expected.items():
+                if name not in names or hashlib.sha256(z.read(name)).hexdigest() != digest:
+                    violations.append('missing or changed OunceCake Civ7 source: ' + name)
+            native = civ7_prefix + 'engine/oz-code/native-civ7.bin'
+            native_hash = 'e5f07bb69d0672ab1f195b8c6387ea4aa728c3b7bbbc7f80568ec1eb7288212a'
+            if hashlib.sha256(z.read(native)).hexdigest() != native_hash:
+                violations.append('changed pinned OunceCake Civ7 native image')
+            provenance = json.loads(z.read('mac2jb/packaging/OunceCake-Civ7-provenance.json'))
+            if (provenance.get('commit') != 'a645d48802146c2d0da23da19efadb74b66c117f'
+                    or provenance.get('license') != 'GPLv2'
+                    or provenance.get('nativeImage', {}).get('sha256') != native_hash):
+                violations.append('changed OunceCake Civ7 upstream provenance')
+            if b'GNU GENERAL PUBLIC LICENSE' not in z.read(civ7_prefix + 'LICENSE'):
+                violations.append('missing OunceCake Civ7 GPL license text')
+        except (KeyError, ValueError, UnicodeError):
+            violations.append('missing or malformed OunceCake Civ7 source/provenance')
     gpu_manifest = 'mac2jb/packaging/GPUBrewLauncher-SHA256SUMS'
     gpu_prefix = 'mac2jb/vendor/GPUBrewLauncher/'
     if gpu_manifest in names:
@@ -226,31 +461,6 @@ with zipfile.ZipFile(archive) as z:
                 violations.append('changed GPUBrewLauncher upstream provenance')
         except (KeyError, ValueError, UnicodeError):
             violations.append('missing or malformed GPUBrewLauncher source/provenance')
-    iz_manifest = 'mac2jb/packaging/IZ2S-Platform-SHA256SUMS'
-    iz_prefix = 'mac2jb/vendor/IZ2S-Platform/'
-    try:
-        manifest_bytes = z.read(iz_manifest)
-        if hashlib.sha256(manifest_bytes).hexdigest() != 'fd35e84485e74aac2e2b8dd42bdf6d15b0125a643e3edd087ee413971f9e728b':
-            raise ValueError('changed IZ2S manifest')
-        expected = {}
-        for line in manifest_bytes.decode().splitlines():
-            digest, relative = line.split('  ', 1)
-            if (len(digest) != 64 or any(c not in '0123456789abcdef' for c in digest)
-                    or relative.startswith('/') or '..' in PurePosixPath(relative).parts
-                    or '\\' in relative or iz_prefix + relative in expected):
-                raise ValueError('invalid IZ2S manifest')
-            expected[iz_prefix + relative] = digest
-        actual = {name for name in names if name.startswith(iz_prefix) and not name.endswith('/')}
-        if len(expected) != 480 or actual != set(expected):
-            violations.append('incomplete or unexpected IZ2S source distribution')
-        for name, digest in expected.items():
-            if name not in names or hashlib.sha256(z.read(name)).hexdigest() != digest:
-                violations.append('missing or changed IZ2S source: ' + name)
-        provenance = json.loads(z.read('mac2jb/packaging/IZ2S-Platform-provenance.json'))
-        if provenance.get('commit') != '907de0d9f5a4e358079306e7f04a8c43d463142a' or provenance.get('modifications') != []:
-            violations.append('changed IZ2S upstream provenance')
-    except (KeyError, ValueError, UnicodeError):
-        violations.append('missing or malformed IZ2S source/provenance')
     # The app overlay must be the exact published package, independently of
     # the frozen GPUBrewLauncher tree and its unchanged integrity manifest.
     ftpd_manifest = 'mac2jb/packaging/ftpd-sb-v0.1.0-SHA256SUMS'
@@ -283,6 +493,28 @@ with zipfile.ZipFile(archive) as z:
                     violations.append('changed ftpd-sb release provenance')
             except (KeyError, ValueError):
                 violations.append('missing or malformed ftpd-sb release provenance')
+
+    try:
+        civ = json.loads(z.read('mac2jb/integrations/civswitch/provenance.json'))
+        payload = z.read('mac2jb/integrations/civswitch/payload.txt')
+        if (civ.get('upstream') != 'https://github.com/Gezine/CivSwitch' or
+                civ.get('commit') != '10b38e9f5abfd13a4b0bec8af24b026e44567da3' or
+                civ.get('installerUpstreamCommit') != 'b1aa49dfbad6858c83da7b471baa49603f686258' or
+                civ.get('installerSha256') != 'e04dcc41c1ad85d5a9c138edd93bd2f7eb752fda872a258c1e1906eb1136c349' or
+                civ.get('license') != 'MIT' or civ.get('payloadLines') != 87 or
+                civ.get('payloadSha256') != '6ea468ca392558ab2f8f2384200745a8619187cebc5357d5e985fd3ffdada37d' or
+                hashlib.sha256(payload).hexdigest() != civ['payloadSha256'] or
+                len(payload.splitlines()) != 87):
+            violations.append('changed CivSwitch source or payload provenance')
+        installer = 'mac2jb/vendor/CivSwitch/installer-creator/install.py'
+        if installer not in names or hashlib.sha256(z.read(installer)).hexdigest() != civ['installerSha256']:
+            violations.append('changed CivSwitch upstream installer')
+        for name, expected in civ.get('files', {}).items():
+            member = 'mac2jb/vendor/CivSwitch/' + name
+            if member not in names or hashlib.sha256(z.read(member)).hexdigest() != expected:
+                violations.append('changed CivSwitch upstream source: ' + name)
+    except (KeyError, ValueError, TypeError):
+        violations.append('missing or malformed CivSwitch source provenance')
 
 if violations:
     for v in violations:

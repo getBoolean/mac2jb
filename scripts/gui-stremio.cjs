@@ -2,7 +2,7 @@
 'use strict';
 // Private, one-shot GPU media client attached to the already held Kurumuz run.
 process.umask(0o077);
-const fs=require('node:fs/promises'),path=require('node:path');
+const fs=require('node:fs/promises'),path=require('node:path'),os=require('node:os');
 const {spawn}=require('node:child_process');
 const {validateRun,serveProxy,runtimeEnvironment,stages}=require('./gui-homebrew.cjs');
 const delay=ms=>new Promise(resolve=>setTimeout(resolve,ms));
@@ -23,7 +23,7 @@ async function checkRuntime(root=path.resolve(__dirname,'..')){
   await fs.access(python,constants.X_OK);
   await fs.access(env.MAC2JB_HBLAUNCHER_FONT,constants.R_OK);
   await fs.access(path.join(env.PYTHONPATH,'sitecustomize.py'),constants.R_OK);
- }catch{throw Error('The app is missing a bundled Stremio tool. Extract a fresh copy of the test build.');}
+ }catch{throw Error('The app is missing a bundled Stremio tool. Extract a fresh copy of the app.');}
  const app=await require(path.join(root,'vendor/GPUBrewLauncher/homebrew-launcher/app-catalog.cjs'))
   .readApp(path.join(root,'stremio/app'));
  check(app.id==='stremio-experimental'&&app.files.memory?.allocationBytes===require('../stremio/protocol.cjs').MEMORY_BYTES,
@@ -124,7 +124,9 @@ async function main(args=process.argv.slice(2),options={}){
   check(!stopping,'Player preparation stopped.');
   audio=await require('../stremio/audio.cjs').create({rpc,directory});
   check(!stopping,'Player preparation stopped.');
- pipeline=await require('../stremio/pipeline.cjs').create({graphics,audio,addonUrls,libraryItems,directory,root,quality,onFatal:fatal,
+  const sourcePreferences=options.sourcePreferences||await require('../stremio/source-preferences.cjs').SourcePreferences.load(
+   path.join(os.homedir(),'Library','Application Support','mac2jb','stremio-last-sources.json'));
+ pipeline=await require('../stremio/pipeline.cjs').create({graphics,audio,addonUrls,libraryItems,sourcePreferences,directory,root,quality,onFatal:fatal,
    onProgress:message=>emit('progress',{message}),onAccountProgress:watchProgress=>emit('account-progress',{watchProgress})});
   check(!stopping&&live(),'The held session ended during player preparation.');
   report.status='running';report.quality=quality;await save();emit('running',{message:'Stremio ready at '+quality+'. Use the left stick or D-pad to browse. X or + opens playback controls. Keep this Mac and SmileBASIC open.'});

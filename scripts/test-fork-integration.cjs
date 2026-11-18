@@ -13,7 +13,7 @@ function fixture(t, actualHost = true) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'mac2jb-fork-test-'));
   t.after(() => fs.rmSync(root, {recursive: true, force: true}));
   fs.mkdirSync(path.join(root, 'scripts'));
-  for (const name of ['gui-host.cjs', 'host-wrapper.cjs', 'host-profiles.cjs'])
+  for (const name of ['gui-host.cjs', 'usb-controllers.cjs', 'host-wrapper.cjs', 'host-profiles.cjs'])
     fs.copyFileSync(path.join(__dirname, name), path.join(root, 'scripts', name));
   fs.mkdirSync(path.join(root, 'packaging'));
   fs.copyFileSync(path.join(repository, 'packaging/host-profiles.json'), path.join(root, 'packaging/host-profiles.json'));
@@ -90,6 +90,16 @@ test('fork log assertions ignore structured START fields and an unfinished GUI e
   assert.deepEqual(forkStartLines('host-wrapper.cjs',five+'\n'+nine+'\n'),[five,nine]);
 });
 
+test('GUI hides only the incompatible legacy START hint for five-argument hosts',()=>{
+  const {incompatibleLegacyStartHint}=require('./host-profiles.cjs');
+  const fallback='V=START(39380,192,168,1,119,0,0,0,0)';
+  const current='V=START(39380,192,168,1,119)';
+  assert.equal(incompatibleLegacyStartHint('If BASIC says Wrong number of arguments, use the older nine-argument form instead:',5),true);
+  assert.equal(incompatibleLegacyStartHint(fallback,5),true);
+  assert.equal(incompatibleLegacyStartHint(current,5),false);
+  assert.equal(incompatibleLegacyStartHint(fallback,9),false);
+});
+
 test('CLI host settings override inherited modes while preserving explicit --rpc', async t => {
   const source = fixture(t, false);
   fs.writeFileSync(path.join(source.host, 'run.cjs'), `
@@ -104,7 +114,7 @@ test('CLI host settings override inherited modes while preserving explicit --rpc
     {arity: '5', rpc: '0', args: ['--rpc', '127.0.0.1']});
 });
 
-for(const id of ['pepsipu','kurumuz']) test(`GUI pairs with the actual pinned ${id} host and its unchanged bootstrap protocol`,
+for(const id of ['pepsipu','kurumuz','cellenseres']) test(`GUI pairs with the actual pinned ${id} host and its unchanged bootstrap protocol`,
   {timeout:10000},async t=>{
     const {profileById,validStartCommand}=require('./host-profiles.cjs');
     const profile=profileById(id),source=fixture(t,false);
@@ -176,13 +186,16 @@ for (const adapter of ['gui-host.cjs', 'host-wrapper.cjs']) {
       assert.equal(fs.statSync(path.dirname(source.active)).mode & 0o777, 0o700);
       // The fork also logs a compatibility fallback. It must not replace the
       // five-argument record that the bundled bootstrap and C sender require.
-      const expectedForms=[record[1],'V=START(39380,127,0,0,1,0,0,0,0)'];
-      await until(() => forkStartLines(adapter,runner.output()).length>=2,
-        ()=>'The actual host did not log both START forms:\n'+runner.output());
+      const expectedForms=adapter==='gui-host.cjs' ? [record[1]] :
+        [record[1],'V=START(39380,127,0,0,1,0,0,0,0)'];
+      await until(() => runner.output().includes('Run folder: ') &&
+        forkStartLines(adapter,runner.output()).length>=expectedForms.length,
+        ()=>'The actual host did not log its START form:\n'+runner.output());
       assert.deepEqual(forkStartLines(adapter,runner.output()),expectedForms);
       if(adapter==='gui-host.cjs') {
         const events=runner.output().split('\n').slice(0,-1).map(JSON.parse);
         assert.equal(events.find(event=>event.type==='host-ready').startCommand,record[1]);
+        assert.equal(events.some(event=>event.type==='log' && event.message.includes('older nine-argument form')),false);
       }
       assert.equal(fs.readFileSync(source.active, 'utf8').trim().split('\n')[1], record[1]);
 

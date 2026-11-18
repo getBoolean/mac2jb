@@ -42,7 +42,7 @@ async function dispatch(context, request, state, domain) {
     check(!s.threads.size && (!state.worker || state.worker.joined), 'A native worker is still active');
     await workerCode.verifyWorkerCode(s);
     await events.verify(s);
-    const area = s.base + 0x2100000, gate = area, slot = area + 0x10;
+    const area = s.base + (context.workerAreaOffset ?? 0x2100000), gate = area, slot = area + 0x10;
     check(area + 0x60000 <= s.base + s.bytes, 'Worker area exceeds the retained allocation');
     await events.initialize(s, gate);
     const handle = Number(request.handle);
@@ -83,10 +83,22 @@ async function dispatch(context, request, state, domain) {
         check(state.services.some(x => x.name === 'ro:dmnt' && x.handle === handle), 'Process probe requires the owned RO service');
         check(s.handles.has(target) || target === 0xffff8001, 'Target process handle is not owned');
         check([0x524f0010, 0x524f0011, 0x524f0012, 0x524f0013, 0x524f0014,
-          0x524f0015, 0x524f0016].includes(id), 'Unknown process probe');
+          0x524f0015, 0x524f0016, 0x524f001a, 0x524f001b, 0x524f001c].includes(id),
+        'Unknown process probe');
         const size = id === 0x524f0014 ? 128 : 64;
         check(typeof request.hex === 'string' && request.hex.length === size && /^[0-9a-fA-F]+$/.test(request.hex),
           'Process probe input length differs');
+        if ([0x524f001a, 0x524f001b, 0x524f001c].includes(id)) {
+          check(target === 0xffff8001, 'Native range mapping targets RO only');
+          const input = Buffer.from(request.hex, 'hex');
+          const pid = input.readBigUInt64LE(0), source = input.readBigUInt64LE(8);
+          const destination = input.readBigUInt64LE(16), pages = input.readBigUInt64LE(24);
+          check(pid > 0n && source > 0n && destination > 0n &&
+            !((source | destination) & 0xfffn) && pages > 0n && pages <= 16384n &&
+            source + (pages + 1n) * 0x1000n <= 1n << 39n &&
+            destination + pages * 0x1000n <= 1n << 39n,
+          'Native range mapping exceeds address or page bounds');
+        }
         const receive = [];
         if (id === 0x524f0016) {
           const length = Number(Buffer.from(request.hex, 'hex').readBigUInt64LE(16));
@@ -104,10 +116,9 @@ async function dispatch(context, request, state, domain) {
       } else {
         check(state.services?.some(x => x.name === 'pm:shell' && x.handle === handle), 'Launch requires the owned PM session');
         const flags = Number(request.flags ?? 0);
-        check(flags === 0 || flags === 0x10, 'Unsupported launch flags');
+        check(Number.isInteger(flags) && flags >= 0 && flags <= 0xffffffff, 'Invalid launch flags');
         const storage = Number(request.storage ?? 3);
-        check(storage === 3 && request.title === '0x0400000000000037',
-          'Only the qualified RO replacement may be launched');
+        check([3, 4, 5].includes(storage), 'Invalid launch storage');
         const input = Buffer.alloc(24); input.writeUInt32LE(flags);
         input.writeBigUInt64LE(BigInt(request.title), 8); input[16] = storage;
         bytes = packet(0, input);
