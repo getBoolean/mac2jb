@@ -1,7 +1,7 @@
 # mac2jb
 
-> **Archived.** This fork existed to carry ipad2jb, which now lives at
-> [getBoolean/ipad2jb](https://github.com/getBoolean/ipad2jb). For mac2jb itself,
+> **Archived.** This fork existed to carry ipad2jb, now ios2kbd, which lives at
+> [getBoolean/ios2kbd](https://github.com/getBoolean/ios2kbd). For mac2jb itself,
 > use [cpypwn/mac2jb](https://github.com/cpypwn/mac2jb).
 
 an all-in-one ns2 jailbreaking tool for Mac.
@@ -421,7 +421,7 @@ commands. the full macOS fixture and node check list is in
 
 ## ipad2jb
 
-ipad2jb moved to [getBoolean/ipad2jb](https://github.com/getBoolean/ipad2jb).
+ipad2jb moved and is now ios2kbd: [getBoolean/ios2kbd](https://github.com/getBoolean/ios2kbd).
 
 ## help and source
 
